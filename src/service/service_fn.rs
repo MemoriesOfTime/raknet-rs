@@ -26,16 +26,14 @@ impl<F> Debug for ServiceFn<F> {
 
 impl<Req, F, Res, Err, Fut> Service<Req> for ServiceFn<F>
 where
-    for<'a> F: Fn(Req) -> Fut + 'a,
-    for<'a> Fut: Future<Output = Result<Res, Err>> + Send + 'a,
+    F: Fn(Req) -> Fut,
+    Fut: Future<Output = Result<Res, Err>>,
 {
     type Error = Err;
     type Response = Res;
 
-    type Future<'a> = impl Future<Output = Result<Res, Err>> + Send + 'a;
-
-    fn call(&self, req: Req) -> Self::Future<'_> {
-        (self.f)(req)
+    async fn call(&self, req: Req) -> Result<Self::Response, Self::Error> {
+        (self.f)(req).await
     }
 }
 

@@ -40,6 +40,7 @@
     clippy::wildcard_imports
 )]
 #![feature(impl_trait_in_assoc_type)]
+#![feature(async_fn_in_trait)]
 
 /// Runtime
 mod rt;

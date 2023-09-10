@@ -1,19 +1,15 @@
 /// Utils function for service building
 mod service_fn;
 
-use std::future::Future;
-
 pub use service_fn::service_fn;
 
 /// Tower's `Service` is a highly valuable tool for application development. Nevertheless, it
 /// appears somewhat intricate when applied to Raknet services. Here, I've made a streamlined and
-/// swifter alternative to the tower's `Service`, which is inspired by
-/// [motore](https://github.com/cloudwego/motore)
+/// swifter alternative to the tower's `Service`, which enable the `async_fn_in_trait` feature for
+/// static dispatching `Service::call`.
 ///
 /// Context can be omitted within a `Service` or provided by a global variable with a static
-/// lifetime. This capability allows for greater flexibility. Furthermore, The
-/// Generic Associated Types (GAT) enables `Future` to carry a lifetime marker, effectively
-/// mitigating the overhead associated with `Box::pin` when implementing a Service.
+/// lifetime. This capability allows for greater flexibility.
 pub trait Service<Request> {
     /// Error made by this service
     type Error;
@@ -21,13 +17,10 @@ pub trait Service<Request> {
     /// Response made by this service
     type Response;
 
-    /// Future of this service
-    type Future<'a>: Future<Output = Result<Self::Response, Self::Error>> + Send + 'a
-        where
-            Self: 'a;
-
     /// Process the request asynchronously
-    fn call(&self, req: Request) -> Self::Future<'_>;
+    async fn call(&self, req: Request) -> Result<Self::Response, Self::Error>
+    where
+        Self: Sized;
 }
 
 #[cfg(test)]
@@ -42,10 +35,8 @@ mod test {
         type Error = String;
         type Response = String;
 
-        type Future<'a> = impl Future<Output = Result<Self::Response, Self::Error>> + Send + 'a;
-
-        fn call(&self, req: String) -> Self::Future<'_> {
-            async move { Ok(req) }
+        async fn call(&self, req: String) -> Result<Self::Response, Self::Error> {
+            Ok(req)
         }
     }
 
@@ -55,16 +46,14 @@ mod test {
     }
 
     impl<S> Service<String> for DummyMiddleware<S>
-        where
-            S: Service<String, Response = String, Error = String> + Sync + Send + 'static,
+    where
+        S: Service<String, Response = String, Error = String>,
     {
         type Error = S::Error;
         type Response = S::Response;
 
-        type Future<'a> = impl Future<Output = Result<S::Response, S::Error>> + Send + 'a;
-
-        fn call(&self, req: String) -> Self::Future<'_> {
-            async move { self.inner.call(format!("{}-{req}", self.good_smell)).await }
+        async fn call(&self, req: String) -> Result<Self::Response, Self::Error> {
+            self.inner.call(format!("{}-{req}", self.good_smell)).await
         }
     }
 
