@@ -12,10 +12,8 @@
     clippy::float_cmp_const,
     clippy::float_equality_without_abs,
     keyword_idents,
-    clippy::missing_const_for_fn,
     missing_copy_implementations,
     missing_debug_implementations,
-    clippy::missing_docs_in_private_items,
     clippy::missing_errors_doc,
     clippy::missing_panics_doc,
     clippy::mod_module_files,
@@ -41,8 +39,20 @@
 )]
 #![feature(impl_trait_in_assoc_type)]
 #![feature(async_fn_in_trait)]
+#![feature(ip_bits)]
+#![feature(exclusive_range_pattern)]
 
+/// Protocol codec
+mod codec;
+/// Errors
+mod errors;
+/// Protocol packet
+mod packet;
 /// Runtime
 mod rt;
+/// Raknet server
+mod server;
 /// Service
 pub mod service;
+
+pub use errors::Result;
