@@ -27,4 +27,8 @@ pub enum CodecError {
     InvalidRecordType(u8),
     #[error("invalid packet id {0}")]
     InvalidPacketId(u8),
+    #[error("parted frame set size exceed, expect max size {0}, got {1}")]
+    PartedFrameSetSizeExceed(u32, u32),
+    #[error("parted frame index exceed, expect max index {0}, got {1}")]
+    PartedFrameIndexExceed(u32, u32),
 }

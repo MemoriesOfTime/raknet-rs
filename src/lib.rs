@@ -41,6 +41,7 @@
 #![feature(async_fn_in_trait)]
 #![feature(ip_bits)]
 #![feature(exclusive_range_pattern)]
+#![feature(return_position_impl_trait_in_trait)]
 
 /// Protocol codec
 mod codec;

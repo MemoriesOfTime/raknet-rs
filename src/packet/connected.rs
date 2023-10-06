@@ -1,3 +1,5 @@
+use std::hash::{Hash, Hasher};
+
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 use crate::errors::CodecError;
@@ -13,31 +15,41 @@ pub(crate) enum Packet<T: Buf = Bytes> {
 
 #[derive(Debug)]
 pub(crate) struct FrameSet<T: Buf = Bytes> {
-    seq_num: Uint24le,
-    flags: Flags,
-    reliable_frame_index: Option<Uint24le>,
-    seq_frame_index: Option<Uint24le>,
-    ordered_frame_index: Option<Uint24le>,
-    // ignored
-    // ordered_channel: u8,
-    fragment: Option<Fragment>,
-    body: T,
+    pub(crate) seq_num: Uint24le,
+    pub(crate) frames: Vec<Frame<T>>,
 }
 
-impl FrameSet {
-    /// Get the inner packet id
-    pub(crate) fn inner_pack_id(&self) -> Result<PackId, CodecError> {
-        PackId::from_u8(
-            *self
-                .body
-                .chunk()
-                .first()
-                .ok_or(CodecError::InvalidPacketLength)?,
-        )
-    }
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct Frame<T: Buf = Bytes> {
+    pub(crate) flags: Flags,
+    pub(crate) reliable_frame_index: Option<Uint24le>,
+    pub(crate) seq_frame_index: Option<Uint24le>,
+    pub(crate) ordered_frame_index: Option<Uint24le>,
+    // ignored
+    // ordered_channel: u8,
+    pub(crate) fragment: Option<Fragment>,
+    pub(crate) body: T,
+}
 
+impl Hash for Frame {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // if it is a parted frame, then hash the fragment parted_index
+        // to promise that the same parted_index will be hashed to the same frame
+        // in `frames_queue` of `FragmentFrame`
+        if let Some(fragment) = &self.fragment {
+            fragment.parted_index.hash(state);
+            return;
+        }
+        self.flags.hash(state);
+        self.reliable_frame_index.hash(state);
+        self.seq_frame_index.hash(state);
+        self.ordered_frame_index.hash(state);
+        self.body.chunk().hash(state);
+    }
+}
+
+impl Frame {
     fn read(buf: &mut BytesMut) -> Result<Self, CodecError> {
-        let seq_num = Uint24le::read(buf);
         let flags = Flags::read(buf);
         // length in bytes
         let length = buf.get_u16() >> 3;
@@ -64,8 +76,7 @@ impl FrameSet {
         if flags.parted() {
             fragment = Some(Fragment::read(buf));
         }
-        Ok(FrameSet {
-            seq_num,
+        Ok(Frame {
             flags,
             reliable_frame_index,
             seq_frame_index,
@@ -76,7 +87,6 @@ impl FrameSet {
     }
 
     fn write(self, buf: &mut BytesMut) {
-        self.seq_num.write(buf);
         self.flags.write(buf);
         // length in bits
         // self.body will be split up so cast to u16 should not overflow here
@@ -103,8 +113,40 @@ impl FrameSet {
     }
 }
 
+impl FrameSet {
+    /// Get the inner packet id
+    pub(crate) fn inner_pack_id(&self) -> Result<PackId, CodecError> {
+        PackId::from_u8(
+            *self.frames[0]
+                .body
+                .chunk()
+                .first()
+                .ok_or(CodecError::InvalidPacketLength)?,
+        )
+    }
+
+    fn read(buf: &mut BytesMut) -> Result<Self, CodecError> {
+        let seq_num = Uint24le::read(buf);
+        let mut frames = Vec::new();
+        while buf.has_remaining() {
+            frames.push(Frame::read(buf)?);
+        }
+        if frames.is_empty() {
+            return Err(CodecError::InvalidPacketLength);
+        }
+        Ok(FrameSet { seq_num, frames })
+    }
+
+    fn write(self, buf: &mut BytesMut) {
+        self.seq_num.write(buf);
+        for frame in self.frames {
+            frame.write(buf);
+        }
+    }
+}
+
 /// `uint24` little-endian but actually occupies 4 bytes.
-#[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
 pub(crate) struct Uint24le(u32);
 
 impl Uint24le {
@@ -120,12 +162,12 @@ impl Uint24le {
 
 /// Top 3 bits are reliability type, fourth bit is 1 when the frame is fragmented and part of a
 /// compound.
-#[derive(Debug)]
-struct Flags(u8);
+#[derive(Debug, Hash, Eq, PartialEq)]
+pub(crate) struct Flags(u8);
 
 #[derive(Debug)]
 #[repr(u8)]
-enum Reliability {
+pub(crate) enum Reliability {
     /// Unreliable packets are sent by straight UDP. They may arrive out of order, or not at all.
     /// This is best for data that is unimportant, or data that you send very frequently so even if
     /// some packets are missed newer packets will compensate. Advantages - These packets don't
@@ -202,7 +244,7 @@ impl Flags {
     }
 
     /// Get the reliability of this flags
-    fn reliability(&self) -> Result<Reliability, CodecError> {
+    pub(crate) fn reliability(&self) -> Result<Reliability, CodecError> {
         let r = self.0 >> 5;
         if r > Reliability::ReliableSequenced as u8 {
             return Err(CodecError::InvalidReliability(r));
@@ -213,7 +255,7 @@ impl Flags {
     }
 
     /// Return if it is parted
-    fn parted(&self) -> bool {
+    pub(crate) fn parted(&self) -> bool {
         // 0b0001_0000
         const PARTED_FLAG: u8 = 0x10;
 
@@ -221,11 +263,11 @@ impl Flags {
     }
 }
 
-#[derive(Debug)]
-struct Fragment {
-    parted_size: u32,
-    parted_id: u16,
-    parted_index: u32,
+#[derive(Debug, Eq, PartialEq, Hash, Clone)]
+pub(crate) struct Fragment {
+    pub(crate) parted_size: u32,
+    pub(crate) parted_id: u16,
+    pub(crate) parted_index: u32,
 }
 
 impl Fragment {
