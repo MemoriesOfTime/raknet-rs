@@ -1,3 +1,5 @@
+use std::borrow::Borrow;
+
 use bytes::BytesMut;
 use tokio::net::UdpSocket;
 use tokio_util::codec::{Decoder, Encoder};
@@ -9,12 +11,12 @@ use crate::packet::Packet;
 /// The raknet codec
 pub(crate) struct Codec;
 
-pub(crate) trait Framed {
-    fn framed(&self) -> UdpFramed<Codec, &UdpSocket>;
+pub(crate) trait Framed: Sized {
+    fn framed(self) -> UdpFramed<Codec, Self>;
 }
 
-impl Framed for UdpSocket {
-    fn framed(&self) -> UdpFramed<Codec, &UdpSocket> {
+impl<T: Borrow<UdpSocket> + Sized> Framed for T {
+    fn framed(self) -> UdpFramed<Codec, Self> {
         UdpFramed::new(self, Codec)
     }
 }
@@ -40,8 +42,9 @@ impl Decoder for Codec {
 #[cfg(test)]
 mod test {
     use std::net::{SocketAddr, ToSocketAddrs};
+    use std::sync::Arc;
 
-    use bytes::{Buf, Bytes};
+    use bytes::Buf;
     use futures::{SinkExt, StreamExt};
     use tokio::net::UdpSocket;
 
@@ -51,20 +54,20 @@ mod test {
     #[tokio::test]
     async fn test_unconnected_ping() {
         let addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
-        let socket = UdpSocket::bind(addr).await.unwrap();
-        let mut framed = socket.framed();
-        let packet = unconnected::Packet::<Bytes>::UnconnectedPing {
+        let socket = Arc::new(UdpSocket::bind(addr).await.unwrap());
+        let mut framed = socket.framed().buffer(10);
+        let packet = unconnected::Packet::UnconnectedPing {
             send_timestamp: 0,
             magic: true,
             client_guid: 114514,
         };
-        let addr = "play.lbsg.net:19132"
+        let server_addr = "play.lbsg.net:19132"
             .to_socket_addrs()
             .unwrap()
             .next()
             .unwrap();
         framed
-            .send((Packet::Unconnected(packet), addr))
+            .send((Packet::Unconnected(packet), server_addr))
             .await
             .unwrap();
         let (pong, _) = framed.next().await.unwrap().unwrap();

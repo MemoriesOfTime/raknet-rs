@@ -70,6 +70,11 @@ impl PackId {
         }
     }
 
+    /// Check if it is unconnected ping
+    pub(crate) fn is_unconnected_ping(&self) -> bool {
+        matches!(self, PackId::UnconnectedPing1 | PackId::UnconnectedPing2)
+    }
+
     /// Check if it is a frame set packet
     pub(crate) fn is_frame_set(&self) -> bool {
         matches!(self, PackId::FrameSet)

@@ -5,8 +5,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub enum Error {
     #[error("codec error {0}")]
     Codec(#[from] CodecError),
-    #[error("bind socket failed {0}")]
-    BindSocket(#[from] std::io::Error),
+    #[error("io error {0}")]
+    IO(#[from] std::io::Error),
 }
 
 #[derive(thiserror::Error, Debug)]
