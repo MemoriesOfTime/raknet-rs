@@ -1,5 +1,7 @@
 mod ack;
+mod dedup;
 mod fragment;
+mod ordered;
 
 use std::borrow::Borrow;
 use std::net::SocketAddr;
@@ -14,23 +16,61 @@ use tokio_util::codec::{Decoder, Encoder};
 use tokio_util::udp::UdpFramed;
 use tracing::{trace, warn};
 
+use crate::codec::fragment::DeFragmented;
 use crate::errors::CodecError;
+use crate::packet::connected::Reliability;
 use crate::packet::Packet;
+
+/// Codec config
+#[derive(Clone, Debug)]
+pub(crate) struct CodecConfig {
+    /// limit the max size of a parted frames set, 0 means no limit
+    /// it will abort the split frame if the parted_size reaches limit.
+    limit_size: u32,
+    /// limit the max count of all parted frames sets from an address
+    /// it might cause client resending frames if the limit is reached.
+    limit_parted: usize,
+    /// reliability mode used by the codec
+    reliability: Reliability,
+}
+
+impl Default for CodecConfig {
+    fn default() -> Self {
+        // recommend configuration
+        Self {
+            limit_size: 256,
+            limit_parted: 256,
+            reliability: Reliability::ReliableOrdered,
+        }
+    }
+}
+
+impl CodecConfig {
+    pub(crate) fn new(limit_size: u32, limit_parted: usize) -> Self {
+        Self {
+            limit_size,
+            limit_parted,
+            reliability: Reliability::ReliableOrdered,
+        }
+    }
+}
 
 pub(crate) trait Framed: Sized {
     fn framed(
         self,
+        config: CodecConfig,
     ) -> impl Stream<Item = (Packet, SocketAddr)> + Sink<(Packet, SocketAddr), Error = CodecError>;
 }
 
 impl<T: Borrow<UdpSocket> + Sized> Framed for T {
     fn framed(
         self,
+        config: CodecConfig,
     ) -> impl Stream<Item = (Packet, SocketAddr)> + Sink<(Packet, SocketAddr), Error = CodecError>
     {
-        LoggedCodec {
-            frame: UdpFramed::new(self, Codec),
-        }
+        let frame =
+            UdpFramed::new(self, Codec).defragmented(config.limit_size, config.limit_parted);
+        LoggedCodec { frame }
     }
 }
 
@@ -121,7 +161,7 @@ mod test {
     use tokio::net::UdpSocket;
     use tracing_test::traced_test;
 
-    use crate::codec::Framed;
+    use crate::codec::{CodecConfig, Framed};
     use crate::packet::{unconnected, Packet};
 
     fn unconnected_ping() -> Packet {
@@ -141,7 +181,7 @@ mod test {
                 .unwrap(),
         );
         let listen_addr = socket.local_addr().unwrap();
-        let mut framed = socket.framed().buffer(10);
+        let mut framed = socket.framed(CodecConfig::default()).buffer(10);
 
         let send_socket = UdpSocket::bind("0.0.0.0:0".parse::<SocketAddr>().unwrap())
             .await
@@ -159,7 +199,7 @@ mod test {
     async fn test_unconnected_ping() {
         let addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
         let socket = Arc::new(UdpSocket::bind(addr).await.unwrap());
-        let mut framed = socket.framed().buffer(10);
+        let mut framed = socket.framed(CodecConfig::default()).buffer(10);
         let server_addr = "play.lbsg.net:19132"
             .to_socket_addrs()
             .unwrap()

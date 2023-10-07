@@ -14,33 +14,37 @@ use crate::packet::connected::{Fragment, Frame};
 use crate::packet::{connected, PackId, Packet};
 
 pin_project! {
-    /// Fragment/Defragment the frame set packet from sink/stream (UdpFramed). Enable external production
-    /// and consumption of continuous frame set packets.
-    pub(super) struct FragmentFrame<F> {
+    /// Defragment the frame set packet from stream (UdpFramed). Enable external consumption of
+    /// continuous frame set packets.
+    /// Notice that packets stream must pass this layer first, then go to the ack layer and timeout layer.
+    /// Because this layer could abort the frames in frame set packet, and the ack layer will promise
+    /// the client that we have received the frame set packet. Moreover, this layer needs to get the
+    /// Disconnect packet sent by the timeout layer to clear the parted cache.
+    pub(super) struct DeFragment<F> {
         #[pin]
         frame: F,
         // limit the max size of a parted frames set, 0 means no limit
-        // it will cause client resending frames if the limit is reached.
+        // it will abort the split frame if the parted_size reaches limit.
         limit_size: u32,
-        // limit the max count of all parted frames sets from an address, 0 means no limit.
-        // it will cause client resending frames if the limit is reached.
+        // limit the max count of all parted frames sets from an address
+        // it might cause client resending frames if the limit is reached.
         limit_parted: usize,
-        parts: HashMap<SocketAddr, HashMap<u16, PriorityQueue<Frame, Reverse<u32>>>>,  // TODO apply LRU to delete old addr
+        parts: HashMap<SocketAddr, HashMap<u16, PriorityQueue<Frame, Reverse<u32>>>>,
         recv_buf: VecDeque<(Packet, SocketAddr)>,
     }
 }
 
-pub(super) trait Fragmented: Sized {
-    fn fragmented(self, limit_size: u32, limit_parted: usize) -> FragmentFrame<Self>;
+pub(super) trait DeFragmented: Sized {
+    fn defragmented(self, limit_size: u32, limit_parted: usize) -> DeFragment<Self>;
 }
 
-impl<T> Fragmented for T
+impl<T> DeFragmented for T
 where
     T: Stream<Item = Result<(Packet, SocketAddr), CodecError>>
         + Sink<(Packet, SocketAddr), Error = CodecError>,
 {
-    fn fragmented(self, limit_size: u32, limit_parted: usize) -> FragmentFrame<Self> {
-        FragmentFrame {
+    fn defragmented(self, limit_size: u32, limit_parted: usize) -> DeFragment<Self> {
+        DeFragment {
             frame: self,
             limit_size,
             limit_parted,
@@ -50,17 +54,17 @@ where
     }
 }
 
-impl<F> Stream for FragmentFrame<F>
+impl<F> Stream for DeFragment<F>
 where
     F: Stream<Item = Result<(Packet, SocketAddr), CodecError>>,
 {
     type Item = Result<(Packet, SocketAddr), CodecError>;
 
     // TODO
-    // Usually, there are a multiple frames frame set packet, and each frame is partitioned. If a
-    // frame is not partitioned, then there is only one frame in that frame set. These two kinds of
-    // frames are usually not mixed in the same frame set。Verify this hypothesis and optimize
-    // the code below.
+    // Usually, there are a multiple frames frame set packet, and all frames are partitioned or not
+    // partitioned. These two kinds of frames are usually not mixed in the same frame
+    // set. Verify this hypothesis and optimize the code below. Maybe we could remove `recv_buf`
+    // here.
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.project();
 
@@ -104,9 +108,13 @@ where
                     )))));
                 }
                 let parts = this.parts.entry(addr).or_default();
-                if *this.limit_parted != 0 && parts.len() > *this.limit_parted {
+                if parts.len() > *this.limit_parted {
+                    // Clear the parted cache of this address if the parted count exceeds the limit.
+                    // Some unfinished frames will be cleared along with redundant frames.
+                    // TODO: apply LRU to clear the cache to avoid clearing unfinished frames.
+                    parts.clear();
                     return Poll::Ready(Some(Err(CodecError::PartedFrame(format!(
-                        "parted_count {} exceed limit_parted {} ",
+                        "parted_count {} exceed limit_parted {}, clear the parted cache",
                         parts.len(),
                         *this.limit_parted,
                     )))));
@@ -153,7 +161,7 @@ where
     }
 }
 
-impl<F> Sink<(Packet, SocketAddr)> for FragmentFrame<F>
+impl<F> Sink<(Packet, SocketAddr)> for DeFragment<F>
 where
     F: Sink<(Packet, SocketAddr), Error = CodecError>,
 {
@@ -169,19 +177,18 @@ where
         (packet, addr): (Packet, SocketAddr),
     ) -> Result<(), Self::Error> {
         let this = self.project();
-        let Packet::Connected(connected::Packet::FrameSet(frame_set)) = packet else {
-            return this.frame.start_send((packet, addr));
+        if let Packet::Connected(connected::Packet::FrameSet(frame_set)) = &packet {
+            if matches!(frame_set.inner_pack_id()?, PackId::DisconnectNotification) {
+                debug!("disconnect from {}, clean it's frame parts buffer", addr);
+                this.parts.remove(&addr);
+            }
         };
-        if matches!(frame_set.inner_pack_id()?, PackId::Disconnect) {
-            debug!("disconnect from {}, clean it's frame parts buffer", addr);
-            this.parts.remove(&addr);
-        }
-
-        todo!()
+        this.frame.start_send((packet, addr))
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        todo!()
+        let this = self.project();
+        this.frame.poll_flush(cx)
     }
 
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {

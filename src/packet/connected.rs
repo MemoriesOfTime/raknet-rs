@@ -50,13 +50,13 @@ impl Hash for Frame {
 
 impl Frame {
     fn read(buf: &mut BytesMut) -> Result<Self, CodecError> {
-        let flags = Flags::read(buf);
+        let flags = Flags::read(buf)?;
         // length in bytes
         let length = buf.get_u16() >> 3;
         if length == 0 {
             return Err(CodecError::InvalidPacketLength);
         }
-        let reliability = flags.reliability()?;
+        let reliability = flags.reliability;
         let mut reliable_frame_index = None;
         let mut seq_frame_index = None;
         let mut ordered_frame_index = None;
@@ -162,10 +162,20 @@ impl Uint24le {
 
 /// Top 3 bits are reliability type, fourth bit is 1 when the frame is fragmented and part of a
 /// compound.
-#[derive(Debug, Hash, Eq, PartialEq)]
-pub(crate) struct Flags(u8);
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct Flags {
+    raw: u8,
+    reliability: Reliability,
+    parted: bool,
+}
 
-#[derive(Debug)]
+impl Hash for Flags {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.raw.hash(state);
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Copy)]
 #[repr(u8)]
 pub(crate) enum Reliability {
     /// Unreliable packets are sent by straight UDP. They may arrive out of order, or not at all.
@@ -207,13 +217,31 @@ pub(crate) enum Reliability {
     /// sent may not arrive. Disadvantages - Wasteful of bandwidth because it uses the overhead
     /// of reliable UDP packets to ensure late packets arrive that just get ignored anyway.
     ReliableSequenced = 0x04,
+    /// These are the same as above's, except that they are acknowledged.
+    UnreliableWithAckReceipt = 0x05,
+    UnreliableSequencedWithAckReceipt = 0x06,
+    ReliableWithAckReceipt = 0x07,
+    ReliableOrderedWithAckReceipt = 0x08,
+    ReliableSequencedWithAckReceipt = 0x09,
 }
 
 impl Reliability {
     fn is_reliable(&self) -> bool {
         matches!(
             self,
-            Reliability::Reliable | Reliability::ReliableSequenced | Reliability::ReliableOrdered
+            Reliability::Reliable
+                | Reliability::ReliableSequenced
+                | Reliability::ReliableOrdered
+                | Reliability::ReliableWithAckReceipt
+                | Reliability::ReliableOrderedWithAckReceipt
+                | Reliability::ReliableSequencedWithAckReceipt
+        )
+    }
+
+    fn is_ordered(&self) -> bool {
+        matches!(
+            self,
+            Reliability::ReliableOrdered | Reliability::ReliableOrderedWithAckReceipt
         )
     }
 
@@ -223,43 +251,54 @@ impl Reliability {
             Reliability::ReliableSequenced
                 | Reliability::ReliableOrdered
                 | Reliability::UnreliableSequenced
+                | Reliability::UnreliableSequencedWithAckReceipt
+                | Reliability::ReliableSequencedWithAckReceipt
+                | Reliability::ReliableOrderedWithAckReceipt
         )
     }
 
     fn is_sequenced(&self) -> bool {
         matches!(
             self,
-            Reliability::UnreliableSequenced | Reliability::ReliableSequenced
+            Reliability::UnreliableSequenced
+                | Reliability::ReliableSequenced
+                | Reliability::UnreliableSequencedWithAckReceipt
+                | Reliability::ReliableSequencedWithAckReceipt
         )
     }
 }
 
 impl Flags {
-    fn read(buf: &mut BytesMut) -> Self {
-        Self(buf.get_u8())
-    }
+    fn read(buf: &mut BytesMut) -> Result<Self, CodecError> {
+        // 0b0001_0000
+        const PARTED_FLAG: u8 = 0x10;
 
-    fn write(self, buf: &mut BytesMut) {
-        buf.put_u8(self.0);
-    }
-
-    /// Get the reliability of this flags
-    pub(crate) fn reliability(&self) -> Result<Reliability, CodecError> {
-        let r = self.0 >> 5;
-        if r > Reliability::ReliableSequenced as u8 {
+        let raw = buf.get_u8();
+        let r = raw >> 5;
+        if r > Reliability::ReliableSequencedWithAckReceipt as u8 {
             return Err(CodecError::InvalidReliability(r));
         }
         // Safety:
         // It is checked before transmute
-        unsafe { Ok(std::mem::transmute(r)) }
+        Ok(Self {
+            raw,
+            reliability: unsafe { std::mem::transmute(r) },
+            parted: raw & PARTED_FLAG != 0,
+        })
+    }
+
+    fn write(self, buf: &mut BytesMut) {
+        buf.put_u8(self.raw);
+    }
+
+    /// Get the reliability of this flags
+    pub(crate) fn reliability(&self) -> Reliability {
+        self.reliability
     }
 
     /// Return if it is parted
     pub(crate) fn parted(&self) -> bool {
-        // 0b0001_0000
-        const PARTED_FLAG: u8 = 0x10;
-
-        self.0 & PARTED_FLAG != 0
+        self.parted
     }
 }
 
