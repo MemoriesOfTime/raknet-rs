@@ -151,6 +151,7 @@ impl Packet {
             PackId::IncompatibleProtocolVersion => {
                 Ok(unconnected::Packet::read_incompatible_protocol(buf))
             }
+            PackId::AlreadyConnected => Ok(unconnected::Packet::read_already_connected(buf)),
             PackId::OpenConnectionRequest2 => {
                 unconnected::Packet::read_open_connection_request2(buf)
             }

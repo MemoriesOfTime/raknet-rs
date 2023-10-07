@@ -48,6 +48,10 @@ pub(crate) enum Packet<T: Buf = Bytes> {
         magic: bool,
         server_guid: u64,
     },
+    AlreadyConnected {
+        magic: bool,
+        server_guid: u64,
+    },
 }
 
 impl Packet {
@@ -65,6 +69,7 @@ impl Packet {
             Packet::OpenConnectionRequest2 { .. } => PackId::OpenConnectionRequest2,
             Packet::OpenConnectionReply2 { .. } => PackId::OpenConnectionReply2,
             Packet::IncompatibleProtocol { .. } => PackId::IncompatibleProtocolVersion,
+            Packet::AlreadyConnected { .. } => PackId::AlreadyConnected,
         }
     }
 
@@ -124,6 +129,13 @@ impl Packet {
     pub(super) fn read_incompatible_protocol(buf: &mut BytesMut) -> Self {
         Packet::IncompatibleProtocol {
             server_protocol: buf.get_u8(),
+            magic: buf.get_checked_magic(),
+            server_guid: buf.get_u64(),
+        }
+    }
+
+    pub(super) fn read_already_connected(buf: &mut BytesMut) -> Self {
+        Packet::AlreadyConnected {
             magic: buf.get_checked_magic(),
             server_guid: buf.get_u64(),
         }
@@ -201,6 +213,13 @@ impl Packet {
                 server_guid,
             } => {
                 buf.put_u8(server_protocol);
+                buf.put_magic();
+                buf.put_u64(server_guid);
+            }
+            Packet::AlreadyConnected {
+                magic: _magic,
+                server_guid,
+            } => {
                 buf.put_magic();
                 buf.put_u64(server_guid);
             }

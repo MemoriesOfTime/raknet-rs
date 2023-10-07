@@ -463,10 +463,6 @@ impl Packet {
 //         request_timestamp: i64,
 //         accepted_timestamp: i64,
 //     },
-//     AlreadyConnected {
-//         magic: bool,
-//         server_guid: u64,
-//     },
 //     NewIncomingConnection {
 //         server_address: std::net::SocketAddr,
 //         system_addresses: [std::net::SocketAddr; 10],
@@ -474,11 +470,6 @@ impl Packet {
 //         accepted_timestamp: i64,
 //     },
 //     Disconnect,
-//     IncompatibleProtocolVersion {
-//         server_protocol: u8,
-//         magic: bool,
-//         server_guid: u64,
-//     },
 //     Game,
 // }
 
