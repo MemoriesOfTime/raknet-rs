@@ -7,10 +7,11 @@ use std::task::{ready, Context, Poll};
 use futures::{Sink, Stream};
 use pin_project_lite::pin_project;
 use priority_queue::PriorityQueue;
+use tracing::debug;
 
 use crate::errors::CodecError;
-use crate::packet::connected::{Fragment, Frame, Reliability};
-use crate::packet::{connected, Packet};
+use crate::packet::connected::{Fragment, Frame};
+use crate::packet::{connected, PackId, Packet};
 
 pin_project! {
     /// Fragment/Defragment the frame set packet from sink/stream (UdpFramed). Enable external production
@@ -18,15 +19,19 @@ pin_project! {
     pub(super) struct FragmentFrame<F> {
         #[pin]
         frame: F,
-        reliability: Reliability,
+        // limit the max size of a parted frames set, 0 means no limit
+        // it will cause client resending frames if the limit is reached.
         limit_size: u32,
+        // limit the max count of all parted frames sets from an address, 0 means no limit.
+        // it will cause client resending frames if the limit is reached.
+        limit_parted: usize,
         parts: HashMap<SocketAddr, HashMap<u16, PriorityQueue<Frame, Reverse<u32>>>>,  // TODO apply LRU to delete old addr
         recv_buf: VecDeque<(Packet, SocketAddr)>,
     }
 }
 
 pub(super) trait Fragmented: Sized {
-    fn fragmented(self, reliability: Reliability, limit_size: u32) -> FragmentFrame<Self>;
+    fn fragmented(self, limit_size: u32, limit_parted: usize) -> FragmentFrame<Self>;
 }
 
 impl<T> Fragmented for T
@@ -34,11 +39,11 @@ where
     T: Stream<Item = Result<(Packet, SocketAddr), CodecError>>
         + Sink<(Packet, SocketAddr), Error = CodecError>,
 {
-    fn fragmented(self, reliability: Reliability, limit_size: u32) -> FragmentFrame<Self> {
+    fn fragmented(self, limit_size: u32, limit_parted: usize) -> FragmentFrame<Self> {
         FragmentFrame {
             frame: self,
-            reliability,
             limit_size,
+            limit_parted,
             parts: HashMap::new(),
             recv_buf: VecDeque::new(),
         }
@@ -53,8 +58,9 @@ where
 
     // TODO
     // Usually, there are a multiple frames frame set packet, and each frame is partitioned. If a
-    // frame is not partitioned, then there is only one frame in that frame set. Verify this
-    // hypothesis and optimize the code below.
+    // frame is not partitioned, then there is only one frame in that frame set. These two kinds of
+    // frames are usually not mixed in the same frame set。Verify this hypothesis and optimize
+    // the code below.
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.project();
 
@@ -75,7 +81,7 @@ where
         let Packet::Connected(connected::Packet::FrameSet(frame_set)) = packet else {
             return Poll::Ready(Some(Ok((packet, addr))));
         };
-        // TODO: with_capacity or new ?
+
         let mut single_frames = Vec::with_capacity(frame_set.frames.len());
         for frame in frame_set.frames {
             if let Some(Fragment {
@@ -86,29 +92,29 @@ where
             {
                 // promise that `parted_index` is always less than `parted_size`
                 if parted_index >= parted_size {
-                    return Poll::Ready(Some(Err(CodecError::PartedFrameIndexExceed(
-                        parted_size - 1,
-                        parted_index,
-                    ))));
+                    return Poll::Ready(Some(Err(CodecError::PartedFrame(format!(
+                        "parted_index {} >= parted_size {}",
+                        parted_index, parted_size
+                    )))));
+                }
+                if *this.limit_size != 0 && parted_size > *this.limit_size {
+                    return Poll::Ready(Some(Err(CodecError::PartedFrame(format!(
+                        "parted_size {} exceed limit_size {}",
+                        parted_size, *this.limit_size
+                    )))));
                 }
                 let parts = this.parts.entry(addr).or_default();
-                if *this.limit_size != 0 {
-                    if parted_size > *this.limit_size {
-                        return Poll::Ready(Some(Err(CodecError::PartedFrameSetSizeExceed(
-                            *this.limit_size,
-                            parted_size,
-                        ))));
-                    }
-                    if parts.len() > *this.limit_size as usize {
-                        return Poll::Ready(Some(Err(CodecError::PartedFrameSetSizeExceed(
-                            *this.limit_size,
-                            parts.len() as u32,
-                        ))));
-                    }
+                if *this.limit_parted != 0 && parts.len() > *this.limit_parted {
+                    return Poll::Ready(Some(Err(CodecError::PartedFrame(format!(
+                        "parted_count {} exceed limit_parted {} ",
+                        parts.len(),
+                        *this.limit_parted,
+                    )))));
                 }
-                let frames_queue = parts
-                    .entry(parted_id)
-                    .or_insert_with(|| PriorityQueue::with_capacity(parted_size as usize));
+                let frames_queue = parts.entry(parted_id).or_insert_with(|| {
+                    debug!("new parted_id {parted_id} from {addr}, parted_size {parted_size}",);
+                    PriorityQueue::with_capacity(parted_size as usize)
+                });
                 frames_queue.push(frame, Reverse(parted_index));
                 if frames_queue.len() < parted_size as usize {
                     continue;
@@ -147,14 +153,30 @@ where
     }
 }
 
-impl<F> Sink<()> for FragmentFrame<F> {
-    type Error = ();
+impl<F> Sink<(Packet, SocketAddr)> for FragmentFrame<F>
+where
+    F: Sink<(Packet, SocketAddr), Error = CodecError>,
+{
+    type Error = CodecError;
 
     fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        todo!()
+        let this = self.project();
+        this.frame.poll_ready(cx)
     }
 
-    fn start_send(self: Pin<&mut Self>, item: ()) -> Result<(), Self::Error> {
+    fn start_send(
+        self: Pin<&mut Self>,
+        (packet, addr): (Packet, SocketAddr),
+    ) -> Result<(), Self::Error> {
+        let this = self.project();
+        let Packet::Connected(connected::Packet::FrameSet(frame_set)) = packet else {
+            return this.frame.start_send((packet, addr));
+        };
+        if matches!(frame_set.inner_pack_id()?, PackId::Disconnect) {
+            debug!("disconnect from {}, clean it's frame parts buffer", addr);
+            this.parts.remove(&addr);
+        }
+
         todo!()
     }
 
@@ -163,6 +185,7 @@ impl<F> Sink<()> for FragmentFrame<F> {
     }
 
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        todo!()
+        ready!(self.poll_flush(cx))?;
+        Poll::Ready(Ok(()))
     }
 }
