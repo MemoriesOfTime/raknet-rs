@@ -1,10 +1,12 @@
 use std::cmp::Reverse;
 use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
+use std::num::NonZeroUsize;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
 use futures::{Sink, Stream};
+use lru::LruCache;
 use pin_project_lite::pin_project;
 use priority_queue::PriorityQueue;
 use tracing::debug;
@@ -29,7 +31,7 @@ pin_project! {
         // limit the max count of all parted frames sets from an address
         // it might cause client resending frames if the limit is reached.
         limit_parted: usize,
-        parts: HashMap<SocketAddr, HashMap<u16, PriorityQueue<Frame, Reverse<u32>>>>,
+        parts: HashMap<SocketAddr, LruCache<u16, PriorityQueue<Frame, Reverse<u32>>>>,
         recv_buf: VecDeque<(Packet, SocketAddr)>,
     }
 }
@@ -44,12 +46,14 @@ where
         + Sink<(Packet, SocketAddr), Error = CodecError>,
 {
     fn defragmented(self, limit_size: u32, limit_parted: usize) -> DeFragment<Self> {
+        const DEFAULT_RECV_BUF_CAP: usize = 8;
+
         DeFragment {
             frame: self,
             limit_size,
             limit_parted,
             parts: HashMap::new(),
-            recv_buf: VecDeque::new(),
+            recv_buf: VecDeque::with_capacity(DEFAULT_RECV_BUF_CAP),
         }
     }
 }
@@ -107,20 +111,11 @@ where
                         parted_size, *this.limit_size
                     )))));
                 }
-                let parts = this.parts.entry(addr).or_default();
-                if parts.len() > *this.limit_parted {
-                    // Clear the parted cache of this address if the parted count exceeds the limit.
-                    // Some unfinished frames will be cleared along with redundant frames.
-                    // TODO: apply LRU to clear the cache to avoid clearing unfinished frames.
-                    parts.clear();
-                    return Poll::Ready(Some(Err(CodecError::PartedFrame(format!(
-                        "parted_count {} exceed limit_parted {}, clear the parted cache",
-                        parts.len(),
-                        *this.limit_parted,
-                    )))));
-                }
-                let frames_queue = parts.entry(parted_id).or_insert_with(|| {
-                    debug!("new parted_id {parted_id} from {addr}, parted_size {parted_size}",);
+                let parts = this.parts.entry(addr).or_insert_with(|| {
+                    LruCache::new(NonZeroUsize::new(*this.limit_parted).expect("limit_parted > 0"))
+                });
+                let frames_queue = parts.get_or_insert_mut(parted_id, || {
+                    debug!("new parted_id {parted_id} from {addr}",);
                     PriorityQueue::with_capacity(parted_size as usize)
                 });
                 frames_queue.push(frame, Reverse(parted_index));
@@ -131,7 +126,7 @@ where
                 // `parted_size`, `frame` is hashed by `parted_index`, so here we get the complete
                 // frames vector
                 let frames: Vec<Frame> = parts
-                    .remove(&parted_id)
+                    .pop(&parted_id)
                     .unwrap_or_else(|| unreachable!("parted_id {parted_id} should be set before"))
                     .into_sorted_vec();
                 this.recv_buf.push_back((
