@@ -7,6 +7,16 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 use crate::errors::CodecError;
 
+#[macro_export]
+macro_rules! read_buf {
+    ($buf:expr, $len:expr, $exp:expr) => {{
+        if $buf.remaining() < $len {
+            return Err(CodecError::InvalidPacketLength);
+        }
+        $exp
+    }};
+}
+
 /// Packet IDs. These packets play important role in raknet protocol.
 /// Some of them appear at the first byte of a UDP data packet (like `UnconnectedPing1`), while
 /// others are encapsulated in a `FrameSet` data packet and appear as the first byte of the body
@@ -106,7 +116,7 @@ impl From<PackId> for u8 {
 }
 
 /// Raknet packet
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub(crate) enum Packet<T: Buf = Bytes> {
     Unconnected(unconnected::Packet<T>),
     Connected(connected::Packet<T>),
@@ -125,7 +135,7 @@ impl Packet {
         if buf.is_empty() {
             return Ok(None);
         }
-        let pack_id: PackId = buf.get_u8().try_into()?;
+        let pack_id: PackId = read_buf!(buf, 1, buf.get_u8().try_into()?);
         if pack_id.is_frame_set() {
             return Ok(Some(Self::Connected(connected::Packet::read_frame_set(
                 buf,
@@ -139,19 +149,39 @@ impl Packet {
         }
         match pack_id {
             PackId::UnconnectedPing1 | PackId::UnconnectedPing2 => {
-                Ok(unconnected::Packet::read_unconnected_ping(buf))
+                read_buf!(buf, 32, Ok(unconnected::Packet::read_unconnected_ping(buf)))
             }
-            PackId::UnconnectedPong => Ok(unconnected::Packet::read_unconnected_pong(buf)),
+            PackId::UnconnectedPong => {
+                read_buf!(buf, 32, Ok(unconnected::Packet::read_unconnected_pong(buf)))
+            }
             PackId::OpenConnectionRequest1 => {
-                Ok(unconnected::Packet::read_open_connection_request1(buf))
+                read_buf!(
+                    buf,
+                    19,
+                    Ok(unconnected::Packet::read_open_connection_request1(buf))
+                )
             }
             PackId::OpenConnectionReply1 => {
-                Ok(unconnected::Packet::read_open_connection_reply1(buf))
+                read_buf!(
+                    buf,
+                    27,
+                    Ok(unconnected::Packet::read_open_connection_reply1(buf))
+                )
             }
             PackId::IncompatibleProtocolVersion => {
-                Ok(unconnected::Packet::read_incompatible_protocol(buf))
+                read_buf!(
+                    buf,
+                    25,
+                    Ok(unconnected::Packet::read_incompatible_protocol(buf))
+                )
             }
-            PackId::AlreadyConnected => Ok(unconnected::Packet::read_already_connected(buf)),
+            PackId::AlreadyConnected => {
+                read_buf!(
+                    buf,
+                    24,
+                    Ok(unconnected::Packet::read_already_connected(buf))
+                )
+            }
             PackId::OpenConnectionRequest2 => {
                 unconnected::Packet::read_open_connection_request2(buf)
             }
@@ -230,26 +260,30 @@ pub(crate) trait SocketAddrWrite: private::SealedBufMut {
 
 impl<T: Buf> SocketAddrRead for T {
     fn get_socket_addr(&mut self) -> Result<SocketAddr, CodecError> {
-        let ver = self.get_u8();
+        let ver = read_buf!(self, 1, self.get_u8());
         match ver {
             4 => {
-                let ip = Ipv4Addr::from_bits(self.get_u32());
-                let port = self.get_u16();
-                Ok(SocketAddr::V4(SocketAddrV4::new(ip, port)))
+                read_buf!(self, 6, {
+                    let ip = Ipv4Addr::from_bits(self.get_u32());
+                    let port = self.get_u16();
+                    Ok(SocketAddr::V4(SocketAddrV4::new(ip, port)))
+                })
             }
             6 => {
                 // TODO: to be determined
-                let family = self.get_u16();
-                if family != 0x17 {
-                    return Err(CodecError::InvalidIPV6Family(family));
-                }
-                let port = self.get_u16();
-                let flow_info = self.get_u32();
-                let ip = Ipv6Addr::from_bits(self.get_u128());
-                let scope_ip = self.get_u32();
-                Ok(SocketAddr::V6(SocketAddrV6::new(
-                    ip, port, flow_info, scope_ip,
-                )))
+                read_buf!(self, 28, {
+                    let family = self.get_u16();
+                    if family != 0x17 {
+                        return Err(CodecError::InvalidIPV6Family(family));
+                    }
+                    let port = self.get_u16();
+                    let flow_info = self.get_u32();
+                    let ip = Ipv6Addr::from_bits(self.get_u128());
+                    let scope_ip = self.get_u32();
+                    Ok(SocketAddr::V6(SocketAddrV6::new(
+                        ip, port, flow_info, scope_ip,
+                    )))
+                })
             }
             _ => Err(CodecError::InvalidIPVer(ver)),
         }

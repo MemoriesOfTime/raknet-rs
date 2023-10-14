@@ -11,7 +11,7 @@ use tokio::net::UdpSocket;
 use tracing::warn;
 
 use super::conn::Conn;
-use crate::codec::Framed;
+use crate::codec::{CodecConfig, Framed};
 use crate::errors::CodecError;
 use crate::packet::{unconnected, Packet};
 use crate::server::conn::HandeShake;
@@ -71,7 +71,7 @@ where
         // TODO check packet and open a connection here
 
         assert!(!this.conns.insert(addr), "cannot open a connection twice");
-        let frame = this.socket.clone().framed();
+        let frame = this.socket.clone().framed(CodecConfig::default());
         let conn = Conn::HandShaking(HandeShake {
             frame,
             client_protocol_ver: 0,
@@ -79,24 +79,5 @@ where
             peer_addr: addr,
         });
         Poll::Ready(Some(conn))
-    }
-}
-
-#[cfg(test)]
-mod test {
-
-    use super::*;
-
-    #[tokio::test]
-    async fn test_incoming() {
-        let addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
-        let socket = &UdpSocket::bind(addr).await.unwrap();
-        let frame = socket.framed().split();
-        let incoming = Incoming {
-            socket,
-            frame,
-            conns: HashSet::new(),
-        };
-        // TODO send connection to incoming
     }
 }

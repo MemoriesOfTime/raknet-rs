@@ -4,9 +4,10 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 use crate::errors::CodecError;
 use crate::packet::{MagicRead, MagicWrite, PackId, SocketAddrRead, SocketAddrWrite};
+use crate::read_buf;
 
 /// Request sent before establishing a connection
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub(crate) enum Packet<T: Buf = Bytes> {
     UnconnectedPing {
         send_timestamp: i64,
@@ -75,69 +76,69 @@ impl Packet {
 
     pub(super) fn read_unconnected_ping(buf: &mut BytesMut) -> Self {
         Packet::UnconnectedPing {
-            send_timestamp: buf.get_i64(),
-            magic: buf.get_checked_magic(),
-            client_guid: buf.get_u64(),
+            send_timestamp: buf.get_i64(),  // 8
+            magic: buf.get_checked_magic(), // 16
+            client_guid: buf.get_u64(),     // 8
         }
     }
 
     pub(super) fn read_unconnected_pong(buf: &mut BytesMut) -> Self {
         Packet::UnconnectedPong {
-            send_timestamp: buf.get_i64(),
-            server_guid: buf.get_u64(),
-            magic: buf.get_checked_magic(),
-            data: buf.split().freeze(),
+            send_timestamp: buf.get_i64(),  // 8
+            server_guid: buf.get_u64(),     // 8
+            magic: buf.get_checked_magic(), // 16
+            data: buf.split().freeze(),     // ?
         }
     }
 
     pub(super) fn read_open_connection_request1(buf: &mut BytesMut) -> Self {
         Packet::OpenConnectionRequest1 {
-            magic: buf.get_checked_magic(),
-            protocol_version: buf.get_u8(),
-            mtu: buf.get_u16(),
+            magic: buf.get_checked_magic(), // 16
+            protocol_version: buf.get_u8(), // 1
+            mtu: buf.get_u16(),             // 2
         }
     }
 
     pub(super) fn read_open_connection_reply1(buf: &mut BytesMut) -> Self {
         Packet::OpenConnectionReply1 {
-            magic: buf.get_checked_magic(),
-            server_guid: buf.get_u64(),
-            use_encryption: buf.get_u8() != 0,
-            mtu: buf.get_u16(),
+            magic: buf.get_checked_magic(),    // 16
+            server_guid: buf.get_u64(),        // 8
+            use_encryption: buf.get_u8() != 0, // 1
+            mtu: buf.get_u16(),                // 2
         }
     }
 
     pub(super) fn read_open_connection_request2(buf: &mut BytesMut) -> Result<Self, CodecError> {
         Ok(Packet::OpenConnectionRequest2 {
-            magic: buf.get_checked_magic(),
+            magic: read_buf!(buf, 16, buf.get_checked_magic()),
             server_address: buf.get_socket_addr()?,
-            mtu: buf.get_u16(),
-            client_guid: buf.get_u64(),
+            mtu: read_buf!(buf, 2, buf.get_u16()),
+            client_guid: read_buf!(buf, 8, buf.get_u64()),
         })
     }
 
     pub(super) fn read_open_connection_reply2(buf: &mut BytesMut) -> Result<Self, CodecError> {
         Ok(Packet::OpenConnectionReply2 {
-            magic: buf.get_checked_magic(),
-            server_guid: buf.get_u64(),
+            magic: read_buf!(buf, 16, buf.get_checked_magic()),
+            server_guid: read_buf!(buf, 8, buf.get_u64()),
             client_address: buf.get_socket_addr()?,
-            mtu: buf.get_u16(),
-            encryption_enabled: buf.get_u8() != 0,
+            mtu: read_buf!(buf, 2, buf.get_u16()),
+            encryption_enabled: read_buf!(buf, 1, buf.get_u8() != 0),
         })
     }
 
     pub(super) fn read_incompatible_protocol(buf: &mut BytesMut) -> Self {
         Packet::IncompatibleProtocol {
-            server_protocol: buf.get_u8(),
-            magic: buf.get_checked_magic(),
-            server_guid: buf.get_u64(),
+            server_protocol: buf.get_u8(),  // 1
+            magic: buf.get_checked_magic(), // 16
+            server_guid: buf.get_u64(),     // 8
         }
     }
 
     pub(super) fn read_already_connected(buf: &mut BytesMut) -> Self {
         Packet::AlreadyConnected {
-            magic: buf.get_checked_magic(),
-            server_guid: buf.get_u64(),
+            magic: buf.get_checked_magic(), // 16
+            server_guid: buf.get_u64(),     // 8
         }
     }
 

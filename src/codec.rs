@@ -18,7 +18,6 @@ use tracing::{trace, warn};
 
 use crate::codec::fragment::DeFragmented;
 use crate::errors::CodecError;
-use crate::packet::connected::Reliability;
 use crate::packet::Packet;
 
 /// Codec config
@@ -30,8 +29,6 @@ pub(crate) struct CodecConfig {
     /// limit the max count of all parted frames sets from an address
     /// it might cause client resending frames if the limit is reached.
     limit_parted: usize,
-    /// reliability mode used by the codec
-    reliability: Reliability,
 }
 
 impl Default for CodecConfig {
@@ -40,17 +37,15 @@ impl Default for CodecConfig {
         Self {
             limit_size: 256,
             limit_parted: 256,
-            reliability: Reliability::ReliableOrdered,
         }
     }
 }
 
 impl CodecConfig {
-    pub(crate) fn new(limit_size: u32, limit_parted: usize) -> Self {
+    pub fn new(limit_size: u32, limit_parted: usize) -> Self {
         Self {
             limit_size,
             limit_parted,
-            reliability: Reliability::ReliableOrdered,
         }
     }
 }
@@ -111,19 +106,21 @@ where
     type Item = (Packet, SocketAddr);
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let this = self.project();
-        let Some(res) = ready!(this.frame.poll_next(cx)) else {
-            return Poll::Ready(None);
-        };
-        let (packet, addr) = match res {
-            Ok((packet, addr)) => (packet, addr),
-            Err(err) => {
-                warn!("raknet codec error: {err}, ignore this packet");
-                return Poll::Pending;
-            }
-        };
-        trace!("received packet: {packet:?}, from: {addr}",);
-        Poll::Ready(Some((packet, addr)))
+        let mut this = self.project();
+        loop {
+            let Some(res) = ready!(this.frame.as_mut().poll_next(cx)) else {
+                return Poll::Ready(None);
+            };
+            let (packet, addr) = match res {
+                Ok((packet, addr)) => (packet, addr),
+                Err(err) => {
+                    warn!("raknet codec error: {err}, ignore this packet");
+                    continue;
+                }
+            };
+            trace!("received packet: {packet:?}, from: {addr}",);
+            return Poll::Ready(Some((packet, addr)));
+        }
     }
 }
 
@@ -159,6 +156,7 @@ mod test {
     use bytes::Buf;
     use futures::{SinkExt, StreamExt};
     use tokio::net::UdpSocket;
+    use tracing::debug;
     use tracing_test::traced_test;
 
     use crate::codec::{CodecConfig, Framed};
@@ -182,20 +180,21 @@ mod test {
         );
         let listen_addr = socket.local_addr().unwrap();
         let mut framed = socket.framed(CodecConfig::default()).buffer(10);
-
         let send_socket = UdpSocket::bind("0.0.0.0:0".parse::<SocketAddr>().unwrap())
             .await
             .unwrap();
         send_socket.send_to(&[1], listen_addr).await.unwrap();
         send_socket
-            .framed()
+            .framed(CodecConfig::default())
             .send((unconnected_ping(), listen_addr))
             .await
             .unwrap();
-        framed.next().await.unwrap();
+        let (packet, _) = framed.next().await.unwrap();
+        assert_eq!(packet, unconnected_ping());
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn test_unconnected_ping() {
         let addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
         let socket = Arc::new(UdpSocket::bind(addr).await.unwrap());
@@ -205,6 +204,7 @@ mod test {
             .unwrap()
             .next()
             .unwrap();
+        debug!("server address: {}", server_addr);
         framed
             .send((unconnected_ping(), server_addr))
             .await

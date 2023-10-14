@@ -4,16 +4,17 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 use crate::errors::CodecError;
 use crate::packet::PackId;
+use crate::read_buf;
 
 // Packet when RakNet has established a connection
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub(crate) enum Packet<T: Buf = Bytes> {
     FrameSet(FrameSet<T>),
     Ack(Ack),
     Nack(Ack),
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub(crate) struct FrameSet<T: Buf = Bytes> {
     pub(crate) seq_num: Uint24le,
     pub(crate) frames: Vec<Frame<T>>,
@@ -50,12 +51,15 @@ impl Hash for Frame {
 
 impl Frame {
     fn read(buf: &mut BytesMut) -> Result<Self, CodecError> {
-        let flags = Flags::read(buf)?;
-        // length in bytes
-        let length = buf.get_u16() >> 3;
-        if length == 0 {
-            return Err(CodecError::InvalidPacketLength);
-        }
+        let (flags, length) = read_buf!(buf, 3, {
+            let flags = Flags::read(buf)?;
+            // length in bytes
+            let length = buf.get_u16() >> 3;
+            if length == 0 {
+                return Err(CodecError::InvalidPacketLength);
+            }
+            (flags, length as usize)
+        });
         let reliability = flags.reliability;
         let mut reliable_frame_index = None;
         let mut seq_frame_index = None;
@@ -63,18 +67,21 @@ impl Frame {
         let mut fragment = None;
 
         if reliability.is_reliable() {
-            reliable_frame_index = Some(Uint24le::read(buf));
+            reliable_frame_index = read_buf!(buf, 3, Some(Uint24le::read(buf)));
         }
         if reliability.is_sequenced() {
-            seq_frame_index = Some(Uint24le::read(buf));
+            seq_frame_index = read_buf!(buf, 3, Some(Uint24le::read(buf)));
         }
         if reliability.is_sequenced_or_ordered() {
-            ordered_frame_index = Some(Uint24le::read(buf));
-            // skip the order channel (u8)
-            buf.advance(1);
+            ordered_frame_index = read_buf!(buf, 4, {
+                let index = Some(Uint24le::read(buf));
+                // skip the order channel (u8)
+                buf.advance(1);
+                index
+            });
         }
         if flags.parted() {
-            fragment = Some(Fragment::read(buf));
+            fragment = read_buf!(buf, 10, Some(Fragment::read(buf)));
         }
         Ok(Frame {
             flags,
@@ -82,7 +89,7 @@ impl Frame {
             seq_frame_index,
             ordered_frame_index,
             fragment,
-            body: buf.split_to(length as usize).freeze(),
+            body: read_buf!(buf, length, buf.split_to(length).freeze()),
         })
     }
 
@@ -126,8 +133,12 @@ impl FrameSet {
     }
 
     fn read(buf: &mut BytesMut) -> Result<Self, CodecError> {
-        let seq_num = Uint24le::read(buf);
-        let mut frames = Vec::new();
+        // TODO: get a proper const for every scenario
+        const AVG_FRAME_SIZE: usize = 30;
+
+        let seq_num = read_buf!(buf, 3, Uint24le::read(buf));
+        // I just want to avoid reallocate :)
+        let mut frames = Vec::with_capacity(buf.remaining() / AVG_FRAME_SIZE);
         while buf.has_remaining() {
             frames.push(Frame::read(buf)?);
         }
@@ -325,7 +336,7 @@ impl Fragment {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub(crate) struct Ack {
     records: Vec<Record>,
 }
@@ -337,12 +348,24 @@ impl Ack {
         mut sorted_seq_nums: I,
         mut mtu: u16,
     ) -> Option<Self> {
+        // TODO: get a proper const for every scenario
+        const SEQ_NUM_SIZE_TO_RECORD_DIV_CONST: usize = 10;
+
         // pack_id(1) + length(2) + single record(4) = 7
         debug_assert!(mtu >= 7, "7 is the least size of mtu");
-        let mut records = Vec::new();
+
         let Some(mut first) = sorted_seq_nums.next() else {
             return None;
         };
+
+        // Emm, I don't know how to get the exact capacity of Vec, I just do not want
+        // to reallocate when push records
+        let (low, upper_maybe) = sorted_seq_nums.size_hint();
+        let mut records = upper_maybe.map_or_else(
+            || Vec::with_capacity(low / SEQ_NUM_SIZE_TO_RECORD_DIV_CONST),
+            |upper| Vec::with_capacity(upper / SEQ_NUM_SIZE_TO_RECORD_DIV_CONST),
+        );
+
         let mut last = first;
         let mut upgrade_flag = true;
         // first byte is pack_id, next 2 bytes are length, the first seq_num takes at least 4 bytes
@@ -415,7 +438,7 @@ impl Ack {
 const RECORD_RANGE: u8 = 0;
 const RECORD_SINGLE: u8 = 1;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub(crate) enum Record {
     Range(Uint24le, Uint24le),
     Single(Uint24le),
@@ -423,10 +446,14 @@ pub(crate) enum Record {
 
 impl Record {
     fn read(buf: &mut BytesMut) -> Result<Self, CodecError> {
-        let record_type = buf.get_u8();
+        let record_type = read_buf!(buf, 1, buf.get_u8());
         match record_type {
-            RECORD_RANGE => Ok(Record::Range(Uint24le::read(buf), Uint24le::read(buf))),
-            RECORD_SINGLE => Ok(Record::Single(Uint24le::read(buf))),
+            RECORD_RANGE => read_buf!(
+                buf,
+                6,
+                Ok(Record::Range(Uint24le::read(buf), Uint24le::read(buf)))
+            ),
+            RECORD_SINGLE => read_buf!(buf, 3, Ok(Record::Single(Uint24le::read(buf)))),
             _ => Err(CodecError::InvalidRecordType(record_type)),
         }
     }
