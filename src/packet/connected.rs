@@ -1,3 +1,4 @@
+use std::fmt::Display;
 use std::hash::{Hash, Hasher};
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
@@ -158,7 +159,7 @@ impl FrameSet {
 
 /// `uint24` little-endian but actually occupies 4 bytes.
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
-pub(crate) struct Uint24le(u32);
+pub(crate) struct Uint24le(pub u32);
 
 impl Uint24le {
     fn read(buf: &mut BytesMut) -> Self {
@@ -168,6 +169,12 @@ impl Uint24le {
 
     fn write(self, buf: &mut BytesMut) {
         buf.put_uint_le(self.0 as u64, 3);
+    }
+}
+
+impl Display for Uint24le {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
     }
 }
 
@@ -237,7 +244,7 @@ pub(crate) enum Reliability {
 }
 
 impl Reliability {
-    fn is_reliable(&self) -> bool {
+    pub(crate) fn is_reliable(&self) -> bool {
         matches!(
             self,
             Reliability::Reliable
@@ -249,14 +256,14 @@ impl Reliability {
         )
     }
 
-    fn is_ordered(&self) -> bool {
+    pub(crate) fn is_ordered(&self) -> bool {
         matches!(
             self,
             Reliability::ReliableOrdered | Reliability::ReliableOrderedWithAckReceipt
         )
     }
 
-    fn is_sequenced_or_ordered(&self) -> bool {
+    pub(crate) fn is_sequenced_or_ordered(&self) -> bool {
         matches!(
             self,
             Reliability::ReliableSequenced
@@ -268,7 +275,7 @@ impl Reliability {
         )
     }
 
-    fn is_sequenced(&self) -> bool {
+    pub(crate) fn is_sequenced(&self) -> bool {
         matches!(
             self,
             Reliability::UnreliableSequenced

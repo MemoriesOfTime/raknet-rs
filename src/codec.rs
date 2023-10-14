@@ -16,6 +16,7 @@ use tokio_util::codec::{Decoder, Encoder};
 use tokio_util::udp::UdpFramed;
 use tracing::{trace, warn};
 
+use crate::codec::dedup::Deduplicated;
 use crate::codec::fragment::DeFragmented;
 use crate::errors::CodecError;
 use crate::packet::Packet;
@@ -63,8 +64,9 @@ impl<T: Borrow<UdpSocket> + Sized> Framed for T {
         config: CodecConfig,
     ) -> impl Stream<Item = (Packet, SocketAddr)> + Sink<(Packet, SocketAddr), Error = CodecError>
     {
-        let frame =
-            UdpFramed::new(self, Codec).defragmented(config.limit_size, config.limit_parted);
+        let frame = UdpFramed::new(self, Codec)
+            .deduplicated()
+            .defragmented(config.limit_size, config.limit_parted);
         LoggedCodec { frame }
     }
 }

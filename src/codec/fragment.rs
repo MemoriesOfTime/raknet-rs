@@ -46,7 +46,7 @@ where
         + Sink<(Packet, SocketAddr), Error = CodecError>,
 {
     fn defragmented(self, limit_size: u32, limit_parted: usize) -> DeFragment<Self> {
-        const DEFAULT_RECV_BUF_CAP: usize = 8;
+        const DEFAULT_RECV_BUF_CAP: usize = 256;
 
         DeFragment {
             frame: self,
