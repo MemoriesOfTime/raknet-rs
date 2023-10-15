@@ -13,41 +13,46 @@ use crate::packet::{connected, PackId, Packet};
 
 #[derive(Debug, Default)]
 struct DuplicateWindow {
-    read_index: u32,
+    /// First unreceived sequence number, start at 0
+    first_unreceived: u32,
     // TODO: use bit vec
-    gap_map: VecDeque<bool>,
+    /// Record the received status of sequence numbers start at `first_unreceived`
+    /// `true` is received and `false` is unreceived
+    received_status: VecDeque<bool>,
 }
 
 impl DuplicateWindow {
-    fn new() -> Self {
-        Self {
-            read_index: 0,
-            gap_map: VecDeque::new(),
-        }
-    }
-
+    /// Check whether a sequence number is duplicated
     fn duplicate(&mut self, seq_num: Uint24le) -> bool {
-        if seq_num.0 < self.read_index {
+        if seq_num.0 < self.first_unreceived {
             return true;
         }
-        let gap = (seq_num.0 - self.read_index) as usize;
+        let gap = (seq_num.0 - self.first_unreceived) as usize;
         if gap == 0 {
-            self.read_index += 1;
-            self.gap_map.pop_front();
-        } else if gap < self.gap_map.len() {
-            if self.gap_map[gap] {
-                self.gap_map[gap] = false;
-            } else {
+            // received the next sequence number of last received
+            // advance the first_unreceived and pop the front of
+            // received_status
+            self.first_unreceived += 1;
+            self.received_status.pop_front();
+        } else if gap < self.received_status.len() {
+            // received the sequence number that is recorded in received_status
+            // check its status to determine whether it is duplicated
+            if self.received_status[gap] {
                 return true;
             }
+            // mark it is received
+            self.received_status[gap] = true;
         } else {
-            let count = gap - self.gap_map.len();
-            self.gap_map.extend(std::iter::repeat(true).take(count));
-            self.gap_map.push_back(false);
+            // received the sequence number that exceed received_status, extend
+            // the received_status and record the received_status[gap] as received
+            let count = gap - self.received_status.len();
+            self.received_status
+                .extend(std::iter::repeat(false).take(count));
+            self.received_status.push_back(true);
         }
-        while let Some(false) = self.gap_map.front() {
-            self.gap_map.pop_front();
-            self.read_index += 1;
+        while let Some(true) = self.received_status.front() {
+            self.received_status.pop_front();
+            self.first_unreceived += 1;
         }
         false
     }
@@ -157,21 +162,21 @@ mod test {
 
     #[test]
     fn test_duplicate_windows_check_ordered() {
-        let mut window = DuplicateWindow::new();
+        let mut window = DuplicateWindow::default();
         for i in 0..1024 {
             assert!(!window.duplicate(Uint24le(i)));
-            assert_eq!(window.read_index, i + 1);
-            assert!(window.gap_map.len() <= 1);
+            assert_eq!(window.first_unreceived, i + 1);
+            assert!(window.received_status.len() <= 1);
         }
     }
 
     #[test]
     fn test_duplicate_windows_check_ordered_dup() {
-        let mut window = DuplicateWindow::new();
+        let mut window = DuplicateWindow::default();
         for i in 0..512 {
             assert!(!window.duplicate(Uint24le(i)));
-            assert_eq!(window.read_index, i + 1);
-            assert!(window.gap_map.len() <= 1);
+            assert_eq!(window.first_unreceived, i + 1);
+            assert!(window.received_status.len() <= 1);
         }
         for i in 0..512 {
             assert!(window.duplicate(Uint24le(i)));
@@ -180,7 +185,7 @@ mod test {
 
     #[test]
     fn test_duplicate_windows_check_gap_dup() {
-        let mut window = DuplicateWindow::new();
+        let mut window = DuplicateWindow::default();
         assert!(!window.duplicate(Uint24le(0)));
         assert!(!window.duplicate(Uint24le(1)));
         assert!(!window.duplicate(Uint24le(1000)));
@@ -189,18 +194,18 @@ mod test {
         assert!(window.duplicate(Uint24le(1001)));
         assert!(!window.duplicate(Uint24le(500)));
         assert!(window.duplicate(Uint24le(500)));
-        assert_eq!(window.read_index, 2);
+        assert_eq!(window.first_unreceived, 2);
     }
 
     #[test]
     fn test_duplicate_window_clear_gap_map() {
-        let mut window = DuplicateWindow::new();
+        let mut window = DuplicateWindow::default();
         for i in (0..256).step_by(2) {
             assert!(!window.duplicate(Uint24le(i)));
         }
         for i in (1..256).step_by(2) {
             assert!(!window.duplicate(Uint24le(i)));
         }
-        assert_eq!(window.gap_map.len(), 0);
+        assert_eq!(window.received_status.len(), 0);
     }
 }
