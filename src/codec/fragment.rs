@@ -68,88 +68,90 @@ where
     // TODO
     // Usually, there are a multiple frames frame set packet, and all frames are partitioned or not
     // partitioned. These two kinds of frames are usually not mixed in the same frame
-    // set. Verify this hypothesis and optimize the code below. Maybe we could remove `recv_buf`
+    // set. Verify this hypothesis and optimize the code below. Maybe we could remove recv_buf
     // here.
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let this = self.project();
+        let mut this = self.project();
 
-        // try empty buffer
-        if let Some(buf_res) = this.recv_buf.pop_front() {
-            return Poll::Ready(Some(Ok(buf_res)));
-        }
+        loop {
+            // try empty buffer
+            if let Some(buf_res) = this.recv_buf.pop_front() {
+                return Poll::Ready(Some(Ok(buf_res)));
+            }
 
-        let (packet, addr) = match this.frame.poll_packet(cx) {
-            Ok(v) => v,
-            Err(poll) => return poll,
-        };
+            let (packet, addr) = match this.frame.as_mut().poll_packet(cx) {
+                Ok(v) => v,
+                Err(poll) => return poll,
+            };
 
-        let Packet::Connected(connected::Packet::FrameSet(frame_set)) = packet else {
-            return Poll::Ready(Some(Ok((packet, addr))));
-        };
+            let Packet::Connected(connected::Packet::FrameSet(frame_set)) = packet else {
+                return Poll::Ready(Some(Ok((packet, addr))));
+            };
 
-        let mut single_frames = Vec::with_capacity(frame_set.frames.len());
-        for frame in frame_set.frames {
-            if let Some(Fragment {
-                parted_size,
-                parted_id,
-                parted_index,
-            }) = frame.fragment.clone()
-            {
-                // promise that `parted_index` is always less than `parted_size`
-                if parted_index >= parted_size {
-                    return Poll::Ready(Some(Err(CodecError::PartedFrame(format!(
-                        "parted_index {} >= parted_size {}",
-                        parted_index, parted_size
-                    )))));
-                }
-                if *this.limit_size != 0 && parted_size > *this.limit_size {
-                    return Poll::Ready(Some(Err(CodecError::PartedFrame(format!(
-                        "parted_size {} exceed limit_size {}",
-                        parted_size, *this.limit_size
-                    )))));
-                }
-                let parts = this.parts.entry(addr).or_insert_with(|| {
-                    LruCache::new(NonZeroUsize::new(*this.limit_parted).expect("limit_parted > 0"))
-                });
-                let frames_queue = parts.get_or_insert_mut(parted_id, || {
-                    debug!("new parted_id {parted_id} from {addr}",);
-                    PriorityQueue::with_capacity(parted_size as usize)
-                });
-                frames_queue.push(frame, Reverse(parted_index));
-                if frames_queue.len() < parted_size as usize {
+            let mut single_frames = Vec::with_capacity(frame_set.frames.len());
+            for frame in frame_set.frames {
+                if let Some(Fragment {
+                    parted_size,
+                    parted_id,
+                    parted_index,
+                }) = frame.fragment.clone()
+                {
+                    // promise that parted_index is always less than parted_size
+                    if parted_index >= parted_size {
+                        return Poll::Ready(Some(Err(CodecError::PartedFrame(format!(
+                            "parted_index {} >= parted_size {}",
+                            parted_index, parted_size
+                        )))));
+                    }
+                    if *this.limit_size != 0 && parted_size > *this.limit_size {
+                        return Poll::Ready(Some(Err(CodecError::PartedFrame(format!(
+                            "parted_size {} exceed limit_size {}",
+                            parted_size, *this.limit_size
+                        )))));
+                    }
+                    let parts = this.parts.entry(addr).or_insert_with(|| {
+                        LruCache::new(
+                            NonZeroUsize::new(*this.limit_parted).expect("limit_parted > 0"),
+                        )
+                    });
+                    let frames_queue = parts.get_or_insert_mut(parted_id, || {
+                        debug!("new parted_id {parted_id} from {addr}",);
+                        PriorityQueue::with_capacity(parted_size as usize)
+                    });
+                    frames_queue.push(frame, Reverse(parted_index));
+                    if frames_queue.len() < parted_size as usize {
+                        continue;
+                    }
+                    // parted_index is always less than parted_size, frames_queue length
+                    // reaches parted_size and frame is hashed by parted_index, so here we
+                    // get the complete frames vector
+                    let frames: Vec<Frame> = parts
+                        .pop(&parted_id)
+                        .unwrap_or_else(|| {
+                            unreachable!("parted_id {parted_id} should be set before")
+                        })
+                        .into_sorted_vec();
+                    this.recv_buf.push_back((
+                        Packet::Connected(connected::Packet::FrameSet(connected::FrameSet {
+                            frames,
+                            ..frame_set
+                        })),
+                        addr,
+                    ));
                     continue;
                 }
-                // `parted_index` is always less than `parted_size`, `frames_queue` length reaches
-                // `parted_size`, `frame` is hashed by `parted_index`, so here we get the complete
-                // frames vector
-                let frames: Vec<Frame> = parts
-                    .pop(&parted_id)
-                    .unwrap_or_else(|| unreachable!("parted_id {parted_id} should be set before"))
-                    .into_sorted_vec();
+                single_frames.push(frame);
+            }
+            if !single_frames.is_empty() {
                 this.recv_buf.push_back((
                     Packet::Connected(connected::Packet::FrameSet(connected::FrameSet {
-                        frames,
+                        frames: single_frames,
                         ..frame_set
                     })),
                     addr,
                 ));
-                continue;
             }
-            single_frames.push(frame);
         }
-        if !single_frames.is_empty() {
-            this.recv_buf.push_back((
-                Packet::Connected(connected::Packet::FrameSet(connected::FrameSet {
-                    frames: single_frames,
-                    ..frame_set
-                })),
-                addr,
-            ));
-        }
-        if let Some(buf_res) = this.recv_buf.pop_front() {
-            return Poll::Ready(Some(Ok(buf_res)));
-        }
-        Poll::Pending
     }
 }
 
