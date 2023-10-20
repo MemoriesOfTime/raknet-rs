@@ -150,6 +150,33 @@ where
     }
 }
 
+trait PollPacket {
+    #[allow(clippy::type_complexity)] // not too bad
+    fn poll_packet<T>(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Result<(Packet, SocketAddr), Poll<Option<Result<T, CodecError>>>>;
+}
+
+impl<F> PollPacket for F
+where
+    F: Stream<Item = Result<(Packet, SocketAddr), CodecError>>,
+{
+    fn poll_packet<T>(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Result<(Packet, SocketAddr), Poll<Option<Result<T, CodecError>>>> {
+        let res = match self.poll_next(cx) {
+            Poll::Ready(res) => res,
+            Poll::Pending => return Err(Poll::Pending),
+        };
+        let Some(res) = res else {
+            return Err(Poll::Ready(None));
+        };
+        res.map_err(|err| Poll::Ready(Some(Err(err))))
+    }
+}
+
 #[cfg(test)]
 mod test {
     use std::net::{SocketAddr, ToSocketAddrs};

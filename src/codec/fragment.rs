@@ -11,6 +11,7 @@ use pin_project_lite::pin_project;
 use priority_queue::PriorityQueue;
 use tracing::debug;
 
+use crate::codec::PollPacket;
 use crate::errors::CodecError;
 use crate::packet::connected::{Fragment, Frame};
 use crate::packet::{connected, PackId, Packet};
@@ -77,15 +78,11 @@ where
             return Poll::Ready(Some(Ok(buf_res)));
         }
 
-        let Some(res) = ready!(this.frame.poll_next(cx)) else {
-            return Poll::Ready(None);
+        let (packet, addr) = match this.frame.poll_packet(cx) {
+            Ok(v) => v,
+            Err(poll) => return poll,
         };
-        let (packet, addr) = match res {
-            Ok((packet, addr)) => (packet, addr),
-            Err(err) => {
-                return Poll::Ready(Some(Err(err)));
-            }
-        };
+
         let Packet::Connected(connected::Packet::FrameSet(frame_set)) = packet else {
             return Poll::Ready(Some(Ok((packet, addr))));
         };

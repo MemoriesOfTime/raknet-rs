@@ -7,6 +7,7 @@ use futures::{Sink, Stream};
 use pin_project_lite::pin_project;
 use tracing::debug;
 
+use crate::codec::PollPacket;
 use crate::errors::CodecError;
 use crate::packet::connected::Uint24le;
 use crate::packet::{connected, PackId, Packet};
@@ -92,15 +93,11 @@ where
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.project();
 
-        let Some(res) = ready!(this.frame.poll_next(cx)) else {
-            return Poll::Ready(None);
+        let (packet, addr) = match this.frame.poll_packet(cx) {
+            Ok(v) => v,
+            Err(poll) => return poll,
         };
-        let (packet, addr) = match res {
-            Ok((packet, addr)) => (packet, addr),
-            Err(err) => {
-                return Poll::Ready(Some(Err(err)));
-            }
-        };
+
         let Packet::Connected(connected::Packet::FrameSet(mut frame_set)) = packet else {
             return Poll::Ready(Some(Ok((packet, addr))));
         };
