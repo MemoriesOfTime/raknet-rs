@@ -66,10 +66,8 @@ where
     type Item = Result<(Packet, SocketAddr), CodecError>;
 
     // TODO
-    // Usually, there are a multiple frames frame set packet, and all frames are partitioned or not
-    // partitioned. These two kinds of frames are usually not mixed in the same frame
-    // set. Verify this hypothesis and optimize the code below. Maybe we could remove recv_buf
-    // here.
+    // Splitted frames in a FrameSet are usually ordered, so use Vec instead of PriorityQueue
+    // might be better, we should have a benchmark.
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
 
@@ -88,7 +86,8 @@ where
                 return Poll::Ready(Some(Ok((packet, addr))));
             };
 
-            let mut single_frames = Vec::with_capacity(frame_set.frames.len());
+            let mut single_frames = None;
+            let frames_len = frame_set.frames.len();
             for frame in frame_set.frames {
                 if let Some(Fragment {
                     parted_size,
@@ -140,12 +139,13 @@ where
                     ));
                     continue;
                 }
-                single_frames.push(frame);
+                let frames = single_frames.get_or_insert_with(|| Vec::with_capacity(frames_len));
+                frames.push(frame);
             }
-            if !single_frames.is_empty() {
+            if let Some(frames) = single_frames {
                 this.recv_buf.push_back((
                     Packet::Connected(connected::Packet::FrameSet(connected::FrameSet {
-                        frames: single_frames,
+                        frames,
                         ..frame_set
                     })),
                     addr,
