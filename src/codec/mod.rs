@@ -9,6 +9,7 @@ use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
 use bytes::BytesMut;
+use derive_builder::Builder;
 use futures::{Sink, Stream};
 use pin_project_lite::pin_project;
 use tokio::net::UdpSocket;
@@ -16,13 +17,14 @@ use tokio_util::codec::{Decoder, Encoder};
 use tokio_util::udp::UdpFramed;
 use tracing::{trace, warn};
 
+use self::ordered::Ordered;
 use crate::codec::dedup::Deduplicated;
 use crate::codec::fragment::DeFragmented;
 use crate::errors::CodecError;
 use crate::packet::Packet;
 
 /// Codec config
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Builder)]
 pub(crate) struct CodecConfig {
     /// limit the max size of a parted frames set, 0 means no limit
     /// it will abort the split frame if the parted_size reaches limit.
@@ -30,6 +32,10 @@ pub(crate) struct CodecConfig {
     /// limit the max count of all parted frames sets from an address
     /// it might cause client resending frames if the limit is reached.
     limit_parted: usize,
+    /// maximum ordered channel, the value should be less than 256
+    max_channels: usize,
+    /// whether to enable ordered sending when no ordered field found in frame
+    default_ordered_send: bool,
 }
 
 impl Default for CodecConfig {
@@ -38,15 +44,8 @@ impl Default for CodecConfig {
         Self {
             limit_size: 256,
             limit_parted: 256,
-        }
-    }
-}
-
-impl CodecConfig {
-    pub fn new(limit_size: u32, limit_parted: usize) -> Self {
-        Self {
-            limit_size,
-            limit_parted,
+            max_channels: 1,
+            default_ordered_send: true,
         }
     }
 }
@@ -66,7 +65,8 @@ impl<T: Borrow<UdpSocket> + Sized> Framed for T {
     {
         let frame = UdpFramed::new(self, Codec)
             .deduplicated()
-            .defragmented(config.limit_size, config.limit_parted);
+            .defragmented(config.limit_size, config.limit_parted)
+            .ordered(config.max_channels, config.default_ordered_send);
         LoggedCodec { frame }
     }
 }

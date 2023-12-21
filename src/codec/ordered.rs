@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::ops::AddAssign;
 use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::task::{ready, Context, Poll};
 
 use futures::{Sink, Stream};
 use pin_project_lite::pin_project;
@@ -10,10 +10,11 @@ use tracing::debug;
 
 use super::PollPacket;
 use crate::errors::CodecError;
-use crate::packet::connected::Frame;
-use crate::packet::{connected, Packet};
+use crate::packet::connected::{Frame, Uint24le};
+use crate::packet::{connected, PackId, Packet};
 
 const INITIAL_ORDERING_MAP_CAP: usize = 64;
+const DEFAULT_SEND_CHANNEL: u8 = 0;
 
 pin_project! {
     pub(super) struct Order<F> {
@@ -21,6 +22,8 @@ pin_project! {
         frame: F,
         // Max ordered channel that will be used in detailed protocol
         max_channels: usize,
+        // Whether to enable ordered send when there is no order option in frame before
+        default_ordered_send: bool,
         ordering: HashMap<SocketAddr, Vec<HashMap<u32, Frame>>>,
         read: HashMap<SocketAddr, Vec<u32>>,
         sent: HashMap<SocketAddr, Vec<u32>>,
@@ -28,7 +31,7 @@ pin_project! {
 }
 
 pub(super) trait Ordered: Sized {
-    fn ordered(self, max_channels: usize) -> Order<Self>;
+    fn ordered(self, max_channels: usize, default_ordered_send: bool) -> Order<Self>;
 }
 
 impl<T> Ordered for T
@@ -36,16 +39,18 @@ where
     T: Stream<Item = Result<(Packet, SocketAddr), CodecError>>
         + Sink<(Packet, SocketAddr), Error = CodecError>,
 {
-    fn ordered(self, max_channels: usize) -> Order<Self> {
+    fn ordered(self, max_channels: usize, default_ordered_send: bool) -> Order<Self> {
         assert!(
             max_channels < usize::from(u8::MAX),
             "max channels should not be larger than u8::MAX"
         );
+        assert!(max_channels > 0, "max_channels > 0");
 
         Order {
             frame: self,
             max_channels,
             ordering: HashMap::new(),
+            default_ordered_send,
             read: HashMap::new(),
             sent: HashMap::new(),
         }
@@ -69,12 +74,6 @@ where
         let Packet::Connected(connected::Packet::FrameSet(frame_set)) = packet else {
             return Poll::Ready(Some(Ok((packet, addr))));
         };
-        if frame_set.frames.is_empty() {
-            return Poll::Ready(Some(Ok((
-                Packet::Connected(connected::Packet::FrameSet(frame_set)),
-                addr,
-            ))));
-        }
 
         let mut frames = None;
         let frames_len = frame_set.frames.len();
@@ -160,5 +159,63 @@ where
             })),
             addr,
         ))))
+    }
+}
+
+impl<F> Sink<(Packet, SocketAddr)> for Order<F>
+where
+    F: Sink<(Packet, SocketAddr), Error = CodecError>,
+{
+    type Error = CodecError;
+
+    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        let this = self.project();
+        this.frame.poll_ready(cx)
+    }
+
+    fn start_send(
+        self: Pin<&mut Self>,
+        (mut packet, addr): (Packet, SocketAddr),
+    ) -> Result<(), Self::Error> {
+        let this = self.project();
+
+        if let Packet::Connected(connected::Packet::FrameSet(frame_set)) = &mut packet {
+            for frame in &mut frame_set.frames {
+                let Some(channel) = frame.ordered.as_ref().map_or(
+                    this.default_ordered_send.then_some(DEFAULT_SEND_CHANNEL),
+                    |ordered| Some(ordered.channel),
+                ) else {
+                    continue;
+                };
+                let sent = this
+                    .sent
+                    .entry(addr)
+                    .or_insert_with(|| std::iter::repeat(0).take(*this.max_channels).collect())
+                    .get_mut(usize::from(channel))
+                    .expect("channel < max_channels");
+                frame.ordered = Some(connected::Ordered {
+                    frame_index: Uint24le(*sent),
+                    channel,
+                });
+                sent.add_assign(1);
+            }
+            if matches!(frame_set.inner_pack_id()?, PackId::DisconnectNotification) {
+                debug!("disconnect from {}, clean it's frame parts buffer", addr);
+                this.ordering.remove(&addr);
+                this.read.remove(&addr);
+                this.sent.remove(&addr);
+            }
+        };
+        this.frame.start_send((packet, addr))
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        let this = self.project();
+        this.frame.poll_flush(cx)
+    }
+
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        ready!(self.poll_flush(cx))?;
+        Poll::Ready(Ok(()))
     }
 }

@@ -8,6 +8,7 @@ resolver = "2"
 
 [dependencies]
 bytes = "1.4.0"
+derive_builder = "0.12.0"
 futures = "0.3.28"
 lru = "0.12.0"
 pin-project-lite = "0.2.10"
