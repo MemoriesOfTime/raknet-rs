@@ -228,7 +228,8 @@ mod test {
         let addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
         let socket = Arc::new(UdpSocket::bind(addr).await.unwrap());
         let mut framed = socket.framed(CodecConfig::default()).buffer(10);
-        let server_addr = "play.lbsg.net:19132"
+        // TODO replace with mocked server
+        let server_addr = "mc.advancius.net:19132"
             .to_socket_addrs()
             .unwrap()
             .next()
