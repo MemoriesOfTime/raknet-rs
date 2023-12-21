@@ -35,15 +35,21 @@ impl Hash for Frame {
     fn hash<H: Hasher>(&self, state: &mut H) {
         // if it is a parted frame, then hash the fragment parted_index
         // to promise that the same parted_index will be hashed to the same frame
-        // in `frames_queue` of `FragmentFrame`
+        // in `frames_queue`
         if let Some(fragment) = &self.fragment {
             fragment.parted_index.hash(state);
+            return;
+        }
+        // if it is a ordered frame, then hash the frame index to
+        // promise that the same frame index will be hashed to the same frame
+        // in `ordering`
+        if let Some(ordered) = &self.ordered {
+            ordered.frame_index.hash(state);
             return;
         }
         self.flags.hash(state);
         self.reliable_frame_index.hash(state);
         self.seq_frame_index.hash(state);
-        self.ordered.hash(state);
         self.body.chunk().hash(state);
     }
 }

@@ -29,4 +29,6 @@ pub enum CodecError {
     InvalidPacketId(u8),
     #[error("parted frame error, reason: {0}")]
     PartedFrame(String),
+    #[error("ordered frame error, reason: {0}")]
+    OrderedFrame(String),
 }

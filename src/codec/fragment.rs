@@ -121,7 +121,7 @@ where
                     .reduce(|mut acc, next| {
                         // merge all parted frames
                         acc.body.put(next.body);
-                        // remove the sequence info
+                        // remove the sequence info to keep hash of this frame normal
                         acc.seq_frame_index = None;
                         acc
                     })
