@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
-use bytes::Bytes;
+use bytes::BytesMut;
 use futures::{FutureExt, Sink, SinkExt, Stream, StreamExt};
 use pin_project_lite::pin_project;
 use tokio::net::UdpSocket;
@@ -55,7 +55,7 @@ where
                 send_timestamp: 0,
                 server_guid: 0,
                 magic: false,
-                data: Bytes::new(),
+                data: BytesMut::new(),
             });
             if let Err(err) = ready!(sink.send((pong, addr)).poll_unpin(cx)) {
                 warn!("response unconnected pong failed, codec error {err}");

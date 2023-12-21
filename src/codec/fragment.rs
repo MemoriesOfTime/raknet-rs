@@ -1,10 +1,11 @@
 use std::cmp::Reverse;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
+use bytes::BufMut;
 use futures::{Sink, Stream};
 use lru::LruCache;
 use pin_project_lite::pin_project;
@@ -33,7 +34,6 @@ pin_project! {
         // it might cause client resending frames if the limit is reached.
         limit_parted: usize,
         parts: HashMap<SocketAddr, LruCache<u16, PriorityQueue<Frame, Reverse<u32>>>>,
-        recv_buf: VecDeque<(Packet, SocketAddr)>,
     }
 }
 
@@ -47,14 +47,11 @@ where
         + Sink<(Packet, SocketAddr), Error = CodecError>,
 {
     fn defragmented(self, limit_size: u32, limit_parted: usize) -> DeFragment<Self> {
-        const DEFAULT_RECV_BUF_CAP: usize = 256;
-
         DeFragment {
             frame: self,
             limit_size,
             limit_parted,
             parts: HashMap::new(),
-            recv_buf: VecDeque::with_capacity(DEFAULT_RECV_BUF_CAP),
         }
     }
 }
@@ -71,87 +68,90 @@ where
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
 
-        loop {
-            // try empty buffer
-            if let Some(buf_res) = this.recv_buf.pop_front() {
-                return Poll::Ready(Some(Ok(buf_res)));
-            }
+        let (packet, addr) = match this.frame.as_mut().poll_packet(cx) {
+            Ok(v) => v,
+            Err(poll) => return poll,
+        };
 
-            let (packet, addr) = match this.frame.as_mut().poll_packet(cx) {
-                Ok(v) => v,
-                Err(poll) => return poll,
-            };
+        let Packet::Connected(connected::Packet::FrameSet(frame_set)) = packet else {
+            return Poll::Ready(Some(Ok((packet, addr))));
+        };
 
-            let Packet::Connected(connected::Packet::FrameSet(frame_set)) = packet else {
-                return Poll::Ready(Some(Ok((packet, addr))));
-            };
-
-            let mut single_frames = None;
-            let frames_len = frame_set.frames.len();
-            for frame in frame_set.frames {
-                if let Some(Fragment {
-                    parted_size,
-                    parted_id,
-                    parted_index,
-                }) = frame.fragment.clone()
-                {
-                    // promise that parted_index is always less than parted_size
-                    if parted_index >= parted_size {
-                        return Poll::Ready(Some(Err(CodecError::PartedFrame(format!(
-                            "parted_index {} >= parted_size {}",
-                            parted_index, parted_size
-                        )))));
-                    }
-                    if *this.limit_size != 0 && parted_size > *this.limit_size {
-                        return Poll::Ready(Some(Err(CodecError::PartedFrame(format!(
-                            "parted_size {} exceed limit_size {}",
-                            parted_size, *this.limit_size
-                        )))));
-                    }
-                    let parts = this.parts.entry(addr).or_insert_with(|| {
-                        LruCache::new(
-                            NonZeroUsize::new(*this.limit_parted).expect("limit_parted > 0"),
-                        )
-                    });
-                    let frames_queue = parts.get_or_insert_mut(parted_id, || {
-                        debug!("new parted_id {parted_id} from {addr}",);
-                        PriorityQueue::with_capacity(parted_size as usize)
-                    });
-                    frames_queue.push(frame, Reverse(parted_index));
-                    if frames_queue.len() < parted_size as usize {
-                        continue;
-                    }
-                    // parted_index is always less than parted_size, frames_queue length
-                    // reaches parted_size and frame is hashed by parted_index, so here we
-                    // get the complete frames vector
-                    let frames: Vec<Frame> = parts
-                        .pop(&parted_id)
-                        .unwrap_or_else(|| {
-                            unreachable!("parted_id {parted_id} should be set before")
-                        })
-                        .into_sorted_vec();
-                    this.recv_buf.push_back((
-                        Packet::Connected(connected::Packet::FrameSet(connected::FrameSet {
-                            frames,
-                            ..frame_set
-                        })),
-                        addr,
-                    ));
+        let mut frames = None;
+        let frames_len = frame_set.frames.len();
+        for frame in frame_set.frames {
+            if let Some(Fragment {
+                parted_size,
+                parted_id,
+                parted_index,
+            }) = frame.fragment.clone()
+            {
+                // promise that parted_index is always less than parted_size
+                if parted_index >= parted_size {
+                    return Poll::Ready(Some(Err(CodecError::PartedFrame(format!(
+                        "parted_index {} >= parted_size {}",
+                        parted_index, parted_size
+                    )))));
+                }
+                if *this.limit_size != 0 && parted_size > *this.limit_size {
+                    return Poll::Ready(Some(Err(CodecError::PartedFrame(format!(
+                        "parted_size {} exceed limit_size {}",
+                        parted_size, *this.limit_size
+                    )))));
+                }
+                let parts = this.parts.entry(addr).or_insert_with(|| {
+                    LruCache::new(NonZeroUsize::new(*this.limit_parted).expect("limit_parted > 0"))
+                });
+                let frames_queue = parts.get_or_insert_mut(parted_id, || {
+                    debug!("new parted_id {parted_id} from {addr}",);
+                    PriorityQueue::with_capacity(parted_size as usize)
+                });
+                frames_queue.push(frame, Reverse(parted_index));
+                if frames_queue.len() < parted_size as usize {
                     continue;
                 }
-                let frames = single_frames.get_or_insert_with(|| Vec::with_capacity(frames_len));
-                frames.push(frame);
+                // parted_index is always less than parted_size, frames_queue length
+                // reaches parted_size and frame is hashed by parted_index, so here we
+                // get the complete frames vector
+                let acc_frame: Frame = parts
+                    .pop(&parted_id)
+                    .unwrap_or_else(|| unreachable!("parted_id {parted_id} should be set before"))
+                    .into_sorted_iter()
+                    .map(|(f, _)| f)
+                    .reduce(|mut acc, next| {
+                        // merge all parted frames
+                        acc.body.put(next.body);
+                        // remove the sequence info
+                        acc.seq_frame_index = None;
+                        acc
+                    })
+                    .expect("there is at least one frame");
+                frames
+                    .get_or_insert_with(|| Vec::with_capacity(frames_len))
+                    .push(acc_frame);
+                continue;
             }
-            if let Some(frames) = single_frames {
-                this.recv_buf.push_back((
-                    Packet::Connected(connected::Packet::FrameSet(connected::FrameSet {
-                        frames,
-                        ..frame_set
-                    })),
-                    addr,
-                ));
-            }
+            frames
+                .get_or_insert_with(|| Vec::with_capacity(frames_len))
+                .push(frame);
         }
+        if let Some(frames) = frames {
+            return Poll::Ready(Some(Ok((
+                Packet::Connected(connected::Packet::FrameSet(connected::FrameSet {
+                    frames,
+                    ..frame_set
+                })),
+                addr,
+            ))));
+        }
+        // notify the ack layer to acknowledge this frameset but with empty frames
+        Poll::Ready(Some(Ok((
+            Packet::Connected(connected::Packet::FrameSet(connected::FrameSet {
+                frames: vec![],
+                ..frame_set
+            })),
+            addr,
+        ))))
     }
 }
 

@@ -3,7 +3,7 @@ pub(crate) mod unconnected;
 
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, BytesMut};
 
 use crate::errors::CodecError;
 
@@ -117,7 +117,7 @@ impl From<PackId> for u8 {
 
 /// Raknet packet
 #[derive(Debug, PartialEq)]
-pub(crate) enum Packet<T: Buf = Bytes> {
+pub(crate) enum Packet<T: Buf = BytesMut> {
     Unconnected(unconnected::Packet<T>),
     Connected(connected::Packet<T>),
 }

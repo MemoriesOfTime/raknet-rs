@@ -1,7 +1,7 @@
 use std::fmt::Display;
 use std::hash::{Hash, Hasher};
 
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, BytesMut};
 
 use crate::errors::CodecError;
 use crate::packet::PackId;
@@ -9,26 +9,24 @@ use crate::read_buf;
 
 // Packet when RakNet has established a connection
 #[derive(Debug, PartialEq)]
-pub(crate) enum Packet<T: Buf = Bytes> {
+pub(crate) enum Packet<T: Buf = BytesMut> {
     FrameSet(FrameSet<T>),
     Ack(Ack),
     Nack(Ack),
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) struct FrameSet<T: Buf = Bytes> {
+pub(crate) struct FrameSet<T: Buf = BytesMut> {
     pub(crate) seq_num: Uint24le,
     pub(crate) frames: Vec<Frame<T>>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) struct Frame<T: Buf = Bytes> {
+pub(crate) struct Frame<T: Buf = BytesMut> {
     pub(crate) flags: Flags,
     pub(crate) reliable_frame_index: Option<Uint24le>,
     pub(crate) seq_frame_index: Option<Uint24le>,
-    pub(crate) ordered_frame_index: Option<Uint24le>,
-    // ignored
-    // ordered_channel: u8,
+    pub(crate) ordered: Option<Ordered>,
     pub(crate) fragment: Option<Fragment>,
     pub(crate) body: T,
 }
@@ -45,7 +43,7 @@ impl Hash for Frame {
         self.flags.hash(state);
         self.reliable_frame_index.hash(state);
         self.seq_frame_index.hash(state);
-        self.ordered_frame_index.hash(state);
+        self.ordered.hash(state);
         self.body.chunk().hash(state);
     }
 }
@@ -64,7 +62,8 @@ impl Frame {
         let reliability = flags.reliability;
         let mut reliable_frame_index = None;
         let mut seq_frame_index = None;
-        let mut ordered_frame_index = None;
+        let mut ordered = None;
+
         let mut fragment = None;
 
         if reliability.is_reliable() {
@@ -74,12 +73,7 @@ impl Frame {
             seq_frame_index = read_buf!(buf, 3, Some(Uint24le::read(buf)));
         }
         if reliability.is_sequenced_or_ordered() {
-            ordered_frame_index = read_buf!(buf, 4, {
-                let index = Some(Uint24le::read(buf));
-                // skip the order channel (u8)
-                buf.advance(1);
-                index
-            });
+            ordered = read_buf!(buf, 4, Some(Ordered::read(buf)));
         }
         if flags.parted() {
             fragment = read_buf!(buf, 10, Some(Fragment::read(buf)));
@@ -88,9 +82,9 @@ impl Frame {
             flags,
             reliable_frame_index,
             seq_frame_index,
-            ordered_frame_index,
+            ordered,
             fragment,
-            body: read_buf!(buf, length, buf.split_to(length).freeze()),
+            body: read_buf!(buf, length, buf.split_to(length)),
         })
     }
 
@@ -109,10 +103,8 @@ impl Frame {
         if let Some(seq_frame_index) = self.seq_frame_index {
             seq_frame_index.write(buf);
         }
-        if let Some(ordered_frame_index) = self.ordered_frame_index {
-            ordered_frame_index.write(buf);
-            // skip the order channel (u8)
-            buf.put_u8(0);
+        if let Some(ordered) = self.ordered {
+            ordered.write(buf);
         }
         if let Some(fragment) = self.fragment {
             fragment.write(buf);
@@ -340,6 +332,26 @@ impl Fragment {
         buf.put_u32(self.parted_size);
         buf.put_u16(self.parted_id);
         buf.put_u32(self.parted_index);
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+pub(crate) struct Ordered {
+    pub(crate) frame_index: Uint24le,
+    pub(crate) channel: u8,
+}
+
+impl Ordered {
+    fn read(buf: &mut BytesMut) -> Self {
+        Self {
+            frame_index: Uint24le::read(buf),
+            channel: buf.get_u8(),
+        }
+    }
+
+    fn write(self, buf: &mut BytesMut) {
+        self.frame_index.write(buf);
+        buf.put_u8(self.channel);
     }
 }
 

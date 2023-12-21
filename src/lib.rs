@@ -42,6 +42,7 @@
 #![feature(ip_bits)]
 #![feature(exclusive_range_pattern)]
 #![feature(return_position_impl_trait_in_trait)]
+#![feature(let_chains)]
 
 /// Protocol codec
 mod codec;

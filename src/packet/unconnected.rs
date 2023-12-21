@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, BytesMut};
 
 use crate::errors::CodecError;
 use crate::packet::{MagicRead, MagicWrite, PackId, SocketAddrRead, SocketAddrWrite};
@@ -8,7 +8,7 @@ use crate::read_buf;
 
 /// Request sent before establishing a connection
 #[derive(Debug, PartialEq)]
-pub(crate) enum Packet<T: Buf = Bytes> {
+pub(crate) enum Packet<T: Buf = BytesMut> {
     UnconnectedPing {
         send_timestamp: i64,
         magic: bool,
@@ -87,7 +87,7 @@ impl Packet {
             send_timestamp: buf.get_i64(),  // 8
             server_guid: buf.get_u64(),     // 8
             magic: buf.get_checked_magic(), // 16
-            data: buf.split().freeze(),     // ?
+            data: buf.split(),              // ?
         }
     }
 
