@@ -196,3 +196,74 @@ where
         Poll::Ready(Ok(()))
     }
 }
+
+#[cfg(test)]
+mod test {
+    use std::collections::HashMap;
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+    use bytes::BytesMut;
+    use futures::StreamExt;
+    use futures_async_stream::stream;
+
+    use super::Order;
+    use crate::packet::connected::{self, Flags, Frame, FrameSet, Ordered, Uint24le};
+    use crate::packet::Packet;
+
+    fn frame_set(idx: impl IntoIterator<Item = (u8, u32)>) -> Packet {
+        Packet::Connected(connected::Packet::FrameSet(FrameSet {
+            seq_num: Uint24le(0),
+            frames: idx
+                .into_iter()
+                .map(|(channel, frame_index)| Frame {
+                    flags: Flags::parse(0b011_11100),
+                    reliable_frame_index: None,
+                    seq_frame_index: None,
+                    ordered: Some(Ordered {
+                        frame_index: Uint24le(frame_index),
+                        channel,
+                    }),
+                    fragment: None,
+                    body: BytesMut::new(),
+                })
+                .collect(),
+        }))
+    }
+
+    #[tokio::test]
+    async fn test_ordered_works() {
+        let addr1 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
+        let addr2 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8081);
+        let frame = {
+            #[stream]
+            async {
+                yield (frame_set([(0, 1), (0, 0), (0, 2), (0, 4), (0, 3)]), addr1);
+                yield (frame_set([(1, 1)]), addr1);
+
+                yield (frame_set([(3, 1), (0, 0), (0, 2), (0, 1), (0, 3)]), addr2);
+                yield (frame_set([(3, 0)]), addr2);
+            }
+        };
+        tokio::pin!(frame);
+
+        let mut ordered = Order {
+            frame: frame.map(Ok),
+            max_channels: 10,
+            ordering: HashMap::new(),
+        };
+
+        assert_eq!(
+            ordered.next().await.unwrap().unwrap(),
+            (frame_set([(0, 0), (0, 1), (0, 2), (0, 3), (0, 4)]), addr1)
+        );
+        assert_eq!(
+            ordered.next().await.unwrap().unwrap(),
+            (frame_set([(0, 0), (0, 1), (0, 2), (0, 3)]), addr2)
+        );
+        assert_eq!(
+            ordered.next().await.unwrap().unwrap(),
+            (frame_set([(3, 0), (3, 1)]), addr2)
+        );
+        assert!(ordered.next().await.is_none());
+    }
+}
