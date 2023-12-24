@@ -6,7 +6,7 @@ use std::task::{ready, Context, Poll};
 
 use futures::{Sink, Stream};
 use pin_project_lite::pin_project;
-use tracing::{debug, error};
+use tracing::debug;
 
 use super::PollPacket;
 use crate::errors::CodecError;
@@ -33,6 +33,10 @@ impl Default for Ordering {
 }
 
 pin_project! {
+    // Ordering layer, ordered the packets based on ordering_frame_index.
+    // This layer should be placed behind the ack layer because it may
+    // modify the packet sent from the top layer. The ack layer have to record
+    // all packets and resend them if need.
     pub(super) struct Order<F> {
         #[pin]
         frame: F,
@@ -78,93 +82,87 @@ where
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
 
-        let (packet, addr) = match this.frame.as_mut().poll_packet(cx) {
-            Ok(v) => v,
-            Err(poll) => return poll,
-        };
+        loop {
+            let (packet, addr) = match this.frame.as_mut().poll_packet(cx) {
+                Ok(v) => v,
+                Err(poll) => return poll,
+            };
 
-        let Packet::Connected(connected::Packet::FrameSet(frame_set)) = packet else {
-            return Poll::Ready(Some(Ok((packet, addr))));
-        };
+            let Packet::Connected(connected::Packet::FrameSet(frame_set)) = packet else {
+                return Poll::Ready(Some(Ok((packet, addr))));
+            };
 
-        let mut frames = None;
-        let frames_len = frame_set.frames.len();
-        for frame in frame_set.frames {
-            if let Some(connected::Ordered {
-                frame_index,
-                channel,
-            }) = frame.ordered.clone()
-            {
-                let channel = usize::from(channel);
-                if channel >= *this.max_channels {
-                    return Poll::Ready(Some(Err(CodecError::OrderedFrame(format!(
-                        "channel {} >= max_channels {}",
-                        channel, *this.max_channels
-                    )))));
-                }
-                let ordering = this
-                    .ordering
-                    .entry(addr)
-                    .or_insert_with(|| {
-                        std::iter::repeat_with(Ordering::default)
-                            .take(*this.max_channels)
-                            .collect()
-                    })
-                    .get_mut(channel)
-                    .expect("channel < max_channels");
-
-                match frame_index.0.cmp(&ordering.read) {
-                    std::cmp::Ordering::Less => {
-                        error!("find old ordered frame index {frame_index}, it should be deduplicated in dedup layer, maybe there is bit flipping in the network");
-                        continue;
+            let mut frames = None;
+            let frames_len = frame_set.frames.len();
+            for frame in frame_set.frames {
+                if let Some(connected::Ordered {
+                    frame_index,
+                    channel,
+                }) = frame.ordered.clone()
+                {
+                    let channel = usize::from(channel);
+                    if channel >= *this.max_channels {
+                        return Poll::Ready(Some(Err(CodecError::OrderedFrame(format!(
+                            "channel {} >= max_channels {}",
+                            channel, *this.max_channels
+                        )))));
                     }
-                    std::cmp::Ordering::Greater => {
-                        ordering.map.insert(frame_index.0, frame);
-                        continue;
+                    let ordering = this
+                        .ordering
+                        .entry(addr)
+                        .or_insert_with(|| {
+                            std::iter::repeat_with(Ordering::default)
+                                .take(*this.max_channels)
+                                .collect()
+                        })
+                        .get_mut(channel)
+                        .expect("channel < max_channels");
+
+                    match frame_index.0.cmp(&ordering.read) {
+                        std::cmp::Ordering::Less => {
+                            debug!("ignore old ordered frame index {frame_index}");
+                            continue;
+                        }
+                        std::cmp::Ordering::Greater => {
+                            ordering.map.insert(frame_index.0, frame);
+                            continue;
+                        }
+                        std::cmp::Ordering::Equal => {
+                            ordering.read.add_assign(1);
+                        }
                     }
-                    std::cmp::Ordering::Equal => {
+
+                    // then we got a frame index equal to read index, we could read it
+                    frames
+                        .get_or_insert_with(|| Vec::with_capacity(frames_len))
+                        .push(frame);
+
+                    // check if we could read more
+                    while let Some(next) = ordering.map.remove(&ordering.read) {
                         ordering.read.add_assign(1);
+                        frames
+                            .get_or_insert_with(|| Vec::with_capacity(frames_len))
+                            .push(next);
                     }
-                }
 
-                // then we got a frame index equal to read index, we could read it
+                    // we cannot read anymore
+                    continue;
+                }
+                // the frameset which does not require ordered
                 frames
                     .get_or_insert_with(|| Vec::with_capacity(frames_len))
                     .push(frame);
-
-                // check if we could read more
-                while let Some(next) = ordering.map.remove(&ordering.read) {
-                    ordering.read.add_assign(1);
-                    frames
-                        .get_or_insert_with(|| Vec::with_capacity(frames_len))
-                        .push(next);
-                }
-
-                // we cannot read anymore
-                continue;
             }
-            // the frameset which does not require ordered
-            frames
-                .get_or_insert_with(|| Vec::with_capacity(frames_len))
-                .push(frame);
+            if let Some(frames) = frames {
+                return Poll::Ready(Some(Ok((
+                    Packet::Connected(connected::Packet::FrameSet(connected::FrameSet {
+                        frames,
+                        ..frame_set
+                    })),
+                    addr,
+                ))));
+            }
         }
-        if let Some(frames) = frames {
-            return Poll::Ready(Some(Ok((
-                Packet::Connected(connected::Packet::FrameSet(connected::FrameSet {
-                    frames,
-                    ..frame_set
-                })),
-                addr,
-            ))));
-        }
-        // notify the ack layer to acknowledge this frameset but with empty frames
-        Poll::Ready(Some(Ok((
-            Packet::Connected(connected::Packet::FrameSet(connected::FrameSet {
-                frames: vec![],
-                ..frame_set
-            })),
-            addr,
-        ))))
     }
 }
 

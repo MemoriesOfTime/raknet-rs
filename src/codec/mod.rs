@@ -26,15 +26,19 @@ use crate::packet::Packet;
 /// Codec config
 #[derive(Clone, Debug, Builder)]
 pub(crate) struct CodecConfig {
-    /// limit the max size of a parted frames set, 0 means no limit
-    /// it will abort the split frame if the parted_size reaches limit.
+    /// Limit the max size of a parted frames set, 0 means no limit
+    /// It will abort the split frame if the parted_size reaches limit.
+    /// Enable it to avoid DOS attack.
+    /// The maximum number of inflight parted frames is limit_size * limit_parted
     limit_size: u32,
-    /// limit the max count of all parted frames sets from an address
-    /// it might cause client resending frames if the limit is reached.
+    /// Limit the max count of **all** parted frames sets from an address.
+    /// It might cause client resending frames if the limit is reached.
+    /// Enable it to avoid DOS attack.
+    /// The maximum number of inflight parted frames is limit_size * limit_parted.
     limit_parted: usize,
-    /// maximum ordered channel, the value should be less than 256
+    /// Maximum ordered channel, the value should be less than 256
     max_channels: usize,
-    /// whether to enable ordered sending when no ordered field found in frame
+    /// Whether to enable ordered sending when no ordered field found in frame
     default_ordered_send: bool,
 }
 

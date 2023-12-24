@@ -163,6 +163,8 @@ impl DuplicateWindow {
 }
 
 pin_project! {
+    // Deduplication layer, abort duplicated packets, should be placed as the first layer
+    // on UdpFramed to maximum its effect
     pub(super) struct Dedup<F> {
         #[pin]
         frame: F,
