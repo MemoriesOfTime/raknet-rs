@@ -14,7 +14,7 @@ use crate::packet::connected::Uint24le;
 use crate::packet::{connected, PackId, Packet};
 
 const USIZE_BITS: usize = std::mem::size_of::<usize>() * 8;
-const DEFAULT_BIT_VEC_CAP: usize = 256 * USIZE_BITS;
+const DEFAULT_BIT_VEC_QUEUE_CAP: usize = 256 * USIZE_BITS;
 
 /// A one-direction bit vector queue
 /// It use a ring buffer `VecDeque<usize>` to store bits
@@ -26,14 +26,22 @@ const DEFAULT_BIT_VEC_CAP: usize = 256 * USIZE_BITS;
 ///  |        |________________|____|
 ///  |________|         len    |____|
 ///     head                    tail
-#[derive(Debug, Default)]
+#[derive(Debug, Clone)]
 struct BitVecQueue {
     store: VecDeque<usize>,
     head: usize,
     tail: usize,
 }
 
+impl Default for BitVecQueue {
+    #[inline]
+    fn default() -> Self {
+        Self::with_capacity(DEFAULT_BIT_VEC_QUEUE_CAP)
+    }
+}
+
 impl BitVecQueue {
+    /// New with a capacity (in bits)
     fn with_capacity(cap_bits: usize) -> Self {
         Self {
             store: VecDeque::with_capacity(cap_bits / USIZE_BITS),
@@ -53,6 +61,9 @@ impl BitVecQueue {
         let idx = self.head + idx;
         let index = idx / USIZE_BITS;
         let slot = idx % USIZE_BITS;
+        if index == self.store.len() - 1 && slot > self.tail {
+            return None;
+        }
         let bits = self.store.get(index)?;
         Some(bits & (1 << (USIZE_BITS - 1 - slot)) != 0)
     }
@@ -61,6 +72,9 @@ impl BitVecQueue {
         let idx = self.head + idx;
         let index = idx / USIZE_BITS;
         let slot = idx % USIZE_BITS;
+        if index == self.store.len() - 1 && slot > self.tail {
+            return;
+        }
         let Some(bits) = self.store.get_mut(index) else {
             return;
         };
@@ -95,17 +109,26 @@ impl BitVecQueue {
 
     fn pop(&mut self) {
         let len = self.store.len();
-        if self.head == (USIZE_BITS - 1) || len == 0 {
-            self.head = 0;
-            self.store.pop_front();
+        if len == 0 {
             return;
         }
         if len == 1 && self.head == self.tail {
+            self.clear();
+            return;
+        }
+        if self.head == (USIZE_BITS - 1) {
             self.head = 0;
-            self.tail = 0;
-            self.store.clear();
+            let _ig = self.store.pop_front();
+            return;
         }
         self.head += 1;
+    }
+
+    /// Clear the bit queue
+    fn clear(&mut self) {
+        self.head = 0;
+        self.tail = 0;
+        self.store.clear();
     }
 }
 
@@ -119,26 +142,13 @@ struct DuplicateWindow {
 }
 
 impl DuplicateWindow {
-    fn with_capacity(cap_bits: usize) -> Self {
-        Self {
-            first_unreceived: 0,
-            received_status: BitVecQueue::with_capacity(cap_bits),
-        }
-    }
-
     /// Check whether a sequence number is duplicated
     fn duplicate(&mut self, seq_num: Uint24le) -> bool {
         if seq_num.0 < self.first_unreceived {
             return true;
         }
         let gap = (seq_num.0 - self.first_unreceived) as usize;
-        if gap == 0 {
-            // received the next sequence number of last received
-            // advance the first_unreceived and pop the front of
-            // received_status
-            self.first_unreceived += 1;
-            self.received_status.pop();
-        } else if gap < self.received_status.len() {
+        if gap < self.received_status.len() {
             // received the sequence number that is recorded in received_status
             // check its status to determine whether it is duplicated
             if self.received_status.get(gap) == Some(true) {
@@ -206,10 +216,7 @@ where
         let Packet::Connected(connected::Packet::FrameSet(mut frame_set)) = packet else {
             return Poll::Ready(Some(Ok((packet, addr))));
         };
-        let window = this
-            .windows
-            .entry(addr)
-            .or_insert_with(|| DuplicateWindow::with_capacity(DEFAULT_BIT_VEC_CAP));
+        let window = this.windows.entry(addr).or_default();
         frame_set.frames.retain(|frame| {
             let Some(reliable_frame_index) = frame.reliable_frame_index else {
                 return true;
