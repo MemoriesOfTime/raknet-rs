@@ -3,14 +3,14 @@ use std::net::SocketAddr;
 use pin_project_lite::pin_project;
 
 pub(crate) enum Conn<F> {
-    HandShaking(HandeShake<F>),
+    HandShaking(HandShake<F>),
     Connected,
     Closed,
 }
 
 pin_project! {
     /// Process a raknet handshake, poll it to open a connection to the client
-    pub(crate) struct HandeShake<F> {
+    pub(crate) struct HandShake<F> {
         #[pin]
         pub(crate) frame: F,
         pub(crate) client_protocol_ver: u8,

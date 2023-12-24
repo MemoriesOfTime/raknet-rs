@@ -191,3 +191,324 @@ where
         Poll::Ready(Ok(()))
     }
 }
+
+#[cfg(test)]
+mod test {
+    use std::collections::HashMap;
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+    use bytes::BytesMut;
+    use futures::StreamExt;
+    use futures_async_stream::stream;
+    use rand::seq::SliceRandom;
+
+    use super::DeFragment;
+    use crate::errors::CodecError;
+    use crate::packet::connected::{self, Flags, Fragment, Frame, FrameSet, Uint24le};
+    use crate::packet::Packet;
+
+    fn frame_set<'a, T: AsRef<str> + 'a>(
+        idx: impl IntoIterator<Item = &'a (u32, u16, u32, T)>,
+    ) -> Packet {
+        Packet::Connected(connected::Packet::FrameSet(FrameSet {
+            seq_num: Uint24le(0),
+            frames: idx
+                .into_iter()
+                .map(|(parted_size, parted_id, parted_index, body)| Frame {
+                    flags: Flags::parse(0b011_11100),
+                    reliable_frame_index: None,
+                    seq_frame_index: None,
+                    ordered: None,
+                    fragment: Some(Fragment {
+                        parted_size: *parted_size,
+                        parted_id: *parted_id,
+                        parted_index: *parted_index,
+                    }),
+                    body: BytesMut::from(body.as_ref()),
+                })
+                .collect(),
+        }))
+    }
+
+    fn no_frag_frame_set<'a>(bodies: impl IntoIterator<Item = &'a str>) -> Packet {
+        Packet::Connected(connected::Packet::FrameSet(FrameSet {
+            seq_num: Uint24le(0),
+            frames: bodies
+                .into_iter()
+                .map(|body| Frame {
+                    flags: Flags::parse(0b011_11100),
+                    reliable_frame_index: None,
+                    seq_frame_index: None,
+                    ordered: None,
+                    fragment: None,
+                    body: BytesMut::from(body),
+                })
+                .collect(),
+        }))
+    }
+
+    #[tokio::test]
+    async fn test_defragment_works() {
+        let addr1 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
+        let addr2 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
+
+        let frame = {
+            #[stream]
+            async {
+                yield (
+                    frame_set([
+                        &(5, 7, 0, "h"),
+                        &(5, 7, 3, "p"),
+                        &(5, 7, 4, "y"),
+                        &(5, 6, 4, "k"),
+                    ]),
+                    addr1,
+                );
+                yield (
+                    frame_set([&(5, 11, 0, "f"), &(5, 11, 3, "n"), &(5, 11, 4, "y")]),
+                    addr2,
+                );
+
+                yield (
+                    frame_set([&(5, 7, 2, "p"), &(5, 7, 1, "a"), &(5, 7, 4, "y")]),
+                    addr1,
+                );
+                yield (
+                    frame_set([&(5, 11, 2, "n"), &(5, 11, 1, "u"), &(5, 11, 0, "f")]),
+                    addr2,
+                );
+            }
+        };
+
+        tokio::pin!(frame);
+        let mut frag = DeFragment {
+            frame: frame.map(Ok),
+            limit_size: 0,
+            limit_parted: 512,
+            parts: HashMap::new(),
+        };
+
+        {
+            let (set, addr) = frag.next().await.unwrap().unwrap();
+            assert_eq!(addr, addr1);
+
+            let Packet::Connected(connected::Packet::FrameSet(set)) = set else {
+                panic!("should be a frameset")
+            };
+
+            // frames should be merged
+            assert_eq!(set.frames.len(), 1);
+            assert_eq!(
+                String::from_utf8(set.frames[0].body.to_vec()).unwrap(),
+                "happy"
+            );
+            // wiped
+            assert!(set.frames[0].fragment.is_none());
+        }
+
+        {
+            let (set, addr) = frag.next().await.unwrap().unwrap();
+            assert_eq!(addr, addr2);
+
+            let Packet::Connected(connected::Packet::FrameSet(set)) = set else {
+                panic!("should be a frameset")
+            };
+            assert_eq!(set.frames.len(), 1);
+            assert_eq!(
+                String::from_utf8(set.frames[0].body.to_vec()).unwrap(),
+                "funny"
+            );
+            // wiped
+            assert!(set.frames[0].fragment.is_none());
+        }
+
+        // could only be polled twice
+        assert!(frag.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_defragment_bad_parted_index() {
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
+
+        let frame = {
+            #[stream]
+            async {
+                yield (frame_set([&(10, 7, 10, "h")]), addr);
+                yield (frame_set([&(22, 7, 6, "h")]), addr);
+            }
+        };
+
+        tokio::pin!(frame);
+        let mut frag = DeFragment {
+            frame: frame.map(Ok),
+            limit_size: 20,
+            limit_parted: 512,
+            parts: HashMap::new(),
+        };
+
+        assert!(matches!(
+            frag.next().await.unwrap(),
+            Err(CodecError::PartedFrame(..))
+        ));
+
+        assert!(matches!(
+            frag.next().await.unwrap(),
+            Err(CodecError::PartedFrame(..))
+        ));
+
+        assert!(frag.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_defragment_lru_dropped() {
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
+
+        let frame = {
+            #[stream]
+            async {
+                yield (frame_set([&(3, 0, 0, "0")]), addr);
+                yield (frame_set([&(3, 1, 0, "0")]), addr);
+                yield (frame_set([&(3, 2, 0, "0")]), addr); // 3rd one will motivate lru to drop 1st one
+
+                yield (frame_set([&(3, 0, 1, "1")]), addr);
+                yield (frame_set([&(3, 0, 2, "2")]), addr); // cannot collect parted_id 0
+
+                yield (frame_set([&(3, 2, 2, "2")]), addr);
+            }
+        };
+
+        tokio::pin!(frame);
+        let mut frag = DeFragment {
+            frame: frame.map(Ok),
+            limit_size: 0,
+            limit_parted: 2,
+            parts: HashMap::new(),
+        };
+
+        assert!(frag.next().await.is_none());
+        let lru = frag.parts.get(&addr).unwrap();
+        assert_eq!(lru.len(), 2);
+        assert_eq!(lru.peek(&0).unwrap().len(), 2);
+        assert_eq!(lru.peek(&2).unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_defragment_mixed() {
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
+
+        let frame = {
+            #[stream]
+            async {
+                yield (
+                    frame_set([
+                        &(5, 7, 0, "h"),
+                        &(5, 7, 3, "p"),
+                        &(5, 7, 4, "y"),
+                        &(5, 6, 4, "k"),
+                    ]),
+                    addr,
+                );
+                yield (no_frag_frame_set(["funny"]), addr);
+                yield (
+                    frame_set([&(5, 7, 2, "p"), &(5, 7, 1, "a"), &(5, 7, 4, "y")]),
+                    addr,
+                );
+            }
+        };
+
+        tokio::pin!(frame);
+        let mut frag = DeFragment {
+            frame: frame.map(Ok),
+            limit_size: 0,
+            limit_parted: 2,
+            parts: HashMap::new(),
+        };
+
+        {
+            let (set, _) = frag.next().await.unwrap().unwrap();
+            let Packet::Connected(connected::Packet::FrameSet(set)) = set else {
+                panic!("should be a frameset")
+            };
+            assert_eq!(set.frames.len(), 1);
+            assert_eq!(
+                String::from_utf8(set.frames[0].body.to_vec()).unwrap(),
+                "funny"
+            );
+        }
+
+        {
+            let (set, _) = frag.next().await.unwrap().unwrap();
+            let Packet::Connected(connected::Packet::FrameSet(set)) = set else {
+                panic!("should be a frameset")
+            };
+            assert_eq!(set.frames.len(), 1);
+            assert_eq!(
+                String::from_utf8(set.frames[0].body.to_vec()).unwrap(),
+                "happy"
+            );
+        }
+    }
+
+    async fn test_defragment_fuzzing_with_scale(scale: usize) {
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
+        let mut parted_slice = (0..scale).collect::<Vec<_>>();
+        let final_body = parted_slice
+            .iter()
+            .fold(String::new(), |acc, next| format!("{acc}{next}"));
+
+        parted_slice.shuffle(&mut rand::thread_rng());
+
+        let frame = {
+            #[stream]
+            async {
+                let chunk_size = rand::random();
+                for chunk in std::iter::repeat((scale as u32, 0))
+                    .zip(parted_slice)
+                    .map(|(l, r)| (l.0, l.1, r as u32, r.to_string()))
+                    .collect::<Vec<_>>()
+                    .chunks(chunk_size)
+                {
+                    yield (frame_set(chunk), addr);
+                }
+            }
+        };
+
+        tokio::pin!(frame);
+        let mut frag = DeFragment {
+            frame: frame.map(Ok),
+            limit_size: 0,
+            limit_parted: 2,
+            parts: HashMap::new(),
+        };
+
+        let (set, _) = frag.next().await.unwrap().unwrap();
+        let Packet::Connected(connected::Packet::FrameSet(set)) = set else {
+            panic!("should be a frameset")
+        };
+        assert_eq!(set.frames.len(), 1);
+        assert_eq!(
+            String::from_utf8(set.frames[0].body.to_vec()).unwrap(),
+            final_body
+        );
+    }
+
+    #[tokio::test]
+    async fn test_defragment_fuzzing_with_scale_10() {
+        test_defragment_fuzzing_with_scale(10).await;
+    }
+
+    #[tokio::test]
+    async fn test_defragment_fuzzing_with_scale_100() {
+        test_defragment_fuzzing_with_scale(100).await;
+    }
+
+    #[tokio::test]
+    async fn test_defragment_fuzzing_with_scale_1000() {
+        test_defragment_fuzzing_with_scale(1000).await;
+    }
+
+    #[tokio::test]
+    async fn test_defragment_fuzzing_with_scale_10000() {
+        test_defragment_fuzzing_with_scale(10000).await;
+    }
+}

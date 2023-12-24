@@ -51,7 +51,7 @@ impl Hash for Frame {
 impl Frame {
     fn read(buf: &mut BytesMut) -> Result<Self, CodecError> {
         let (flags, length) = read_buf!(buf, 3, {
-            let flags = Flags::read(buf)?;
+            let flags = Flags::read(buf);
             // length in bytes
             let length = buf.get_u16() >> 3;
             if length == 0 {
@@ -253,22 +253,26 @@ impl Reliability {
 }
 
 impl Flags {
-    fn read(buf: &mut BytesMut) -> Result<Self, CodecError> {
-        const PARTED_FLAG: u8 = 0b0001_0000;
-
+    fn read(buf: &mut BytesMut) -> Self {
         let raw = buf.get_u8();
-        let r = raw >> 5;
-        // Safety:
-        // It is checked before transmute
-        Ok(Self {
-            raw,
-            reliability: unsafe { std::mem::transmute(r) },
-            parted: raw & PARTED_FLAG != 0,
-        })
+        Self::parse(raw)
     }
 
     fn write(self, buf: &mut BytesMut) {
         buf.put_u8(self.raw);
+    }
+
+    pub(crate) fn parse(raw: u8) -> Self {
+        const PARTED_FLAG: u8 = 0b0001_0000;
+
+        let r = raw >> 5;
+        // Safety:
+        // It is checked before transmute
+        Self {
+            raw,
+            reliability: unsafe { std::mem::transmute(r) },
+            parted: raw & PARTED_FLAG != 0,
+        }
     }
 
     /// Get the reliability of this flags

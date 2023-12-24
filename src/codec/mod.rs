@@ -28,31 +28,28 @@ pub(crate) struct CodecConfig {
     /// Limit the max size of a parted frames set, 0 means no limit
     /// It will abort the split frame if the parted_size reaches limit.
     /// Enable it to avoid DoS attack.
-    /// The maximum number of inflight parted frames is limit_size * limit_parted
-    limit_size: u32,
+    /// The maximum number of inflight parted frames is max_parted_size * max_parted_count
+    max_parted_size: u32,
     /// Limit the max count of **all** parted frames sets from an address.
     /// It might cause client resending frames if the limit is reached.
     /// Enable it to avoid DoS attack.
-    /// The maximum number of inflight parted frames is limit_size * limit_parted.
-    limit_parted: usize,
+    /// The maximum number of inflight parted frames is max_parted_size * max_parted_count
+    max_parted_count: usize,
     /// Maximum ordered channel, the value should be less than 256
     max_channels: usize,
-    // Limit the maximum deduplication gap for a connection.
+    // Limit the maximum deduplication gap for a connection, 0 means no limit.
     // Enable it to avoid D-DoS attack based on deduplication.
     max_dedup_gap: usize,
-    /// Whether to enable ordered sending when no ordered field found in frame
-    default_ordered_send: bool,
 }
 
 impl Default for CodecConfig {
     fn default() -> Self {
         // recommend configuration
         Self {
-            limit_size: 256,
-            limit_parted: 256,
+            max_parted_size: 256,
+            max_parted_count: 256,
             max_channels: 1,
             max_dedup_gap: 1024,
-            default_ordered_send: true,
         }
     }
 }
@@ -72,8 +69,8 @@ impl<T: Borrow<UdpSocket> + Sized> Framed for T {
     {
         let frame = UdpFramed::new(self, Codec)
             .deduplicated(config.max_dedup_gap)
-            .defragmented(config.limit_size, config.limit_parted)
-            .ordered(config.max_channels, config.default_ordered_send);
+            .defragmented(config.max_parted_size, config.max_parted_count)
+            .ordered(config.max_channels);
         LoggedCodec { frame }
     }
 }
@@ -186,13 +183,11 @@ where
 
 #[cfg(test)]
 mod test {
-    use std::net::{SocketAddr, ToSocketAddrs};
+    use std::net::SocketAddr;
     use std::sync::Arc;
 
-    use bytes::Buf;
     use futures::{SinkExt, StreamExt};
     use tokio::net::UdpSocket;
-    use tracing::debug;
     use tracing_test::traced_test;
 
     use crate::codec::{CodecConfig, Framed};
@@ -227,41 +222,5 @@ mod test {
             .unwrap();
         let (packet, _) = framed.next().await.unwrap();
         assert_eq!(packet, unconnected_ping());
-    }
-
-    #[tokio::test]
-    #[traced_test]
-    async fn test_unconnected_ping() {
-        let addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
-        let socket = Arc::new(UdpSocket::bind(addr).await.unwrap());
-        let mut framed = socket.framed(CodecConfig::default()).buffer(10);
-        // TODO replace with mocked server
-        let server_addr = "mc.advancius.net:19132"
-            .to_socket_addrs()
-            .unwrap()
-            .next()
-            .unwrap();
-        debug!("server address: {}", server_addr);
-        framed
-            .send((unconnected_ping(), server_addr))
-            .await
-            .unwrap();
-        let (pong, _) = framed.next().await.unwrap();
-        assert!(matches!(
-            pong,
-            Packet::Unconnected(unconnected::Packet::UnconnectedPong { .. })
-        ));
-        if let Packet::Unconnected(unconnected::Packet::UnconnectedPong {
-            send_timestamp,
-            server_guid: _,
-            magic,
-            data,
-        }) = pong
-        {
-            assert_eq!(send_timestamp, 0);
-            assert!(magic);
-            let motd = String::from_utf8_lossy(data.chunk());
-            assert!(motd.contains("MCPE"));
-        }
     }
 }

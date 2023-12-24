@@ -14,7 +14,7 @@ use super::conn::Conn;
 use crate::codec::{CodecConfig, Framed};
 use crate::errors::CodecError;
 use crate::packet::{unconnected, Packet};
-use crate::server::conn::HandeShake;
+use crate::server::conn::HandShake;
 
 pin_project! {
     /// A stream of incoming connections.
@@ -72,7 +72,7 @@ where
 
         assert!(!this.conns.insert(addr), "cannot open a connection twice");
         let frame = this.socket.clone().framed(CodecConfig::default());
-        let conn = Conn::HandShaking(HandeShake {
+        let conn = Conn::HandShaking(HandShake {
             frame,
             client_protocol_ver: 0,
             client_mtu: 0,

@@ -37,11 +37,9 @@
     clippy::wildcard_imports
 )]
 #![feature(impl_trait_in_assoc_type)]
-#![feature(async_fn_in_trait)]
 #![feature(ip_bits)]
 #![feature(exclusive_range_pattern)]
-#![feature(return_position_impl_trait_in_trait)]
-#![feature(let_chains)]
+#![feature(coroutines, proc_macro_hygiene, stmt_expr_attributes, gen_future)]
 
 /// Protocol codec
 mod codec;
