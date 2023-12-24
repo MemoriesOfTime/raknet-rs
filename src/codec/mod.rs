@@ -1,4 +1,3 @@
-mod ack;
 mod dedup;
 mod fragment;
 mod ordered;
