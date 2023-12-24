@@ -461,7 +461,7 @@ mod test {
         let frame = {
             #[stream]
             async {
-                let chunk_size = rand::random();
+                let chunk_size = rand::random::<usize>() % scale + 1; // non zero
                 for chunk in std::iter::repeat((scale as u32, 0))
                     .zip(parted_slice)
                     .map(|(l, r)| (l.0, l.1, r as u32, r.to_string()))
