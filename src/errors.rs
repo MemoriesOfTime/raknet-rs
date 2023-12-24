@@ -17,8 +17,6 @@ pub enum CodecError {
     InvalidIPVer(u8),
     #[error("expect IPv6 family 0x17, got {0}")]
     InvalidIPV6Family(u16),
-    #[error("invalid reliability flags {0}")]
-    InvalidReliability(u8),
     #[error("invalid packet length")]
     InvalidPacketLength,
     #[error("maximum amount of packets in acknowledgement exceeded")]

@@ -6,7 +6,7 @@ use std::task::{ready, Context, Poll};
 
 use futures::{Sink, Stream};
 use pin_project_lite::pin_project;
-use tracing::debug;
+use tracing::{debug, error};
 
 use super::PollPacket;
 use crate::errors::CodecError;
@@ -16,6 +16,22 @@ use crate::packet::{connected, PackId, Packet};
 const INITIAL_ORDERING_MAP_CAP: usize = 64;
 const DEFAULT_SEND_CHANNEL: u8 = 0;
 
+struct Ordering {
+    map: HashMap<u32, Frame>,
+    read: u32,
+    sent: u32,
+}
+
+impl Default for Ordering {
+    fn default() -> Self {
+        Self {
+            map: HashMap::with_capacity(INITIAL_ORDERING_MAP_CAP),
+            read: 0,
+            sent: 0,
+        }
+    }
+}
+
 pin_project! {
     pub(super) struct Order<F> {
         #[pin]
@@ -24,9 +40,7 @@ pin_project! {
         max_channels: usize,
         // Whether to enable ordered send when there is no order option in frame before
         default_ordered_send: bool,
-        ordering: HashMap<SocketAddr, Vec<HashMap<u32, Frame>>>,
-        read: HashMap<SocketAddr, Vec<u32>>,
-        sent: HashMap<SocketAddr, Vec<u32>>,
+        ordering: HashMap<SocketAddr, Vec<Ordering>>,
     }
 }
 
@@ -49,10 +63,8 @@ where
         Order {
             frame: self,
             max_channels,
-            ordering: HashMap::new(),
             default_ordered_send,
-            read: HashMap::new(),
-            sent: HashMap::new(),
+            ordering: HashMap::new(),
         }
     }
 }
@@ -90,34 +102,28 @@ where
                         channel, *this.max_channels
                     )))));
                 }
-                let ordering_map = this
+                let ordering = this
                     .ordering
                     .entry(addr)
                     .or_insert_with(|| {
-                        std::iter::repeat_with(|| HashMap::with_capacity(INITIAL_ORDERING_MAP_CAP))
+                        std::iter::repeat_with(Ordering::default)
                             .take(*this.max_channels)
                             .collect()
                     })
                     .get_mut(channel)
                     .expect("channel < max_channels");
-                let read_index = this
-                    .read
-                    .entry(addr)
-                    .or_insert_with(|| std::iter::repeat(0).take(*this.max_channels).collect())
-                    .get_mut(channel)
-                    .expect("channel < max_channels");
 
-                match frame_index.0.cmp(read_index) {
+                match frame_index.0.cmp(&ordering.read) {
                     std::cmp::Ordering::Less => {
-                        debug!("ignore old frame index {frame_index}");
+                        error!("find old ordered frame index {frame_index}, it should be deduplicated in dedup layer, maybe there is bit flipping in the network");
                         continue;
                     }
                     std::cmp::Ordering::Greater => {
-                        ordering_map.insert(frame_index.0, frame);
+                        ordering.map.insert(frame_index.0, frame);
                         continue;
                     }
                     std::cmp::Ordering::Equal => {
-                        read_index.add_assign(1);
+                        ordering.read.add_assign(1);
                     }
                 }
 
@@ -127,8 +133,8 @@ where
                     .push(frame);
 
                 // check if we could read more
-                while let Some(next) = ordering_map.remove(read_index) {
-                    read_index.add_assign(1);
+                while let Some(next) = ordering.map.remove(&ordering.read) {
+                    ordering.read.add_assign(1);
                     frames
                         .get_or_insert_with(|| Vec::with_capacity(frames_len))
                         .push(next);
@@ -187,23 +193,25 @@ where
                 ) else {
                     continue;
                 };
-                let sent = this
-                    .sent
+                let ordering = this
+                    .ordering
                     .entry(addr)
-                    .or_insert_with(|| std::iter::repeat(0).take(*this.max_channels).collect())
+                    .or_insert_with(|| {
+                        std::iter::repeat_with(Ordering::default)
+                            .take(*this.max_channels)
+                            .collect()
+                    })
                     .get_mut(usize::from(channel))
                     .expect("channel < max_channels");
                 frame.ordered = Some(connected::Ordered {
-                    frame_index: Uint24le(*sent),
+                    frame_index: Uint24le(ordering.sent),
                     channel,
                 });
-                sent.add_assign(1);
+                ordering.sent.add_assign(1);
             }
             if matches!(frame_set.inner_pack_id()?, PackId::DisconnectNotification) {
-                debug!("disconnect from {}, clean it's frame parts buffer", addr);
+                debug!("disconnect from {}, clean it's ordering buffer", addr);
                 this.ordering.remove(&addr);
-                this.read.remove(&addr);
-                this.sent.remove(&addr);
             }
         };
         this.frame.start_send((packet, addr))

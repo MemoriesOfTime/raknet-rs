@@ -188,54 +188,33 @@ impl Hash for Flags {
 #[derive(Debug, Clone, Eq, PartialEq, Copy)]
 #[repr(u8)]
 pub(crate) enum Reliability {
-    /// Unreliable packets are sent by straight UDP. They may arrive out of order, or not at all.
-    /// This is best for data that is unimportant, or data that you send very frequently so even if
-    /// some packets are missed newer packets will compensate. Advantages - These packets don't
-    /// need to be acknowledged by the network, saving the size of a UDP header in acknowledgment
-    /// (about 50 bytes or so). The savings can really add up. Disadvantages - No packet
-    /// ordering, packets may never arrive, these packets are the first to get dropped if the send
-    /// buffer is full.
-    Unreliable = 0x00,
-    /// Unreliable sequenced packets are the same as unreliable packets, except that only the
-    /// newest packet is ever accepted. Older packets are ignored. Advantages - Same low overhead
-    /// as unreliable packets, and you don't have to worry about older packets changing your data
-    /// to old values. Disadvantages - A LOT of packets will be dropped since they may never
-    /// arrive because of UDP and may be dropped even when they do arrive. These packets are the
-    /// first to get dropped if the send buffer is full. The last packet sent may never arrive,
-    /// which can be a problem if you stop sending packets at some particular point.
-    UnreliableSequenced = 0x01,
-    /// Reliable packets are UDP packets monitored by a reliability layer to ensure they arrive at
-    /// the destination. Advantages - You know the packet will get there. Eventually...
-    /// Disadvantages - Retransmissions and acknowledgments can add significant bandwidth
-    /// requirements. Packets may arrive very late if the network is busy. No packet ordering.
-    Reliable = 0x02,
-    /// Reliable ordered packets are UDP packets monitored by a reliability layer to ensure they
-    /// arrive at the destination and are ordered at the destination. Advantages - The packet will
-    /// get there and in the order it was sent. These are by far the easiest to program for because
-    /// you don't have to worry about strange behavior due to out of order or lost packets.
-    /// Disadvantages - Retransmissions and acknowledgments can add significant bandwidth
-    /// requirements. Packets may arrive very late if the network is busy. One late packet can
-    /// delay many packets that arrived sooner, resulting in significant lag spikes. However, this
-    /// disadvantage can be mitigated by the clever use of ordering streams .
-    ReliableOrdered = 0x03,
-    /// Reliable sequenced packets are UDP packets monitored by a reliability layer to ensure they
-    /// arrive at the destination and are sequenced at the destination. Advantages - You get
-    /// the reliability of UDP packets, the ordering of ordered packets, yet don't have to wait for
-    /// old packets. More packets will arrive with this method than with the unreliable sequenced
-    /// method, and they will be distributed more evenly. The most important advantage however is
-    /// that the latest packet sent will arrive, where with unreliable sequenced the latest packet
-    /// sent may not arrive. Disadvantages - Wasteful of bandwidth because it uses the overhead
-    /// of reliable UDP packets to ensure late packets arrive that just get ignored anyway.
-    ReliableSequenced = 0x04,
-    /// These are the same as above's, except that they are acknowledged.
-    UnreliableWithAckReceipt = 0x05,
-    UnreliableSequencedWithAckReceipt = 0x06,
-    ReliableWithAckReceipt = 0x07,
-    ReliableOrderedWithAckReceipt = 0x08,
-    ReliableSequencedWithAckReceipt = 0x09,
+    /// Direct UDP
+    Unreliable = 0b000,
+
+    /// Ordered
+    UnreliableSequenced = 0b001,
+
+    /// Deduplicated
+    Reliable = 0b010,
+
+    /// Ordered + Deduplicated + Resend  (Most used)
+    ReliableOrdered = 0b011,
+
+    /// Ordered + Deduplicated
+    ReliableSequenced = 0b100,
+
+    /// Not used
+    UnreliableWithAckReceipt = 0b101,
+    UnreliableSequencedWithAckReceipt = 0b110,
+    ReliableWithAckReceipt = 0b111,
+
+    /// Defined but never be used (cannot be used).
+    ReliableOrderedWithAckReceipt = 0b1_000,
+    ReliableSequencedWithAckReceipt = 0b1_001,
 }
 
 impl Reliability {
+    /// Reliable ensures that the packet is not duplicated.
     pub(crate) fn is_reliable(&self) -> bool {
         matches!(
             self,
@@ -248,13 +227,7 @@ impl Reliability {
         )
     }
 
-    pub(crate) fn is_ordered(&self) -> bool {
-        matches!(
-            self,
-            Reliability::ReliableOrdered | Reliability::ReliableOrderedWithAckReceipt
-        )
-    }
-
+    /// Sequenced or Ordered ensures that packets should be received in order as they are sent.
     pub(crate) fn is_sequenced_or_ordered(&self) -> bool {
         matches!(
             self,
@@ -267,6 +240,7 @@ impl Reliability {
         )
     }
 
+    /// No effect?
     pub(crate) fn is_sequenced(&self) -> bool {
         matches!(
             self,
@@ -280,14 +254,10 @@ impl Reliability {
 
 impl Flags {
     fn read(buf: &mut BytesMut) -> Result<Self, CodecError> {
-        // 0b0001_0000
-        const PARTED_FLAG: u8 = 0x10;
+        const PARTED_FLAG: u8 = 0b0001_0000;
 
         let raw = buf.get_u8();
         let r = raw >> 5;
-        if r > Reliability::ReliableSequencedWithAckReceipt as u8 {
-            return Err(CodecError::InvalidReliability(r));
-        }
         // Safety:
         // It is checked before transmute
         Ok(Self {

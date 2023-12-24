@@ -121,8 +121,8 @@ where
                     .reduce(|mut acc, next| {
                         // merge all parted frames
                         acc.body.put(next.body);
-                        // remove the sequence info to keep hash of this frame normal
-                        acc.seq_frame_index = None;
+                        // remove the fragment info to keep hash of this frame normal
+                        acc.fragment = None;
                         acc
                     })
                     .expect("there is at least one frame");
