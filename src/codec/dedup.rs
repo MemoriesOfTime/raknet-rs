@@ -6,7 +6,7 @@ use std::task::{ready, Context, Poll};
 
 use futures::{Sink, Stream};
 use pin_project_lite::pin_project;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::codec::PollPacket;
 use crate::errors::CodecError;
@@ -132,6 +132,8 @@ impl BitVecQueue {
     }
 }
 
+/// The deduplication window. For each connect, the maximum size is
+/// 2 ^ (8 * 3) / 8 / 1024 / 1024 = 2MB.
 #[derive(Debug, Default)]
 struct DuplicateWindow {
     /// First unreceived sequence number, start at 0
@@ -173,17 +175,19 @@ impl DuplicateWindow {
 }
 
 pin_project! {
-    // Deduplication layer, abort duplicated packets, should be placed as the first layer
-    // on UdpFramed to maximum its effect
+    /// Deduplication layer, abort duplicated packets, should be placed as the first layer
+    /// on UdpFramed to maximum its effect
     pub(super) struct Dedup<F> {
         #[pin]
         frame: F,
+        // Limit the maximum reliable_frame_index gap for a connection.
+        max_gap: usize,
         windows: HashMap<SocketAddr, DuplicateWindow>
     }
 }
 
 pub(super) trait Deduplicated: Sized {
-    fn deduplicated(self) -> Dedup<Self>;
+    fn deduplicated(self, max_gap: usize) -> Dedup<Self>;
 }
 
 impl<T> Deduplicated for T
@@ -191,9 +195,10 @@ where
     T: Stream<Item = Result<(Packet, SocketAddr), CodecError>>
         + Sink<(Packet, SocketAddr), Error = CodecError>,
 {
-    fn deduplicated(self) -> Dedup<Self> {
+    fn deduplicated(self, max_gap: usize) -> Dedup<Self> {
         Dedup {
             frame: self,
+            max_gap,
             windows: HashMap::new(),
         }
     }
@@ -217,6 +222,16 @@ where
             return Poll::Ready(Some(Ok((packet, addr))));
         };
         let window = this.windows.entry(addr).or_default();
+        if window.received_status.len() > *this.max_gap {
+            warn!(
+                "connection from {addr} reaches its maximum gap {}",
+                *this.max_gap
+            );
+            return Poll::Ready(Some(Err(CodecError::DedupExceed(
+                *this.max_gap,
+                window.received_status.len(),
+            ))));
+        }
         frame_set.frames.retain(|frame| {
             let Some(reliable_frame_index) = frame.reliable_frame_index else {
                 return true;

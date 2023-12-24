@@ -55,5 +55,3 @@ mod rt;
 mod server;
 /// Service
 pub mod service;
-
-pub use errors::Result;

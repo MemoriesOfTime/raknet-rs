@@ -1,14 +1,3 @@
-/// Result type in raknet
-pub type Result<T> = std::result::Result<T, Error>;
-
-#[derive(thiserror::Error, Debug)]
-pub enum Error {
-    #[error("codec error {0}")]
-    Codec(#[from] CodecError),
-    #[error("io error {0}")]
-    IO(#[from] std::io::Error),
-}
-
 #[derive(thiserror::Error, Debug)]
 pub enum CodecError {
     #[error("io error {0}")]
@@ -19,8 +8,6 @@ pub enum CodecError {
     InvalidIPV6Family(u16),
     #[error("invalid packet length")]
     InvalidPacketLength,
-    #[error("maximum amount of packets in acknowledgement exceeded")]
-    AckCountExceed,
     #[error("invalid record type {0}")]
     InvalidRecordType(u8),
     #[error("invalid packet id {0}")]
@@ -29,4 +16,8 @@ pub enum CodecError {
     PartedFrame(String),
     #[error("ordered frame error, reason: {0}")]
     OrderedFrame(String),
+    #[error("maximum amount of packets in acknowledgement exceeded")]
+    AckCountExceed,
+    #[error("exceed deduplication maximum gap {0}, current gap {1}")]
+    DedupExceed(usize, usize),
 }

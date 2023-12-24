@@ -15,7 +15,7 @@ use pin_project_lite::pin_project;
 use tokio::net::UdpSocket;
 use tokio_util::codec::{Decoder, Encoder};
 use tokio_util::udp::UdpFramed;
-use tracing::{trace, warn};
+use tracing::{debug, trace};
 
 use self::ordered::Ordered;
 use crate::codec::dedup::Deduplicated;
@@ -28,16 +28,19 @@ use crate::packet::Packet;
 pub(crate) struct CodecConfig {
     /// Limit the max size of a parted frames set, 0 means no limit
     /// It will abort the split frame if the parted_size reaches limit.
-    /// Enable it to avoid DOS attack.
+    /// Enable it to avoid DoS attack.
     /// The maximum number of inflight parted frames is limit_size * limit_parted
     limit_size: u32,
     /// Limit the max count of **all** parted frames sets from an address.
     /// It might cause client resending frames if the limit is reached.
-    /// Enable it to avoid DOS attack.
+    /// Enable it to avoid DoS attack.
     /// The maximum number of inflight parted frames is limit_size * limit_parted.
     limit_parted: usize,
     /// Maximum ordered channel, the value should be less than 256
     max_channels: usize,
+    // Limit the maximum deduplication gap for a connection.
+    // Enable it to avoid D-DoS attack based on deduplication.
+    max_dedup_gap: usize,
     /// Whether to enable ordered sending when no ordered field found in frame
     default_ordered_send: bool,
 }
@@ -49,6 +52,7 @@ impl Default for CodecConfig {
             limit_size: 256,
             limit_parted: 256,
             max_channels: 1,
+            max_dedup_gap: 1024,
             default_ordered_send: true,
         }
     }
@@ -68,7 +72,7 @@ impl<T: Borrow<UdpSocket> + Sized> Framed for T {
     ) -> impl Stream<Item = (Packet, SocketAddr)> + Sink<(Packet, SocketAddr), Error = CodecError>
     {
         let frame = UdpFramed::new(self, Codec)
-            .deduplicated()
+            .deduplicated(config.max_dedup_gap)
             .defragmented(config.limit_size, config.limit_parted)
             .ordered(config.max_channels, config.default_ordered_send);
         LoggedCodec { frame }
@@ -107,7 +111,7 @@ pin_project! {
 
 impl<F> Stream for LoggedCodec<F>
 where
-    F: Stream<Item = Result<(Packet, SocketAddr), CodecError>>,
+    F: Stream<Item = Result<(Packet, SocketAddr), CodecError>> + Sink<(Packet, SocketAddr)>,
 {
     type Item = (Packet, SocketAddr);
 
@@ -120,7 +124,7 @@ where
             let (packet, addr) = match res {
                 Ok((packet, addr)) => (packet, addr),
                 Err(err) => {
-                    warn!("raknet codec error: {err}, ignore this packet");
+                    debug!("raknet codec error: {err}, ignore this packet");
                     continue;
                 }
             };
