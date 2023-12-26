@@ -42,7 +42,7 @@
 #![feature(coroutines, proc_macro_hygiene, stmt_expr_attributes, gen_future)]
 
 /// Protocol codec
-mod codec;
+pub mod codec;
 /// Errors
 mod errors;
 /// Protocol packet

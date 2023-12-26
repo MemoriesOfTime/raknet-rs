@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::ops::AddAssign;
 use std::pin::Pin;
-use std::task::{ready, Context, Poll};
+use std::task::{Context, Poll};
 
 use futures::{Sink, Stream};
 use pin_project_lite::pin_project;
@@ -167,8 +167,7 @@ where
     type Error = CodecError;
 
     fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        let this = self.project();
-        this.frame.poll_ready(cx)
+        self.project().frame.poll_ready(cx)
     }
 
     fn start_send(
@@ -187,13 +186,11 @@ where
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        let this = self.project();
-        this.frame.poll_flush(cx)
+        self.project().frame.poll_flush(cx)
     }
 
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        ready!(self.poll_flush(cx))?;
-        Poll::Ready(Ok(()))
+        self.project().frame.poll_close(cx)
     }
 }
 
@@ -207,6 +204,7 @@ mod test {
     use futures_async_stream::stream;
 
     use super::Order;
+    use crate::errors::CodecError;
     use crate::packet::connected::{self, Flags, Frame, FrameSet, Ordered, Uint24le};
     use crate::packet::Packet;
 
@@ -265,5 +263,28 @@ mod test {
             (frame_set([(3, 0), (3, 1)]), addr2)
         );
         assert!(ordered.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_ordered_channel_exceed() {
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
+        let frame = {
+            #[stream]
+            async {
+                yield (frame_set([(10, 1)]), addr);
+            }
+        };
+        tokio::pin!(frame);
+
+        let mut ordered = Order {
+            frame: frame.map(Ok),
+            max_channels: 10,
+            ordering: HashMap::new(),
+        };
+
+        assert!(matches!(
+            ordered.next().await.unwrap().unwrap_err(),
+            CodecError::OrderedFrame(_)
+        ));
     }
 }

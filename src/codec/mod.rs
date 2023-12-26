@@ -24,7 +24,7 @@ use crate::packet::Packet;
 
 /// Codec config
 #[derive(Clone, Debug, Builder)]
-pub(crate) struct CodecConfig {
+pub struct CodecConfig {
     /// Limit the max size of a parted frames set, 0 means no limit
     /// It will abort the split frame if the parted_size reaches limit.
     /// Enable it to avoid DoS attack.
@@ -107,7 +107,7 @@ pin_project! {
 
 impl<F> Stream for LoggedCodec<F>
 where
-    F: Stream<Item = Result<(Packet, SocketAddr), CodecError>> + Sink<(Packet, SocketAddr)>,
+    F: Stream<Item = Result<(Packet, SocketAddr), CodecError>>,
 {
     type Item = (Packet, SocketAddr);
 
