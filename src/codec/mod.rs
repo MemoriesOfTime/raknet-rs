@@ -182,6 +182,90 @@ where
 }
 
 #[cfg(test)]
+#[allow(clippy::semicolon_if_nothing_returned)] // false positive
+async fn micro_bench_codec(src: Vec<BytesMut>, config: CodecConfig) {
+    struct BenchFrame {
+        src: Vec<BytesMut>,
+        dst: BytesMut,
+    }
+
+    impl Stream for BenchFrame {
+        type Item = Result<(Packet, SocketAddr), CodecError>;
+
+        fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+            while let Some(mut pack) = self.src.pop() {
+                let res = Codec.decode(&mut pack);
+                match res {
+                    Ok(Some(packet)) => {
+                        return Poll::Ready(Some(Ok((
+                            packet,
+                            SocketAddr::new(
+                                std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1)),
+                                8080,
+                            ),
+                        ))))
+                    }
+                    Ok(None) => continue,
+                    Err(err) => return Poll::Ready(Some(Err(err))),
+                }
+            }
+            Poll::Ready(None)
+        }
+    }
+
+    impl Sink<(Packet, SocketAddr)> for BenchFrame {
+        type Error = CodecError;
+
+        fn poll_ready(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn start_send(
+            mut self: Pin<&mut Self>,
+            item: (Packet, SocketAddr),
+        ) -> Result<(), Self::Error> {
+            self.dst.clear();
+            Codec
+                .encode(item.0, &mut self.dst)
+                .expect("encode should never failed");
+            Ok(())
+        }
+
+        fn poll_flush(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_close(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    let codec = LoggedCodec {
+        frame: BenchFrame {
+            src,
+            dst: BytesMut::new(),
+        }
+        .deduplicated(config.max_dedup_gap)
+        .defragmented(config.max_parted_size, config.max_parted_count)
+        .ordered(config.max_channels),
+    };
+
+    #[futures_async_stream::for_await]
+    for (pack, _) in codec {
+        tracing::debug!("pack: {pack:?}");
+    }
+}
+
+#[cfg(test)]
 mod test {
     use std::net::SocketAddr;
     use std::sync::Arc;
