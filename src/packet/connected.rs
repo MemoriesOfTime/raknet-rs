@@ -1,37 +1,57 @@
 use std::fmt::Display;
 use std::hash::{Hash, Hasher};
 
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 use crate::errors::CodecError;
 use crate::packet::PackId;
 use crate::read_buf;
 
 // Packet when RakNet has established a connection
-#[derive(Debug, PartialEq)]
-pub(crate) enum Packet<T: Buf = BytesMut> {
-    FrameSet(FrameSet<T>),
-    Ack(Ack),
-    Nack(Ack),
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) enum Packet<B: Buf> {
+    FrameSet(FrameSet<B>),
+    Ack(AckOrNack),
+    Nack(AckOrNack),
 }
 
-#[derive(Debug, PartialEq)]
-pub(crate) struct FrameSet<T: Buf = BytesMut> {
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) struct FrameSet<B: Buf> {
     pub(crate) seq_num: Uint24le,
-    pub(crate) frames: Vec<Frame<T>>,
+    pub(crate) frames: Vec<Frame<B>>,
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct Frame<T: Buf = BytesMut> {
+#[derive(Eq, PartialEq, Clone)]
+pub(crate) struct Frame<B: Buf> {
     pub(crate) flags: Flags,
     pub(crate) reliable_frame_index: Option<Uint24le>,
     pub(crate) seq_frame_index: Option<Uint24le>,
     pub(crate) ordered: Option<Ordered>,
     pub(crate) fragment: Option<Fragment>,
-    pub(crate) body: T,
+    pub(crate) body: B,
 }
 
-impl Hash for Frame {
+impl<B: Buf> std::fmt::Debug for Frame<B> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Frame")
+            .field("flags", &self.flags)
+            .field("reliable_frame_index", &self.reliable_frame_index)
+            .field("seq_frame_index", &self.seq_frame_index)
+            .field("ordered", &self.ordered)
+            .field("fragment", &self.fragment)
+            .field(
+                "body",
+                &format!(
+                    "top10: {:?}..., size: {}",
+                    &&self.body.chunk()[..10],
+                    self.body.remaining()
+                ),
+            )
+            .finish()
+    }
+}
+
+impl<B: Buf> Hash for Frame<B> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         // if it is a parted frame, then hash the fragment parted_index
         // to promise that the same parted_index will be hashed to the same frame
@@ -48,14 +68,21 @@ impl Hash for Frame {
     }
 }
 
-impl Frame {
+impl Frame<BytesMut> {
+    pub(crate) fn freeze(self) -> Frame<Bytes> {
+        Frame {
+            body: self.body.freeze(),
+            ..self
+        }
+    }
+
     fn read(buf: &mut BytesMut) -> Result<Self, CodecError> {
         let (flags, length) = read_buf!(buf, 3, {
             let flags = Flags::read(buf);
             // length in bytes
             let length = buf.get_u16() >> 3;
             if length == 0 {
-                return Err(CodecError::InvalidPacketLength);
+                return Err(CodecError::InvalidPacketLength("frame length"));
             }
             (flags, length as usize)
         });
@@ -87,16 +114,18 @@ impl Frame {
             body: read_buf!(buf, length, buf.split_to(length)),
         })
     }
+}
 
+impl<B: Buf> Frame<B> {
     fn write(self, buf: &mut BytesMut) {
         self.flags.write(buf);
         // length in bits
         // self.body will be split up so cast to u16 should not overflow here
         debug_assert!(
-            self.body.len() < (u16::MAX >> 3) as usize,
+            self.body.remaining() < (u16::MAX >> 3) as usize,
             "self.body should be constructed based on mtu"
         );
-        buf.put_u16((self.body.len() << 3) as u16);
+        buf.put_u16((self.body.remaining() << 3) as u16);
         if let Some(reliable_frame_index) = self.reliable_frame_index {
             reliable_frame_index.write(buf);
         }
@@ -113,18 +142,7 @@ impl Frame {
     }
 }
 
-impl FrameSet {
-    /// Get the inner packet id
-    pub(crate) fn inner_pack_id(&self) -> Result<PackId, CodecError> {
-        PackId::from_u8(
-            *self.frames[0]
-                .body
-                .chunk()
-                .first()
-                .ok_or(CodecError::InvalidPacketLength)?,
-        )
-    }
-
+impl FrameSet<BytesMut> {
     fn read(buf: &mut BytesMut) -> Result<Self, CodecError> {
         // TODO: get a proper const for every scenario
         const AVG_FRAME_SIZE: usize = 30;
@@ -136,9 +154,22 @@ impl FrameSet {
             frames.push(Frame::read(buf)?);
         }
         if frames.is_empty() {
-            return Err(CodecError::InvalidPacketLength);
+            return Err(CodecError::InvalidPacketLength("frame set"));
         }
         Ok(FrameSet { seq_num, frames })
+    }
+}
+
+impl<B: Buf> FrameSet<B> {
+    /// Get the inner packet id
+    pub(crate) fn inner_pack_id(&self) -> Result<PackId, CodecError> {
+        PackId::from_u8(
+            *self.frames[0]
+                .body
+                .chunk()
+                .first()
+                .ok_or(CodecError::InvalidPacketLength("frame set inner pack id"))?,
+        )
     }
 
     fn write(self, buf: &mut BytesMut) {
@@ -172,7 +203,7 @@ impl Display for Uint24le {
 
 /// Top 3 bits are reliability type, fourth bit is 1 when the frame is fragmented and part of a
 /// compound.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq, Clone)]
 pub(crate) struct Flags {
     raw: u8,
     reliability: Reliability,
@@ -329,13 +360,13 @@ impl Ordered {
     }
 }
 
-#[derive(Debug, PartialEq)]
-pub(crate) struct Ack {
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) struct AckOrNack {
     records: Vec<Record>,
 }
 
-impl Ack {
-    /// Extend an ack packet from a sorted sequence numbers iterator based on mtu.
+impl AckOrNack {
+    /// Extend a packet from a sorted sequence numbers iterator based on mtu.
     /// Notice that a uint24le must be unique in the whole iterator
     pub(crate) fn extend_from<I: Iterator<Item = Uint24le>>(
         mut sorted_seq_nums: I,
@@ -431,7 +462,7 @@ impl Ack {
 const RECORD_RANGE: u8 = 0;
 const RECORD_SINGLE: u8 = 1;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) enum Record {
     Range(Uint24le, Uint24le),
     Single(Uint24le),
@@ -473,7 +504,7 @@ impl Record {
     }
 }
 
-impl Packet {
+impl<B: Buf> Packet<B> {
     pub(super) fn pack_id(&self) -> PackId {
         match self {
             Packet::FrameSet(_) => PackId::FrameSet,
@@ -482,16 +513,12 @@ impl Packet {
         }
     }
 
-    pub(super) fn read_frame_set(buf: &mut BytesMut) -> Result<Self, CodecError> {
-        Ok(Packet::FrameSet(FrameSet::read(buf)?))
-    }
-
     pub(super) fn read_ack(buf: &mut BytesMut) -> Result<Self, CodecError> {
-        Ok(Packet::Ack(Ack::read(buf)?))
+        Ok(Packet::Ack(AckOrNack::read(buf)?))
     }
 
     pub(super) fn read_nack(buf: &mut BytesMut) -> Result<Self, CodecError> {
-        Ok(Packet::Nack(Ack::read(buf)?))
+        Ok(Packet::Nack(AckOrNack::read(buf)?))
     }
 
     pub(super) fn write(self, buf: &mut BytesMut) {
@@ -499,6 +526,12 @@ impl Packet {
             Packet::FrameSet(frame) => frame.write(buf),
             Packet::Ack(ack) | Packet::Nack(ack) => ack.write(buf),
         }
+    }
+}
+
+impl Packet<BytesMut> {
+    pub(super) fn read_frame_set(buf: &mut BytesMut) -> Result<Self, CodecError> {
+        Ok(Packet::FrameSet(FrameSet::read(buf)?))
     }
 }
 
@@ -562,7 +595,7 @@ mod test {
             // pack id
             buf.put_u8(0);
             let mut seq_nums = seq_nums.into_iter().map(Uint24le);
-            let ack = Ack::extend_from(&mut seq_nums, mtu).unwrap();
+            let ack = AckOrNack::extend_from(&mut seq_nums, mtu).unwrap();
             ack.write(&mut buf);
             assert_eq!(buf.len(), len);
             assert_eq!(seq_nums.len(), remain);

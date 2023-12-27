@@ -18,8 +18,17 @@ thiserror = "1.0.49"
 tokio = { version = "1.29.1", features = ["io-util", "macros"] }
 tokio-util = { version = "0.7.9", features = ["codec", "net", "io-util"] }
 tracing = "0.1.37"
+rand = { version = "0.8", optional = true }
 
 [dev-dependencies]
 tracing-test = { version = "0.2.4", features = ["no-env-filter"] }
 rand = "0.8"
 indexmap = "2.1.0"
+criterion = { version = "0.5", features = ["async_futures"] }
+
+[features]
+micro-bench = ["dep:rand"]
+
+[[bench]]
+name = "codec"
+harness = false

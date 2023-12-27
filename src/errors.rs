@@ -6,8 +6,8 @@ pub enum CodecError {
     InvalidIPVer(u8),
     #[error("expect IPv6 family 0x17, got {0}")]
     InvalidIPV6Family(u16),
-    #[error("invalid packet length")]
-    InvalidPacketLength,
+    #[error("invalid packet length when decode {0}")]
+    InvalidPacketLength(&'static str),
     #[error("invalid record type {0}")]
     InvalidRecordType(u8),
     #[error("invalid packet id {0}")]

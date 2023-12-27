@@ -1,14 +1,14 @@
 use std::net::SocketAddr;
 
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 use crate::errors::CodecError;
 use crate::packet::{MagicRead, MagicWrite, PackId, SocketAddrRead, SocketAddrWrite};
 use crate::read_buf;
 
 /// Request sent before establishing a connection
-#[derive(Debug, PartialEq)]
-pub(crate) enum Packet<T: Buf = BytesMut> {
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) enum Packet<B: Buf> {
     UnconnectedPing {
         send_timestamp: i64,
         magic: bool,
@@ -18,7 +18,7 @@ pub(crate) enum Packet<T: Buf = BytesMut> {
         send_timestamp: i64,
         server_guid: u64,
         magic: bool,
-        data: T,
+        data: B,
     },
     OpenConnectionRequest1 {
         magic: bool,
@@ -55,7 +55,7 @@ pub(crate) enum Packet<T: Buf = BytesMut> {
     },
 }
 
-impl Packet {
+impl<B: Buf> Packet<B> {
     pub(super) fn pack_id(&self) -> PackId {
         match self {
             Packet::UnconnectedPing { .. } => {
@@ -79,15 +79,6 @@ impl Packet {
             send_timestamp: buf.get_i64(),  // 8
             magic: buf.get_checked_magic(), // 16
             client_guid: buf.get_u64(),     // 8
-        }
-    }
-
-    pub(super) fn read_unconnected_pong(buf: &mut BytesMut) -> Self {
-        Packet::UnconnectedPong {
-            send_timestamp: buf.get_i64(),  // 8
-            server_guid: buf.get_u64(),     // 8
-            magic: buf.get_checked_magic(), // 16
-            data: buf.split(),              // ?
         }
     }
 
@@ -223,6 +214,98 @@ impl Packet {
             } => {
                 buf.put_magic();
                 buf.put_u64(server_guid);
+            }
+        }
+    }
+}
+
+impl Packet<BytesMut> {
+    pub(super) fn read_unconnected_pong(buf: &mut BytesMut) -> Self {
+        Packet::UnconnectedPong {
+            send_timestamp: buf.get_i64(),  // 8
+            server_guid: buf.get_u64(),     // 8
+            magic: buf.get_checked_magic(), // 16
+            data: buf.split(),              // ?
+        }
+    }
+
+    pub(crate) fn freeze(self) -> Packet<Bytes> {
+        match self {
+            Packet::UnconnectedPing {
+                send_timestamp,
+                magic,
+                client_guid,
+            } => Packet::UnconnectedPing {
+                send_timestamp,
+                magic,
+                client_guid,
+            },
+            Packet::UnconnectedPong {
+                send_timestamp,
+                server_guid,
+                magic,
+                data,
+            } => Packet::UnconnectedPong {
+                send_timestamp,
+                server_guid,
+                magic,
+                data: data.freeze(),
+            },
+            Packet::OpenConnectionRequest1 {
+                magic,
+                protocol_version,
+                mtu,
+            } => Packet::OpenConnectionRequest1 {
+                magic,
+                protocol_version,
+                mtu,
+            },
+            Packet::OpenConnectionReply1 {
+                magic,
+                server_guid,
+                use_encryption,
+                mtu,
+            } => Packet::OpenConnectionReply1 {
+                magic,
+                server_guid,
+                use_encryption,
+                mtu,
+            },
+            Packet::OpenConnectionRequest2 {
+                magic,
+                server_address,
+                mtu,
+                client_guid,
+            } => Packet::OpenConnectionRequest2 {
+                magic,
+                server_address,
+                mtu,
+                client_guid,
+            },
+            Packet::OpenConnectionReply2 {
+                magic,
+                server_guid,
+                client_address,
+                mtu,
+                encryption_enabled,
+            } => Packet::OpenConnectionReply2 {
+                magic,
+                server_guid,
+                client_address,
+                mtu,
+                encryption_enabled,
+            },
+            Packet::IncompatibleProtocol {
+                server_protocol,
+                magic,
+                server_guid,
+            } => Packet::IncompatibleProtocol {
+                server_protocol,
+                magic,
+                server_guid,
+            },
+            Packet::AlreadyConnected { magic, server_guid } => {
+                Packet::AlreadyConnected { magic, server_guid }
             }
         }
     }

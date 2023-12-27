@@ -5,7 +5,7 @@ use std::num::NonZeroUsize;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use bytes::BufMut;
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures::{Sink, Stream};
 use lru::LruCache;
 use pin_project_lite::pin_project;
@@ -17,8 +17,13 @@ use crate::errors::CodecError;
 use crate::packet::connected::{Fragment, Frame};
 use crate::packet::{connected, PackId, Packet};
 
+/// parts helper. [`LruCache`] used to protect from causing OOM due to malicious
+/// users sending a large number of parted IDs.
+type DeFragmentMap =
+    HashMap<SocketAddr, LruCache<u16, PriorityQueue<Frame<BytesMut>, Reverse<u32>>>>;
+
 pin_project! {
-    /// Defragment the frame set packet from stream (UdpFramed). Enable external consumption of
+    /// Defragment the frame set packet from stream [`UdpFramed`]. Enable external consumption of
     /// continuous frame set packets.
     /// Notice that packets stream must pass this layer first, then go to the ack layer and timeout layer.
     /// Because this layer could abort the frames in frame set packet, and the ack layer will promise
@@ -33,9 +38,7 @@ pin_project! {
         // limit the max count of all parted frames sets from an address
         // it might cause client resending frames if the limit is reached.
         limit_parted: usize,
-        // parts helper. LruCache used to protect from causing OOM due to malicious
-        // users sending a large number of parted IDs.
-        parts: HashMap<SocketAddr, LruCache<u16, PriorityQueue<Frame, Reverse<u32>>>>,
+        parts: DeFragmentMap,
     }
 }
 
@@ -43,11 +46,7 @@ pub(super) trait DeFragmented: Sized {
     fn defragmented(self, limit_size: u32, limit_parted: usize) -> DeFragment<Self>;
 }
 
-impl<T> DeFragmented for T
-where
-    T: Stream<Item = Result<(Packet, SocketAddr), CodecError>>
-        + Sink<(Packet, SocketAddr), Error = CodecError>,
-{
+impl<F> DeFragmented for F {
     fn defragmented(self, limit_size: u32, limit_parted: usize) -> DeFragment<Self> {
         DeFragment {
             frame: self,
@@ -60,9 +59,9 @@ where
 
 impl<F> Stream for DeFragment<F>
 where
-    F: Stream<Item = Result<(Packet, SocketAddr), CodecError>>,
+    F: Stream<Item = Result<(Packet<BytesMut>, SocketAddr), CodecError>>,
 {
-    type Item = Result<(Packet, SocketAddr), CodecError>;
+    type Item = Result<(Packet<Bytes>, SocketAddr), CodecError>;
 
     // TODO
     // Splitted frames in a FrameSet are usually ordered, so use Vec instead of PriorityQueue
@@ -77,7 +76,7 @@ where
             };
 
             let Packet::Connected(connected::Packet::FrameSet(frame_set)) = packet else {
-                return Poll::Ready(Some(Ok((packet, addr))));
+                return Poll::Ready(Some(Ok((packet.freeze(), addr))));
             };
 
             let mut frames = None;
@@ -119,7 +118,7 @@ where
                     // parted_index is always less than parted_size, frames_queue length
                     // reaches parted_size and frame is hashed by parted_index, so here we
                     // get the complete frames vector
-                    let acc_frame: Frame = parts
+                    let acc_frame: Frame<BytesMut> = parts
                         .pop(&parted_id)
                         .unwrap_or_else(|| {
                             unreachable!("parted_id {parted_id} should be set before")
@@ -136,12 +135,12 @@ where
                         .expect("there is at least one frame");
                     frames
                         .get_or_insert_with(|| Vec::with_capacity(frames_len))
-                        .push(acc_frame);
+                        .push(acc_frame.freeze());
                     continue;
                 }
                 frames
                     .get_or_insert_with(|| Vec::with_capacity(frames_len))
-                    .push(frame);
+                    .push(frame.freeze());
             }
             if let Some(frames) = frames {
                 return Poll::Ready(Some(Ok((
@@ -156,9 +155,9 @@ where
     }
 }
 
-impl<F> Sink<(Packet, SocketAddr)> for DeFragment<F>
+impl<F, B: Buf> Sink<(Packet<B>, SocketAddr)> for DeFragment<F>
 where
-    F: Sink<(Packet, SocketAddr), Error = CodecError>,
+    F: Sink<(Packet<B>, SocketAddr), Error = CodecError>,
 {
     type Error = CodecError;
 
@@ -168,7 +167,7 @@ where
 
     fn start_send(
         self: Pin<&mut Self>,
-        (packet, addr): (Packet, SocketAddr),
+        (packet, addr): (Packet<B>, SocketAddr),
     ) -> Result<(), Self::Error> {
         let this = self.project();
         if let Packet::Connected(connected::Packet::FrameSet(frame_set)) = &packet {
@@ -206,7 +205,7 @@ mod test {
 
     fn frame_set<'a, T: AsRef<str> + 'a>(
         idx: impl IntoIterator<Item = &'a (u32, u16, u32, T)>,
-    ) -> Packet {
+    ) -> Packet<BytesMut> {
         Packet::Connected(connected::Packet::FrameSet(FrameSet {
             seq_num: Uint24le(0),
             frames: idx
@@ -227,7 +226,7 @@ mod test {
         }))
     }
 
-    fn no_frag_frame_set<'a>(bodies: impl IntoIterator<Item = &'a str>) -> Packet {
+    fn no_frag_frame_set<'a>(bodies: impl IntoIterator<Item = &'a str>) -> Packet<BytesMut> {
         Packet::Connected(connected::Packet::FrameSet(FrameSet {
             seq_num: Uint24le(0),
             frames: bodies

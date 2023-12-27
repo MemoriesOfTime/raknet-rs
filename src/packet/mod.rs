@@ -3,25 +3,33 @@ pub(crate) mod unconnected;
 
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 
+use self::connected::{Frame, FrameSet};
 use crate::errors::CodecError;
 
 #[macro_export]
 macro_rules! read_buf {
     ($buf:expr, $len:expr, $exp:expr) => {{
         if $buf.remaining() < $len {
-            return Err(CodecError::InvalidPacketLength);
+            return Err(CodecError::InvalidPacketLength("particular sized pack"));
         }
         $exp
     }};
 }
 
+// 0b100_000...
+const VALID_FLAG: u8 = 0x80;
+// 0b110_000...
+const ACK_FLAG: u8 = VALID_FLAG | 0x40;
+// 0b101_000...
+const NACK_FLAG: u8 = VALID_FLAG | 0x20;
+
 /// Packet IDs. These packets play important role in raknet protocol.
 /// Some of them appear at the first byte of a UDP data packet (like `UnconnectedPing1`), while
 /// others are encapsulated in a `FrameSet` data packet and appear as the first byte of the body
 /// (like `Game`).
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 #[repr(u8)]
 pub(crate) enum PackId {
     ConnectedPing = 0x00,
@@ -44,17 +52,13 @@ pub(crate) enum PackId {
 
     /// The IDs of these three packets form a range, and only the one with the flag will be used
     /// here.
-    Ack = 0xc0,
-    Nack = 0xa0,
-    FrameSet = 0x80,
+    Ack = ACK_FLAG,
+    Nack = NACK_FLAG,
+    FrameSet = VALID_FLAG,
 }
 
 impl PackId {
     pub(crate) fn from_u8(id: u8) -> Result<PackId, CodecError> {
-        const ACK_FLAG: u8 = 0x40;
-        const NACK_FLAG: u8 = 0x20;
-        const FRAMESET_FLAG: u8 = 0x80;
-
         match id {
             0x00 => Ok(PackId::ConnectedPing),
             0x01 => Ok(PackId::UnconnectedPing1),
@@ -73,9 +77,9 @@ impl PackId {
             0x19 => Ok(PackId::IncompatibleProtocolVersion),
             0x1c => Ok(PackId::UnconnectedPong),
             0xfe => Ok(PackId::Game),
-            0xc0.. if id & ACK_FLAG != 0 => Ok(PackId::Ack),
-            0xa0.. if id & NACK_FLAG != 0 => Ok(PackId::Nack),
-            0x80.. if id & FRAMESET_FLAG != 0 => Ok(PackId::FrameSet),
+            ACK_FLAG.. => Ok(PackId::Ack),
+            NACK_FLAG.. => Ok(PackId::Nack),
+            VALID_FLAG.. => Ok(PackId::FrameSet),
             _ => Err(CodecError::InvalidPacketId(id)),
         }
     }
@@ -116,18 +120,50 @@ impl From<PackId> for u8 {
 }
 
 /// Raknet packet
-#[derive(Debug, PartialEq)]
-pub(crate) enum Packet<T: Buf = BytesMut> {
-    Unconnected(unconnected::Packet<T>),
-    Connected(connected::Packet<T>),
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) enum Packet<B: Buf> {
+    Unconnected(unconnected::Packet<B>),
+    Connected(connected::Packet<B>),
 }
 
-impl Packet {
+impl<B: Buf> Packet<B> {
     /// Get the packet id
     pub(crate) fn pack_id(&self) -> PackId {
         match self {
             Packet::Unconnected(pack) => pack.pack_id(),
             Packet::Connected(pack) => pack.pack_id(),
+        }
+    }
+
+    pub(crate) fn write(self, buf: &mut BytesMut) {
+        buf.put_u8(self.pack_id().into());
+        match self {
+            Packet::Unconnected(packet) => {
+                packet.write(buf);
+            }
+            Packet::Connected(packet) => {
+                packet.write(buf);
+            }
+        }
+    }
+}
+
+impl Packet<BytesMut> {
+    pub(crate) fn freeze(self) -> Packet<Bytes> {
+        match self {
+            Packet::Connected(connected::Packet::FrameSet(FrameSet { seq_num, frames })) => {
+                Packet::Connected(connected::Packet::FrameSet(FrameSet {
+                    seq_num,
+                    frames: frames.into_iter().map(Frame::freeze).collect::<Vec<_>>(),
+                }))
+            }
+            Packet::Connected(connected::Packet::Ack(ack)) => {
+                Packet::Connected(connected::Packet::Ack(ack))
+            }
+            Packet::Connected(connected::Packet::Nack(nack)) => {
+                Packet::Connected(connected::Packet::Nack(nack))
+            }
+            Packet::Unconnected(pack) => Packet::Unconnected(pack.freeze()),
         }
     }
 
@@ -190,18 +226,6 @@ impl Packet {
         }
         .map(|packet| Some(Self::Unconnected(packet)))
     }
-
-    pub(crate) fn write(self, buf: &mut BytesMut) {
-        buf.put_u8(self.pack_id().into());
-        match self {
-            Packet::Unconnected(packet) => {
-                packet.write(buf);
-            }
-            Packet::Connected(packet) => {
-                packet.write(buf);
-            }
-        }
-    }
 }
 
 /// Magic sequence is a sequence of bytes which is found in every unconnected message sent in Raknet
@@ -209,7 +233,7 @@ pub(crate) const MAGIC: [u8; 16] = [
     0x00, 0xff, 0xff, 0x00, 0xfe, 0xfe, 0xfe, 0xfe, 0xfd, 0xfd, 0xfd, 0xfd, 0x12, 0x34, 0x56, 0x78,
 ];
 
-pub(crate) trait MagicRead: private::SealedBuf {
+pub(crate) trait MagicRead {
     /// Get the raknet magic and return a bool if it matches the magic
     fn get_checked_magic(&mut self) -> bool;
 
@@ -217,15 +241,12 @@ pub(crate) trait MagicRead: private::SealedBuf {
     fn get_unchecked_magic(&mut self);
 }
 
-pub(crate) trait MagicWrite: private::SealedBufMut {
+pub(crate) trait MagicWrite {
     /// Put the raknet magic
     fn put_magic(&mut self);
 }
 
-impl<T: BufMut> private::SealedBufMut for T {}
-impl<T: Buf> private::SealedBuf for T {}
-
-impl<T: Buf> MagicRead for T {
+impl<B: Buf> MagicRead for B {
     #[allow(clippy::needless_range_loop)]
     fn get_checked_magic(&mut self) -> bool {
         let mut matches = true;
@@ -244,21 +265,21 @@ impl<T: Buf> MagicRead for T {
     }
 }
 
-impl<T: BufMut> MagicWrite for T {
+impl<B: BufMut> MagicWrite for B {
     fn put_magic(&mut self) {
         self.put_slice(&MAGIC);
     }
 }
 
-pub(crate) trait SocketAddrRead: private::SealedBuf {
+pub(crate) trait SocketAddrRead {
     fn get_socket_addr(&mut self) -> Result<SocketAddr, CodecError>;
 }
 
-pub(crate) trait SocketAddrWrite: private::SealedBufMut {
+pub(crate) trait SocketAddrWrite {
     fn put_socket_addr(&mut self, addr: SocketAddr);
 }
 
-impl<T: Buf> SocketAddrRead for T {
+impl<B: Buf> SocketAddrRead for B {
     fn get_socket_addr(&mut self) -> Result<SocketAddr, CodecError> {
         let ver = read_buf!(self, 1, self.get_u8());
         match ver {
@@ -290,7 +311,7 @@ impl<T: Buf> SocketAddrRead for T {
     }
 }
 
-impl<T: BufMut> SocketAddrWrite for T {
+impl<B: BufMut> SocketAddrWrite for B {
     fn put_socket_addr(&mut self, addr: SocketAddr) {
         match addr {
             SocketAddr::V4(v4) => {
@@ -308,9 +329,4 @@ impl<T: BufMut> SocketAddrWrite for T {
             }
         }
     }
-}
-
-mod private {
-    pub(crate) trait SealedBuf {}
-    pub(crate) trait SealedBufMut {}
 }

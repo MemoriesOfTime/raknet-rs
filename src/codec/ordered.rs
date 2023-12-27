@@ -4,6 +4,7 @@ use std::ops::AddAssign;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+use bytes::Buf;
 use futures::{Sink, Stream};
 use pin_project_lite::pin_project;
 use tracing::debug;
@@ -15,12 +16,12 @@ use crate::packet::{connected, PackId, Packet};
 
 const INITIAL_ORDERING_MAP_CAP: usize = 64;
 
-struct Ordering {
-    map: HashMap<u32, Frame>,
+struct Ordering<B: Buf> {
+    map: HashMap<u32, Frame<B>>,
     read: u32,
 }
 
-impl Default for Ordering {
+impl<B: Buf> Default for Ordering<B> {
     fn default() -> Self {
         Self {
             map: HashMap::with_capacity(INITIAL_ORDERING_MAP_CAP),
@@ -34,25 +35,21 @@ pin_project! {
     // This layer should be placed behind the ack layer because it may
     // modify the packet sent from the top layer. The ack layer have to record
     // all packets and resend them if need.
-    pub(super) struct Order<F> {
+    pub(super) struct Order<F, B: Buf> {
         #[pin]
         frame: F,
         // Max ordered channel that will be used in detailed protocol
         max_channels: usize,
-        ordering: HashMap<SocketAddr, Vec<Ordering>>,
+        ordering: HashMap<SocketAddr, Vec<Ordering<B>>>,
     }
 }
 
 pub(super) trait Ordered: Sized {
-    fn ordered(self, max_channels: usize) -> Order<Self>;
+    fn ordered<B: Buf>(self, max_channels: usize) -> Order<Self, B>;
 }
 
-impl<T> Ordered for T
-where
-    T: Stream<Item = Result<(Packet, SocketAddr), CodecError>>
-        + Sink<(Packet, SocketAddr), Error = CodecError>,
-{
-    fn ordered(self, max_channels: usize) -> Order<Self> {
+impl<T> Ordered for T {
+    fn ordered<B: Buf>(self, max_channels: usize) -> Order<Self, B> {
         assert!(
             max_channels < usize::from(u8::MAX),
             "max channels should not be larger than u8::MAX"
@@ -67,11 +64,11 @@ where
     }
 }
 
-impl<F> Stream for Order<F>
+impl<F, B: Buf> Stream for Order<F, B>
 where
-    F: Stream<Item = Result<(Packet, SocketAddr), CodecError>>,
+    F: Stream<Item = Result<(Packet<B>, SocketAddr), CodecError>>,
 {
-    type Item = Result<(Packet, SocketAddr), CodecError>;
+    type Item = Result<(Packet<B>, SocketAddr), CodecError>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
@@ -160,9 +157,9 @@ where
     }
 }
 
-impl<F> Sink<(Packet, SocketAddr)> for Order<F>
+impl<F, B: Buf> Sink<(Packet<B>, SocketAddr)> for Order<F, B>
 where
-    F: Sink<(Packet, SocketAddr), Error = CodecError>,
+    F: Sink<(Packet<B>, SocketAddr), Error = CodecError>,
 {
     type Error = CodecError;
 
@@ -172,7 +169,7 @@ where
 
     fn start_send(
         self: Pin<&mut Self>,
-        (mut packet, addr): (Packet, SocketAddr),
+        (mut packet, addr): (Packet<B>, SocketAddr),
     ) -> Result<(), Self::Error> {
         let this = self.project();
 
@@ -199,7 +196,7 @@ mod test {
     use std::collections::HashMap;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-    use bytes::BytesMut;
+    use bytes::Bytes;
     use futures::StreamExt;
     use futures_async_stream::stream;
 
@@ -208,7 +205,7 @@ mod test {
     use crate::packet::connected::{self, Flags, Frame, FrameSet, Ordered, Uint24le};
     use crate::packet::Packet;
 
-    fn frame_set(idx: impl IntoIterator<Item = (u8, u32)>) -> Packet {
+    fn frame_set(idx: impl IntoIterator<Item = (u8, u32)>) -> Packet<Bytes> {
         Packet::Connected(connected::Packet::FrameSet(FrameSet {
             seq_num: Uint24le(0),
             frames: idx
@@ -222,7 +219,7 @@ mod test {
                         channel,
                     }),
                     fragment: None,
-                    body: BytesMut::new(),
+                    body: Bytes::new(),
                 })
                 .collect(),
         }))

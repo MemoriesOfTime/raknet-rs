@@ -4,6 +4,7 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+use bytes::Buf;
 use futures::{Sink, Stream};
 use pin_project_lite::pin_project;
 use tracing::{debug, warn};
@@ -190,11 +191,7 @@ pub(super) trait Deduplicated: Sized {
     fn deduplicated(self, max_gap: usize) -> Dedup<Self>;
 }
 
-impl<T> Deduplicated for T
-where
-    T: Stream<Item = Result<(Packet, SocketAddr), CodecError>>
-        + Sink<(Packet, SocketAddr), Error = CodecError>,
-{
+impl<T> Deduplicated for T {
     fn deduplicated(self, max_gap: usize) -> Dedup<Self> {
         Dedup {
             frame: self,
@@ -204,11 +201,11 @@ where
     }
 }
 
-impl<F> Stream for Dedup<F>
+impl<F, B: Buf> Stream for Dedup<F>
 where
-    F: Stream<Item = Result<(Packet, SocketAddr), CodecError>>,
+    F: Stream<Item = Result<(Packet<B>, SocketAddr), CodecError>>,
 {
-    type Item = Result<(Packet, SocketAddr), CodecError>;
+    type Item = Result<(Packet<B>, SocketAddr), CodecError>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
@@ -249,9 +246,9 @@ where
     }
 }
 
-impl<F> Sink<(Packet, SocketAddr)> for Dedup<F>
+impl<F, B: Buf> Sink<(Packet<B>, SocketAddr)> for Dedup<F>
 where
-    F: Sink<(Packet, SocketAddr), Error = CodecError>,
+    F: Sink<(Packet<B>, SocketAddr), Error = CodecError>,
 {
     type Error = CodecError;
 
@@ -261,7 +258,7 @@ where
 
     fn start_send(
         self: Pin<&mut Self>,
-        (packet, addr): (Packet, SocketAddr),
+        (packet, addr): (Packet<B>, SocketAddr),
     ) -> Result<(), Self::Error> {
         let this = self.project();
         if let Packet::Connected(connected::Packet::FrameSet(frame_set)) = &packet {
@@ -289,7 +286,7 @@ mod test {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::ops::Sub;
 
-    use bytes::BytesMut;
+    use bytes::Bytes;
     use futures::StreamExt;
     use futures_async_stream::stream;
     use indexmap::IndexSet;
@@ -349,7 +346,7 @@ mod test {
         assert_eq!(window.received_status.len(), 0);
     }
 
-    fn frame_set(idx: impl IntoIterator<Item = u32>) -> Packet {
+    fn frame_set(idx: impl IntoIterator<Item = u32>) -> Packet<Bytes> {
         Packet::Connected(connected::Packet::FrameSet(FrameSet {
             seq_num: Uint24le(0),
             frames: idx
@@ -360,7 +357,7 @@ mod test {
                     seq_frame_index: None,
                     ordered: None,
                     fragment: None,
-                    body: BytesMut::new(),
+                    body: Bytes::new(),
                 })
                 .collect(),
         }))

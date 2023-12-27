@@ -39,10 +39,11 @@
 #![feature(impl_trait_in_assoc_type)]
 #![feature(ip_bits)]
 #![feature(exclusive_range_pattern)]
+#![feature(type_changing_struct_update)]
 #![feature(coroutines, proc_macro_hygiene, stmt_expr_attributes, gen_future)]
 
 /// Protocol codec
-pub mod codec;
+mod codec;
 /// Errors
 mod errors;
 /// Protocol packet
@@ -53,3 +54,7 @@ mod rt;
 mod server;
 /// Service
 pub mod service;
+
+#[cfg(feature = "micro-bench")]
+pub use codec::micro_bench::*;
+pub use codec::CodecConfig;
