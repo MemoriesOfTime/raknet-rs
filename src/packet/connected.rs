@@ -39,14 +39,7 @@ impl<B: Buf> std::fmt::Debug for Frame<B> {
             .field("seq_frame_index", &self.seq_frame_index)
             .field("ordered", &self.ordered)
             .field("fragment", &self.fragment)
-            .field(
-                "body",
-                &format!(
-                    "top10: {:?}..., size: {}",
-                    &&self.body.chunk()[..10],
-                    self.body.remaining()
-                ),
-            )
+            .field("body_size", &self.body.remaining())
             .finish()
     }
 }

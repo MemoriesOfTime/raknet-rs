@@ -11,34 +11,34 @@ use crate::read_buf;
 pub(crate) enum Packet<B: Buf> {
     UnconnectedPing {
         send_timestamp: i64,
-        magic: bool,
+        magic: (),
         client_guid: u64,
     },
     UnconnectedPong {
         send_timestamp: i64,
         server_guid: u64,
-        magic: bool,
+        magic: (),
         data: B,
     },
     OpenConnectionRequest1 {
-        magic: bool,
+        magic: (),
         protocol_version: u8,
         mtu: u16,
     },
     OpenConnectionReply1 {
-        magic: bool,
+        magic: (),
         server_guid: u64,
         use_encryption: bool,
         mtu: u16,
     },
     OpenConnectionRequest2 {
-        magic: bool,
+        magic: (),
         server_address: SocketAddr,
         mtu: u16,
         client_guid: u64,
     },
     OpenConnectionReply2 {
-        magic: bool,
+        magic: (),
         server_guid: u64,
         client_address: SocketAddr,
         mtu: u16,
@@ -46,17 +46,17 @@ pub(crate) enum Packet<B: Buf> {
     },
     IncompatibleProtocol {
         server_protocol: u8,
-        magic: bool,
+        magic: (),
         server_guid: u64,
     },
     AlreadyConnected {
-        magic: bool,
+        magic: (),
         server_guid: u64,
     },
 }
 
 impl<B: Buf> Packet<B> {
-    pub(super) fn pack_id(&self) -> PackId {
+    pub(crate) fn pack_id(&self) -> PackId {
         match self {
             Packet::UnconnectedPing { .. } => {
                 // > [Wiki](https://wiki.vg/Raknet_Protocol) said:
@@ -74,34 +74,34 @@ impl<B: Buf> Packet<B> {
         }
     }
 
-    pub(super) fn read_unconnected_ping(buf: &mut BytesMut) -> Self {
-        Packet::UnconnectedPing {
-            send_timestamp: buf.get_i64(),  // 8
-            magic: buf.get_checked_magic(), // 16
-            client_guid: buf.get_u64(),     // 8
-        }
+    pub(super) fn read_unconnected_ping(buf: &mut BytesMut) -> Result<Self, CodecError> {
+        Ok(Packet::UnconnectedPing {
+            send_timestamp: buf.get_i64(),   // 8
+            magic: buf.get_checked_magic()?, // 16
+            client_guid: buf.get_u64(),      // 8
+        })
     }
 
-    pub(super) fn read_open_connection_request1(buf: &mut BytesMut) -> Self {
-        Packet::OpenConnectionRequest1 {
-            magic: buf.get_checked_magic(), // 16
-            protocol_version: buf.get_u8(), // 1
-            mtu: buf.get_u16(),             // 2
-        }
+    pub(super) fn read_open_connection_request1(buf: &mut BytesMut) -> Result<Self, CodecError> {
+        Ok(Packet::OpenConnectionRequest1 {
+            magic: buf.get_checked_magic()?, // 16
+            protocol_version: buf.get_u8(),  // 1
+            mtu: buf.get_u16(),              // 2
+        })
     }
 
-    pub(super) fn read_open_connection_reply1(buf: &mut BytesMut) -> Self {
-        Packet::OpenConnectionReply1 {
-            magic: buf.get_checked_magic(),    // 16
+    pub(super) fn read_open_connection_reply1(buf: &mut BytesMut) -> Result<Self, CodecError> {
+        Ok(Packet::OpenConnectionReply1 {
+            magic: buf.get_checked_magic()?,   // 16
             server_guid: buf.get_u64(),        // 8
             use_encryption: buf.get_u8() != 0, // 1
             mtu: buf.get_u16(),                // 2
-        }
+        })
     }
 
     pub(super) fn read_open_connection_request2(buf: &mut BytesMut) -> Result<Self, CodecError> {
         Ok(Packet::OpenConnectionRequest2 {
-            magic: read_buf!(buf, 16, buf.get_checked_magic()),
+            magic: read_buf!(buf, 16, buf.get_checked_magic())?,
             server_address: buf.get_socket_addr()?,
             mtu: read_buf!(buf, 2, buf.get_u16()),
             client_guid: read_buf!(buf, 8, buf.get_u64()),
@@ -110,7 +110,7 @@ impl<B: Buf> Packet<B> {
 
     pub(super) fn read_open_connection_reply2(buf: &mut BytesMut) -> Result<Self, CodecError> {
         Ok(Packet::OpenConnectionReply2 {
-            magic: read_buf!(buf, 16, buf.get_checked_magic()),
+            magic: read_buf!(buf, 16, buf.get_checked_magic())?,
             server_guid: read_buf!(buf, 8, buf.get_u64()),
             client_address: buf.get_socket_addr()?,
             mtu: read_buf!(buf, 2, buf.get_u16()),
@@ -118,19 +118,19 @@ impl<B: Buf> Packet<B> {
         })
     }
 
-    pub(super) fn read_incompatible_protocol(buf: &mut BytesMut) -> Self {
-        Packet::IncompatibleProtocol {
-            server_protocol: buf.get_u8(),  // 1
-            magic: buf.get_checked_magic(), // 16
-            server_guid: buf.get_u64(),     // 8
-        }
+    pub(super) fn read_incompatible_protocol(buf: &mut BytesMut) -> Result<Self, CodecError> {
+        Ok(Packet::IncompatibleProtocol {
+            server_protocol: buf.get_u8(),   // 1
+            magic: buf.get_checked_magic()?, // 16
+            server_guid: buf.get_u64(),      // 8
+        })
     }
 
-    pub(super) fn read_already_connected(buf: &mut BytesMut) -> Self {
-        Packet::AlreadyConnected {
-            magic: buf.get_checked_magic(), // 16
-            server_guid: buf.get_u64(),     // 8
-        }
+    pub(super) fn read_already_connected(buf: &mut BytesMut) -> Result<Self, CodecError> {
+        Ok(Packet::AlreadyConnected {
+            magic: buf.get_checked_magic()?, // 16
+            server_guid: buf.get_u64(),      // 8
+        })
     }
 
     pub(super) fn write(self, buf: &mut BytesMut) {
@@ -220,13 +220,13 @@ impl<B: Buf> Packet<B> {
 }
 
 impl Packet<BytesMut> {
-    pub(super) fn read_unconnected_pong(buf: &mut BytesMut) -> Self {
-        Packet::UnconnectedPong {
-            send_timestamp: buf.get_i64(),  // 8
-            server_guid: buf.get_u64(),     // 8
-            magic: buf.get_checked_magic(), // 16
-            data: buf.split(),              // ?
-        }
+    pub(super) fn read_unconnected_pong(buf: &mut BytesMut) -> Result<Self, CodecError> {
+        Ok(Packet::UnconnectedPong {
+            send_timestamp: buf.get_i64(),   // 8
+            server_guid: buf.get_u64(),      // 8
+            magic: buf.get_checked_magic()?, // 16
+            data: buf.split(),               // ?
+        })
     }
 
     pub(crate) fn freeze(self) -> Packet<Bytes> {

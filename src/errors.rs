@@ -20,4 +20,6 @@ pub enum CodecError {
     AckCountExceed,
     #[error("exceed deduplication maximum gap {0}, current gap {1}")]
     DedupExceed(usize, usize),
+    #[error("magic number not matched, pos {0}, byte {1}")]
+    MagicNotMatched(usize, u8),
 }

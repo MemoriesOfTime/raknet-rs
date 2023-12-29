@@ -17,7 +17,8 @@ pub trait Service<Request> {
     /// Response made by this service
     type Response;
 
-    /// Process the request asynchronously
+    /// Process the request asynchronously.
+    /// Set `where Self: Sized` to allow creating `dyn Service`
     #[allow(async_fn_in_trait)] // No need to consider the auto trait for now.
     async fn call(&self, req: Request) -> Result<Self::Response, Self::Error>
     where

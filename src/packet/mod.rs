@@ -185,38 +185,34 @@ impl Packet<BytesMut> {
         }
         match pack_id {
             PackId::UnconnectedPing1 | PackId::UnconnectedPing2 => {
-                read_buf!(buf, 32, Ok(unconnected::Packet::read_unconnected_ping(buf)))
+                read_buf!(buf, 32, unconnected::Packet::read_unconnected_ping(buf))
             }
             PackId::UnconnectedPong => {
-                read_buf!(buf, 32, Ok(unconnected::Packet::read_unconnected_pong(buf)))
+                read_buf!(buf, 32, unconnected::Packet::read_unconnected_pong(buf))
             }
             PackId::OpenConnectionRequest1 => {
                 read_buf!(
                     buf,
                     19,
-                    Ok(unconnected::Packet::read_open_connection_request1(buf))
+                    unconnected::Packet::read_open_connection_request1(buf)
                 )
             }
             PackId::OpenConnectionReply1 => {
                 read_buf!(
                     buf,
                     27,
-                    Ok(unconnected::Packet::read_open_connection_reply1(buf))
+                    unconnected::Packet::read_open_connection_reply1(buf)
                 )
             }
             PackId::IncompatibleProtocolVersion => {
                 read_buf!(
                     buf,
                     25,
-                    Ok(unconnected::Packet::read_incompatible_protocol(buf))
+                    unconnected::Packet::read_incompatible_protocol(buf)
                 )
             }
             PackId::AlreadyConnected => {
-                read_buf!(
-                    buf,
-                    24,
-                    Ok(unconnected::Packet::read_already_connected(buf))
-                )
+                read_buf!(buf, 24, unconnected::Packet::read_already_connected(buf))
             }
             PackId::OpenConnectionRequest2 => {
                 unconnected::Packet::read_open_connection_request2(buf)
@@ -235,10 +231,7 @@ pub(crate) const MAGIC: [u8; 16] = [
 
 pub(crate) trait MagicRead {
     /// Get the raknet magic and return a bool if it matches the magic
-    fn get_checked_magic(&mut self) -> bool;
-
-    /// Sometimes we do not care about how the magic matches
-    fn get_unchecked_magic(&mut self);
+    fn get_checked_magic(&mut self) -> Result<(), CodecError>;
 }
 
 pub(crate) trait MagicWrite {
@@ -247,21 +240,16 @@ pub(crate) trait MagicWrite {
 }
 
 impl<B: Buf> MagicRead for B {
-    #[allow(clippy::needless_range_loop)]
-    fn get_checked_magic(&mut self) -> bool {
-        let mut matches = true;
+    #![allow(clippy::needless_range_loop)]
+    fn get_checked_magic(&mut self) -> Result<(), CodecError> {
         for i in 0..MAGIC.len() {
             let byte = self.chunk()[i];
             if byte != MAGIC[i] {
-                matches = false;
+                return Err(CodecError::MagicNotMatched(i, byte));
             }
         }
         self.advance(MAGIC.len());
-        matches
-    }
-
-    fn get_unchecked_magic(&mut self) {
-        self.advance(MAGIC.len());
+        Ok(())
     }
 }
 

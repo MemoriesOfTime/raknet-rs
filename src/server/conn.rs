@@ -12,9 +12,10 @@ pin_project! {
     /// Process a raknet handshake, poll it to open a connection to the client
     pub(crate) struct HandShake<F> {
         #[pin]
-        pub(crate) frame: F,
-        pub(crate) client_protocol_ver: u8,
-        pub(crate) client_mtu: u16,
-        pub(crate) peer_addr: SocketAddr,
+        frame: F,
+        client_protocol_ver: u8,
+        client_mtu: u16,
+        peer_addr: SocketAddr,
     }
 }
+

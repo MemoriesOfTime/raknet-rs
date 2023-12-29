@@ -62,7 +62,10 @@ pub(crate) trait Framed: Sized {
            + Sink<(Packet<Bytes>, SocketAddr), Error = CodecError>;
 }
 
-impl<T: Borrow<UdpSocket> + Sized> Framed for T {
+impl<T> Framed for T
+where
+    T: Borrow<UdpSocket> + Sized,
+{
     fn framed(
         self,
         config: CodecConfig,
@@ -199,7 +202,7 @@ mod test {
     fn unconnected_ping() -> Packet<Bytes> {
         Packet::Unconnected(unconnected::Packet::UnconnectedPing {
             send_timestamp: 0,
-            magic: true,
+            magic: (),
             client_guid: 114514,
         })
     }
