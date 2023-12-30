@@ -28,6 +28,7 @@ criterion = { version = "0.5", features = ["async_futures"] }
 
 [features]
 micro-bench = ["dep:rand"]
+rt-tokio = ["tokio/rt-multi-thread"]
 
 [[bench]]
 name = "codec"

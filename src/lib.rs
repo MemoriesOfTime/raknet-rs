@@ -49,7 +49,7 @@ mod errors;
 /// Protocol packet
 mod packet;
 /// Runtime
-mod rt;
+pub mod rt;
 /// Raknet server
 mod server;
 /// Service
