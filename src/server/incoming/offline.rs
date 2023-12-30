@@ -4,9 +4,9 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use bytes::Bytes;
-use futures::{ready, Sink, Stream};
+use futures::{ready, FutureExt, Sink, SinkExt, Stream};
 use pin_project_lite::pin_project;
-use tracing::{debug, warn};
+use tracing::{debug, error, warn};
 
 use crate::errors::CodecError;
 use crate::packet::{connected, unconnected, PackId, Packet};
@@ -16,22 +16,45 @@ struct Config {
     advertisement: Bytes,
     min_mtu: u16,
     max_mtu: u16,
+    // Supported raknet versions, sorted
     support_version: Vec<u8>,
 }
 
 pin_project! {
-    struct Unconnected<F> {
+    /// OfflineHandler takes a Packet frames stream and convert to connected::Packet stream
+    struct OfflineHandler<F> {
         #[pin]
         frame: F,
         config: Config,
         pending: lru::LruCache<SocketAddr, u8>,
-        connected: HashSet<SocketAddr>,
+        connected: HashSet<SocketAddr>, // TODO: Support a client opening multiple RakNet connections, that is, using the client GUID.
     }
 }
 
-impl<F> Stream for Unconnected<F>
+impl<F> OfflineHandler<F>
 where
-    F: Stream<Item = (Packet<Bytes>, SocketAddr)>,
+    F: Sink<(Packet<Bytes>, SocketAddr), Error = CodecError>,
+{
+    fn make_incompatible_version(config: &Config) -> Packet<Bytes> {
+        Packet::Unconnected(unconnected::Packet::IncompatibleProtocol {
+            server_protocol: *config.support_version.last().unwrap(),
+            magic: (),
+            server_guid: config.sever_guid,
+        })
+    }
+
+    fn make_already_connected(config: &Config) -> Packet<Bytes> {
+        Packet::Unconnected(unconnected::Packet::AlreadyConnected {
+            magic: (),
+            server_guid: config.sever_guid,
+        })
+    }
+}
+
+impl<F> Stream for OfflineHandler<F>
+where
+    F: Stream<Item = (Packet<Bytes>, SocketAddr)>
+        + Sink<(Packet<Bytes>, SocketAddr), Error = CodecError>,
 {
     type Item = (connected::Packet<Bytes>, SocketAddr);
 
@@ -65,14 +88,19 @@ where
                         .binary_search(&protocol_version)
                         .is_err()
                     {
-                        // TODO send IncompatibleVersion
+                        let mut send = this
+                            .frame
+                            .send((Self::make_incompatible_version(this.config), addr));
+                        if let Err(err) = ready!(send.poll_unpin(cx)) {
+                            error!("failed send incompatible version to {addr}, error {err}");
+                        }
                         continue;
                     }
                     if this.pending.put(addr, protocol_version).is_some() {
                         debug!("received duplicate open connection request 1 from {addr}");
                     }
-                    let mtu1 = this.config.min_mtu.max(mtu);
-                    let final_mtu = this.config.max_mtu.min(mtu1);
+                    // max_mtu >= final_mtu >= min_mtu
+                    let final_mtu = this.config.max_mtu.min(this.config.min_mtu.max(mtu));
                     unconnected::Packet::OpenConnectionReply1 {
                         magic: (),
                         server_guid: this.config.sever_guid,
@@ -83,14 +111,25 @@ where
                 unconnected::Packet::OpenConnectionRequest2 { mtu, .. } => {
                     if this.pending.pop(&addr).is_none() {
                         debug!("received open connection request 2 from {addr} without open connection request 1");
-                        // TODO send IncompatibleVersion
+                        let mut send = this
+                            .frame
+                            .send((Self::make_incompatible_version(this.config), addr));
+                        if let Err(err) = ready!(send.poll_unpin(cx)) {
+                            error!("failed send incompatible version to {addr}, error {err}");
+                        }
                         continue;
                     }
+                    // client should adjust the mtu
                     if mtu < this.config.min_mtu
                         || mtu > this.config.max_mtu
                         || !this.connected.insert(addr)
                     {
-                        // TODO send AlreadyConnected
+                        let mut send = this
+                            .frame
+                            .send((Self::make_already_connected(this.config), addr));
+                        if let Err(err) = ready!(send.poll_unpin(cx)) {
+                            error!("failed send already connected to {addr}, error {err}");
+                        }
                         continue;
                     }
                     unconnected::Packet::OpenConnectionReply2 {
@@ -103,7 +142,7 @@ where
                 }
                 _ => {
                     warn!(
-                        "received a package({:?}) that should not have been received on the server.",
+                        "received a package({:?}) that should not be received on the server.",
                         pack.pack_id()
                     );
                     continue;
@@ -113,7 +152,7 @@ where
     }
 }
 
-impl<F> Sink<(Packet<Bytes>, SocketAddr)> for Unconnected<F>
+impl<F> Sink<(Packet<Bytes>, SocketAddr)> for OfflineHandler<F>
 where
     F: Sink<(Packet<Bytes>, SocketAddr), Error = CodecError>,
 {
