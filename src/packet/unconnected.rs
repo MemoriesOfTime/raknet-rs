@@ -53,6 +53,10 @@ pub(crate) enum Packet<B: Buf> {
         magic: (),
         server_guid: u64,
     },
+    ConnectionRequestFailed {
+        magic: (),
+        server_guid: u64,
+    },
 }
 
 impl<B: Buf> Packet<B> {
@@ -71,6 +75,7 @@ impl<B: Buf> Packet<B> {
             Packet::OpenConnectionReply2 { .. } => PackId::OpenConnectionReply2,
             Packet::IncompatibleProtocol { .. } => PackId::IncompatibleProtocolVersion,
             Packet::AlreadyConnected { .. } => PackId::AlreadyConnected,
+            Packet::ConnectionRequestFailed { .. } => PackId::ConnectionRequestFailed,
         }
     }
 
@@ -215,6 +220,13 @@ impl<B: Buf> Packet<B> {
                 buf.put_magic();
                 buf.put_u64(server_guid);
             }
+            Packet::ConnectionRequestFailed {
+                magic: _magic,
+                server_guid,
+            } => {
+                buf.put_magic();
+                buf.put_u64(server_guid);
+            }
         }
     }
 }
@@ -306,6 +318,9 @@ impl Packet<BytesMut> {
             },
             Packet::AlreadyConnected { magic, server_guid } => {
                 Packet::AlreadyConnected { magic, server_guid }
+            }
+            Packet::ConnectionRequestFailed { magic, server_guid } => {
+                Packet::ConnectionRequestFailed { magic, server_guid }
             }
         }
     }

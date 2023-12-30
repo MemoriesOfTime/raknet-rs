@@ -29,7 +29,7 @@ const NACK_FLAG: u8 = VALID_FLAG | 0x20;
 /// Some of them appear at the first byte of a UDP data packet (like `UnconnectedPing1`), while
 /// others are encapsulated in a `FrameSet` data packet and appear as the first byte of the body
 /// (like `Game`).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub(crate) enum PackId {
     ConnectedPing = 0x00,
@@ -43,11 +43,18 @@ pub(crate) enum PackId {
     OpenConnectionReply2 = 0x08,
     ConnectionRequest = 0x09,
     ConnectionRequestAccepted = 0x10,
+    ConnectionRequestFailed = 0x11,
     AlreadyConnected = 0x12,
     NewIncomingConnection = 0x13,
+    NoFreeIncomingConnections = 0x14,
     DisconnectNotification = 0x15,
+    ConnectionLost = 0x16,
+    ConnectionBanned = 0x17,
     IncompatibleProtocolVersion = 0x19,
+    IpRecentlyConnected = 0x1a,
+    Timestamp = 0x1b,
     UnconnectedPong = 0x1c,
+    AdvertiseSystem = 0x1d,
     Game = 0xfe,
 
     /// The IDs of these three packets form a range, and only the one with the flag will be used

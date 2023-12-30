@@ -3,6 +3,7 @@ use std::hash::{Hash, Hasher};
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
+use super::{SocketAddrRead, SocketAddrWrite};
 use crate::errors::CodecError;
 use crate::packet::PackId;
 use crate::read_buf;
@@ -23,6 +24,7 @@ pub(crate) struct FrameSet<B: Buf> {
 
 #[derive(Eq, PartialEq, Clone)]
 pub(crate) struct Frame<B: Buf> {
+    pub(crate) id: PackId,
     pub(crate) flags: Flags,
     pub(crate) reliable_frame_index: Option<Uint24le>,
     pub(crate) seq_frame_index: Option<Uint24le>,
@@ -98,18 +100,27 @@ impl Frame<BytesMut> {
         if flags.parted() {
             fragment = read_buf!(buf, 10, Some(Fragment::read(buf)));
         }
+        let mut body = read_buf!(buf, length, buf.split_to(length));
+        // length > 0
+        let id = PackId::from_u8(body.chunk()[0])?;
         Ok(Frame {
+            id,
             flags,
             reliable_frame_index,
             seq_frame_index,
             ordered,
             fragment,
-            body: read_buf!(buf, length, buf.split_to(length)),
+            body,
         })
     }
 }
 
 impl<B: Buf> Frame<B> {
+    /// Get the inner packet id
+    pub(crate) fn inner_pack_id(&self) -> PackId {
+        self.id
+    }
+
     fn write(self, buf: &mut BytesMut) {
         self.flags.write(buf);
         // length in bits
@@ -155,14 +166,8 @@ impl FrameSet<BytesMut> {
 
 impl<B: Buf> FrameSet<B> {
     /// Get the inner packet id
-    pub(crate) fn inner_pack_id(&self) -> Result<PackId, CodecError> {
-        PackId::from_u8(
-            *self.frames[0]
-                .body
-                .chunk()
-                .first()
-                .ok_or(CodecError::InvalidPacketLength("frame set inner pack id"))?,
-        )
+    pub(crate) fn first_pack_id(&self) -> PackId {
+        self.frames[0].inner_pack_id()
     }
 
     fn write(self, buf: &mut BytesMut) {
@@ -528,35 +533,185 @@ impl Packet<BytesMut> {
     }
 }
 
-// enum BodyPacket {
-//     ConnectedPing {
-//         client_timestamp: i64,
-//     },
-//     ConnectedPong {
-//         client_timestamp: i64,
-//         server_timestamp: i64,
-//     },
-//     ConnectionRequest {
-//         client_guid: u64,
-//         request_timestamp: i64,
-//         use_encryption: bool,
-//     },
-//     ConnectionRequestAccepted {
-//         client_address: std::net::SocketAddr,
-//         // system_index: u16,
-//         system_addresses: [std::net::SocketAddr; 10],
-//         request_timestamp: i64,
-//         accepted_timestamp: i64,
-//     },
-//     NewIncomingConnection {
-//         server_address: std::net::SocketAddr,
-//         system_addresses: [std::net::SocketAddr; 10],
-//         request_timestamp: i64,
-//         accepted_timestamp: i64,
-//     },
-//     Disconnect,
-//     Game,
-// }
+#[derive(Clone)]
+pub(crate) enum FrameBody {
+    ConnectedPing {
+        client_timestamp: i64,
+    },
+    ConnectedPong {
+        client_timestamp: i64,
+        server_timestamp: i64,
+    },
+    ConnectionRequest {
+        client_guid: u64,
+        request_timestamp: i64,
+        use_encryption: bool,
+    },
+    ConnectionRequestAccepted {
+        client_address: std::net::SocketAddr,
+        system_index: u16,
+        system_addresses: [std::net::SocketAddr; 10],
+        request_timestamp: i64,
+        accepted_timestamp: i64,
+    },
+    NewIncomingConnection {
+        server_address: std::net::SocketAddr,
+        system_addresses: [std::net::SocketAddr; 10],
+        request_timestamp: i64,
+        accepted_timestamp: i64,
+    },
+    Disconnect,
+    Game(Bytes),
+}
+
+impl std::fmt::Debug for FrameBody {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ConnectedPing { client_timestamp } => f
+                .debug_struct("ConnectedPing")
+                .field("client_timestamp", client_timestamp)
+                .finish(),
+            Self::ConnectedPong {
+                client_timestamp,
+                server_timestamp,
+            } => f
+                .debug_struct("ConnectedPong")
+                .field("client_timestamp", client_timestamp)
+                .field("server_timestamp", server_timestamp)
+                .finish(),
+            Self::ConnectionRequest {
+                client_guid,
+                request_timestamp,
+                use_encryption,
+            } => f
+                .debug_struct("ConnectionRequest")
+                .field("client_guid", client_guid)
+                .field("request_timestamp", request_timestamp)
+                .field("use_encryption", use_encryption)
+                .finish(),
+            Self::ConnectionRequestAccepted {
+                client_address,
+                system_index,
+                system_addresses,
+                request_timestamp,
+                accepted_timestamp,
+            } => f
+                .debug_struct("ConnectionRequestAccepted")
+                .field("client_address", client_address)
+                .field("system_index", system_index)
+                .field("system_addresses", system_addresses)
+                .field("request_timestamp", request_timestamp)
+                .field("accepted_timestamp", accepted_timestamp)
+                .finish(),
+            Self::NewIncomingConnection {
+                server_address,
+                system_addresses,
+                request_timestamp,
+                accepted_timestamp,
+            } => f
+                .debug_struct("NewIncomingConnection")
+                .field("server_address", server_address)
+                .field("system_addresses", system_addresses)
+                .field("request_timestamp", request_timestamp)
+                .field("accepted_timestamp", accepted_timestamp)
+                .finish(),
+            Self::Disconnect => write!(f, "Disconnect"),
+            Self::Game(data) => write!(f, "Game(data_size:{})", data.remaining()),
+        }
+    }
+}
+
+impl FrameBody {
+    pub(crate) fn read(mut buf: Bytes) -> Result<Self, CodecError> {
+        let id = PackId::from_u8(buf.get_u8())?;
+        match id {
+            PackId::ConnectedPing => Ok(Self::ConnectedPing {
+                client_timestamp: buf.get_i64(),
+            }),
+            PackId::ConnectedPong => Ok(Self::ConnectedPong {
+                client_timestamp: buf.get_i64(),
+                server_timestamp: buf.get_i64(),
+            }),
+            PackId::ConnectionRequest => Ok(Self::ConnectionRequest {
+                client_guid: buf.get_u64(),
+                request_timestamp: buf.get_i64(),
+                use_encryption: buf.get_u8() != 0,
+            }),
+            PackId::ConnectionRequestAccepted => Ok(Self::ConnectionRequestAccepted {
+                client_address: buf.get_socket_addr()?,
+                system_index: buf.get_u16(),
+                system_addresses: todo!(),
+                request_timestamp: buf.get_i64(),
+                accepted_timestamp: buf.get_i64(),
+            }),
+            PackId::NewIncomingConnection => Ok(Self::NewIncomingConnection {
+                server_address: buf.get_socket_addr()?,
+                system_addresses: todo!(),
+                request_timestamp: buf.get_i64(),
+                accepted_timestamp: buf.get_i64(),
+            }),
+            PackId::DisconnectNotification => Ok(Self::Disconnect),
+            PackId::Game => Ok(Self::Game(buf)),
+            _ => Err(CodecError::InvalidPacketId(id.into())),
+        }
+    }
+
+    pub(crate) fn write(self, buf: &mut BytesMut) {
+        match self {
+            FrameBody::ConnectedPing { client_timestamp } => {
+                buf.put_i64(client_timestamp);
+            }
+            FrameBody::ConnectedPong {
+                client_timestamp,
+                server_timestamp,
+            } => {
+                buf.put_i64(client_timestamp);
+                buf.put_i64(server_timestamp);
+            }
+            FrameBody::ConnectionRequest {
+                client_guid,
+                request_timestamp,
+                use_encryption,
+            } => {
+                buf.put_u64(client_guid);
+                buf.put_i64(request_timestamp);
+                buf.put_u8(u8::from(use_encryption));
+            }
+            FrameBody::ConnectionRequestAccepted {
+                client_address,
+                system_index,
+                system_addresses,
+                request_timestamp,
+                accepted_timestamp,
+            } => {
+                buf.put_socket_addr(client_address);
+                buf.put_u16(system_index);
+                for addr in system_addresses {
+                    buf.put_socket_addr(addr);
+                }
+                buf.put_i64(request_timestamp);
+                buf.put_i64(accepted_timestamp);
+            }
+            FrameBody::NewIncomingConnection {
+                server_address,
+                system_addresses,
+                request_timestamp,
+                accepted_timestamp,
+            } => {
+                buf.put_socket_addr(server_address);
+                for addr in system_addresses {
+                    buf.put_socket_addr(addr);
+                }
+                buf.put_i64(request_timestamp);
+                buf.put_i64(accepted_timestamp);
+            }
+            FrameBody::Disconnect => {}
+            FrameBody::Game(data) => {
+                buf.put(data);
+            }
+        }
+    }
+}
 
 #[cfg(test)]
 mod test {

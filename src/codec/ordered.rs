@@ -32,9 +32,6 @@ impl<B: Buf> Default for Ordering<B> {
 
 pin_project! {
     // Ordering layer, ordered the packets based on ordering_frame_index.
-    // This layer should be placed behind the ack layer because it may
-    // modify the packet sent from the top layer. The ack layer have to record
-    // all packets and resend them if need.
     pub(super) struct Order<F, B: Buf> {
         #[pin]
         frame: F,
@@ -174,7 +171,7 @@ where
         let this = self.project();
 
         if let Packet::Connected(connected::Packet::FrameSet(frame_set)) = &mut packet {
-            if matches!(frame_set.inner_pack_id()?, PackId::DisconnectNotification) {
+            if frame_set.first_pack_id() == PackId::DisconnectNotification {
                 debug!("disconnect from {}, clean it's ordering buffer", addr);
                 this.ordering.remove(&addr);
             }
@@ -203,7 +200,7 @@ mod test {
     use super::Order;
     use crate::errors::CodecError;
     use crate::packet::connected::{self, Flags, Frame, FrameSet, Ordered, Uint24le};
-    use crate::packet::Packet;
+    use crate::packet::{PackId, Packet};
 
     fn frame_set(idx: impl IntoIterator<Item = (u8, u32)>) -> Packet<Bytes> {
         Packet::Connected(connected::Packet::FrameSet(FrameSet {
@@ -211,6 +208,7 @@ mod test {
             frames: idx
                 .into_iter()
                 .map(|(channel, frame_index)| Frame {
+                    id: PackId::Game,
                     flags: Flags::parse(0b011_11100),
                     reliable_frame_index: None,
                     seq_frame_index: None,

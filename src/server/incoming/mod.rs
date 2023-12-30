@@ -1,5 +1,0 @@
-mod offline;
-
-struct Incoming {
-}
-

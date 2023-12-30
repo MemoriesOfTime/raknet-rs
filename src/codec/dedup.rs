@@ -262,7 +262,7 @@ where
     ) -> Result<(), Self::Error> {
         let this = self.project();
         if let Packet::Connected(connected::Packet::FrameSet(frame_set)) = &packet {
-            if matches!(frame_set.inner_pack_id()?, PackId::DisconnectNotification) {
+            if frame_set.first_pack_id() == PackId::DisconnectNotification {
                 debug!("disconnect from {}, clean it's dedup window", addr);
                 this.windows.remove(&addr);
             }
@@ -295,7 +295,7 @@ mod test {
     use crate::codec::dedup::DuplicateWindow;
     use crate::errors::CodecError;
     use crate::packet::connected::{self, Flags, Frame, FrameSet, Uint24le};
-    use crate::packet::Packet;
+    use crate::packet::{PackId, Packet};
 
     #[test]
     fn test_duplicate_windows_check_ordered() {
@@ -352,6 +352,7 @@ mod test {
             frames: idx
                 .into_iter()
                 .map(|i| Frame {
+                    id: PackId::Game,
                     flags: Flags::parse(0b011_11100),
                     reliable_frame_index: Some(Uint24le(i)),
                     seq_frame_index: None,

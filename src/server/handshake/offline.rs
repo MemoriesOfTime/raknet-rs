@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -11,7 +11,8 @@ use tracing::{debug, error, warn};
 use crate::errors::CodecError;
 use crate::packet::{connected, unconnected, PackId, Packet};
 
-struct Config {
+#[derive(Debug, Clone)]
+pub(super) struct Config {
     sever_guid: u64,
     advertisement: Bytes,
     min_mtu: u16,
@@ -20,18 +21,26 @@ struct Config {
     support_version: Vec<u8>,
 }
 
+#[derive(Debug, Clone)]
+pub(super) struct Peer {
+    pub(super) addr: SocketAddr,
+    pub(super) mtu: u16,
+    pub(super) proto_ver: u8,
+    pub(super) client_guid: u64,
+}
+
 pin_project! {
-    /// OfflineHandler takes a Packet frames stream and convert to connected::Packet stream
-    struct OfflineHandler<F> {
+    /// OfflineHandShake takes the codec frame and perform offline handshake.
+    struct OfflineHandShake<F> {
         #[pin]
         frame: F,
         config: Config,
         pending: lru::LruCache<SocketAddr, u8>,
-        connected: HashSet<SocketAddr>, // TODO: Support a client opening multiple RakNet connections, that is, using the client GUID.
+        connected: HashMap<SocketAddr, Peer>,
     }
 }
 
-impl<F> OfflineHandler<F>
+impl<F> OfflineHandShake<F>
 where
     F: Sink<(Packet<Bytes>, SocketAddr), Error = CodecError>,
 {
@@ -49,14 +58,21 @@ where
             server_guid: config.sever_guid,
         })
     }
+
+    fn make_connection_request_failed(config: &Config) -> Packet<Bytes> {
+        Packet::Unconnected(unconnected::Packet::ConnectionRequestFailed {
+            magic: (),
+            server_guid: config.sever_guid,
+        })
+    }
 }
 
-impl<F> Stream for OfflineHandler<F>
+impl<F> Stream for OfflineHandShake<F>
 where
     F: Stream<Item = (Packet<Bytes>, SocketAddr)>
         + Sink<(Packet<Bytes>, SocketAddr), Error = CodecError>,
 {
-    type Item = (connected::Packet<Bytes>, SocketAddr);
+    type Item = (connected::Packet<Bytes>, Peer);
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
@@ -66,7 +82,20 @@ where
             };
             let pack = match packet {
                 Packet::Unconnected(pack) => pack,
-                Packet::Connected(pack) => return Poll::Ready(Some((pack, addr))),
+                Packet::Connected(pack) => {
+                    if let Some(peer) = this.connected.get(&addr) {
+                        return Poll::Ready(Some((pack, peer.clone())));
+                    }
+                    debug!("ignore connected packet from unconnected client {addr}");
+                    // TODO: Send DETECT_LOST_CONNECTION ?
+                    let mut send = this
+                        .frame
+                        .send((Self::make_connection_request_failed(this.config), addr));
+                    if let Err(err) = ready!(send.poll_unpin(cx)) {
+                        error!("failed send connection request failed to {addr}, error {err}");
+                    }
+                    continue;
+                }
             };
             match pack {
                 unconnected::Packet::UnconnectedPing { send_timestamp, .. } => {
@@ -108,8 +137,10 @@ where
                         mtu: final_mtu,
                     }
                 }
-                unconnected::Packet::OpenConnectionRequest2 { mtu, .. } => {
-                    if this.pending.pop(&addr).is_none() {
+                unconnected::Packet::OpenConnectionRequest2 {
+                    mtu, client_guid, ..
+                } => {
+                    let Some(proto_ver) = this.pending.pop(&addr) else {
                         debug!("received open connection request 2 from {addr} without open connection request 1");
                         let mut send = this
                             .frame
@@ -118,11 +149,11 @@ where
                             error!("failed send incompatible version to {addr}, error {err}");
                         }
                         continue;
-                    }
+                    };
                     // client should adjust the mtu
                     if mtu < this.config.min_mtu
                         || mtu > this.config.max_mtu
-                        || !this.connected.insert(addr)
+                        || this.connected.contains_key(&addr)
                     {
                         let mut send = this
                             .frame
@@ -132,6 +163,15 @@ where
                         }
                         continue;
                     }
+                    this.connected.insert(
+                        addr,
+                        Peer {
+                            addr,
+                            mtu,
+                            proto_ver,
+                            client_guid,
+                        },
+                    );
                     unconnected::Packet::OpenConnectionReply2 {
                         magic: (),
                         server_guid: this.config.sever_guid,
@@ -152,7 +192,7 @@ where
     }
 }
 
-impl<F> Sink<(Packet<Bytes>, SocketAddr)> for OfflineHandler<F>
+impl<F> Sink<(Packet<Bytes>, SocketAddr)> for OfflineHandShake<F>
 where
     F: Sink<(Packet<Bytes>, SocketAddr), Error = CodecError>,
 {
@@ -168,7 +208,7 @@ where
     ) -> Result<(), Self::Error> {
         let this = self.project();
         if let Packet::Connected(connected::Packet::FrameSet(frame_set)) = &packet {
-            if matches!(frame_set.inner_pack_id()?, PackId::DisconnectNotification) {
+            if frame_set.first_pack_id() == PackId::DisconnectNotification {
                 debug!("disconnect from {}, clean it's frame parts buffer", addr);
                 this.connected.remove(&addr);
                 this.pending.pop(&addr);

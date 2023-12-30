@@ -17,7 +17,7 @@ use crate::errors::CodecError;
 use crate::packet::connected::{Fragment, Frame};
 use crate::packet::{connected, PackId, Packet};
 
-/// parts helper. [`LruCache`] used to protect from causing OOM due to malicious
+/// reassemble parts helper. [`LruCache`] used to protect from causing OOM due to malicious
 /// users sending a large number of parted IDs.
 type DeFragmentMap =
     HashMap<SocketAddr, LruCache<u16, PriorityQueue<Frame<BytesMut>, Reverse<u32>>>>;
@@ -25,10 +25,6 @@ type DeFragmentMap =
 pin_project! {
     /// Defragment the frame set packet from stream [`UdpFramed`]. Enable external consumption of
     /// continuous frame set packets.
-    /// Notice that packets stream must pass this layer first, then go to the ack layer and timeout layer.
-    /// Because this layer could abort the frames in frame set packet, and the ack layer will promise
-    /// the client that we have received the frame set packet. Moreover, this layer needs to get the
-    /// Disconnect packet sent by the timeout layer to clear the parted cache.
     pub(super) struct DeFragment<F> {
         #[pin]
         frame: F,
@@ -171,7 +167,7 @@ where
     ) -> Result<(), Self::Error> {
         let this = self.project();
         if let Packet::Connected(connected::Packet::FrameSet(frame_set)) = &packet {
-            if matches!(frame_set.inner_pack_id()?, PackId::DisconnectNotification) {
+            if frame_set.first_pack_id() == PackId::DisconnectNotification {
                 debug!("disconnect from {}, clean it's frame parts buffer", addr);
                 this.parts.remove(&addr);
             }
@@ -201,7 +197,7 @@ mod test {
     use super::DeFragment;
     use crate::errors::CodecError;
     use crate::packet::connected::{self, Flags, Fragment, Frame, FrameSet, Uint24le};
-    use crate::packet::Packet;
+    use crate::packet::{PackId, Packet};
 
     fn frame_set<'a, T: AsRef<str> + 'a>(
         idx: impl IntoIterator<Item = &'a (u32, u16, u32, T)>,
@@ -211,6 +207,7 @@ mod test {
             frames: idx
                 .into_iter()
                 .map(|(parted_size, parted_id, parted_index, body)| Frame {
+                    id: PackId::Game,
                     flags: Flags::parse(0b011_11100),
                     reliable_frame_index: None,
                     seq_frame_index: None,
@@ -232,6 +229,7 @@ mod test {
             frames: bodies
                 .into_iter()
                 .map(|body| Frame {
+                    id: PackId::Game,
                     flags: Flags::parse(0b011_11100),
                     reliable_frame_index: None,
                     seq_frame_index: None,
