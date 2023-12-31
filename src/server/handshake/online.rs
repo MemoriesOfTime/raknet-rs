@@ -9,7 +9,7 @@ use pin_project_lite::pin_project;
 
 use super::offline::Peer;
 use crate::packet::connected::FrameBody;
-use crate::packet::{connected, PackId};
+use crate::packet::{connected, PackType};
 
 pin_project! {
     struct OnlineHandShake<F> {

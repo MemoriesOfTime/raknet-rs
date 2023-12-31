@@ -9,7 +9,7 @@ use pin_project_lite::pin_project;
 use tracing::{debug, error, warn};
 
 use crate::errors::CodecError;
-use crate::packet::{connected, unconnected, PackId, Packet};
+use crate::packet::{connected, unconnected, PackType, Packet};
 
 #[derive(Debug, Clone)]
 pub(super) struct Config {
@@ -25,8 +25,6 @@ pub(super) struct Config {
 pub(super) struct Peer {
     pub(super) addr: SocketAddr,
     pub(super) mtu: u16,
-    pub(super) proto_ver: u8,
-    pub(super) client_guid: u64,
 }
 
 pin_project! {
@@ -163,15 +161,7 @@ where
                         }
                         continue;
                     }
-                    this.connected.insert(
-                        addr,
-                        Peer {
-                            addr,
-                            mtu,
-                            proto_ver,
-                            client_guid,
-                        },
-                    );
+                    this.connected.insert(addr, Peer { addr, mtu });
                     unconnected::Packet::OpenConnectionReply2 {
                         magic: (),
                         server_guid: this.config.sever_guid,
@@ -183,7 +173,7 @@ where
                 _ => {
                     warn!(
                         "received a package({:?}) that should not be received on the server.",
-                        pack.pack_id()
+                        pack.pack_type()
                     );
                     continue;
                 }
@@ -208,7 +198,7 @@ where
     ) -> Result<(), Self::Error> {
         let this = self.project();
         if let Packet::Connected(connected::Packet::FrameSet(frame_set)) = &packet {
-            if frame_set.first_pack_id() == PackId::DisconnectNotification {
+            if frame_set.first_pack_type() == PackType::DisconnectNotification {
                 debug!("disconnect from {}, clean it's frame parts buffer", addr);
                 this.connected.remove(&addr);
                 this.pending.pop(&addr);

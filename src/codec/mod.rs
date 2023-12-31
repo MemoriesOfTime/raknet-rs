@@ -129,7 +129,7 @@ where
                     continue;
                 }
             };
-            trace!("received packet: {:?}, from: {addr}", packet.pack_id());
+            trace!("received packet: {:?}, from: {addr}", packet.pack_type());
             return Poll::Ready(Some((packet, addr)));
         }
     }
@@ -241,7 +241,6 @@ pub mod micro_bench {
         Encoder, LoggedCodec, Packet, Pin, Poll, SocketAddr, Stream,
     };
     use crate::packet::connected::{self, Flags, Fragment, Frame, FrameSet, Ordered, Uint24le};
-    use crate::packet::PackId;
 
     fn frame_set<'a, T: AsRef<str> + 'a>(
         idx: impl IntoIterator<Item = &'a (((u32, u16, u32, T), u32), u32)>,
@@ -255,7 +254,6 @@ pub mod micro_bench {
                         ((parted_size, parted_id, parted_index, body), frame_index),
                         reliable_index,
                     )| Frame {
-                        id: PackId::Game,
                         flags: Flags::parse(0b011_11100),
                         reliable_frame_index: Some(Uint24le(*reliable_index)),
                         seq_frame_index: None,

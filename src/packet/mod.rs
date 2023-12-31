@@ -18,20 +18,21 @@ macro_rules! read_buf {
     }};
 }
 
-// 0b100_000...
-const VALID_FLAG: u8 = 0x80;
-// 0b110_000...
-const ACK_FLAG: u8 = VALID_FLAG | 0x40;
-// 0b101_000...
-const NACK_FLAG: u8 = VALID_FLAG | 0x20;
+const VALID_FLAG: u8 = 0b1000_0000;
+const ACK_FLAG: u8 = 0b1100_0000;
+const NACK_FLAG: u8 = 0b1010_0000;
 
-/// Packet IDs. These packets play important role in raknet protocol.
+const PARTED_FLAG: u8 = 0b0001_0000;
+const CONTINUOUS_SEND_FLAG: u8 = 0b0000_1000;
+const NEEDS_B_AND_AS_FLAG: u8 = 0b0000_0100;
+
+/// Packet Types. These packets play important role in raknet protocol.
 /// Some of them appear at the first byte of a UDP data packet (like `UnconnectedPing1`), while
 /// others are encapsulated in a `FrameSet` data packet and appear as the first byte of the body
 /// (like `Game`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
-pub(crate) enum PackId {
+pub(crate) enum PackType {
     ConnectedPing = 0x00,
     UnconnectedPing1 = 0x01,
     UnconnectedPing2 = 0x02,
@@ -57,62 +58,65 @@ pub(crate) enum PackId {
     AdvertiseSystem = 0x1d,
     Game = 0xfe,
 
-    /// The IDs of these three packets form a range, and only the one with the flag will be used
+    /// The types of these three packets form a range, and only the one with the flag will be used
     /// here.
     Ack = ACK_FLAG,
     Nack = NACK_FLAG,
     FrameSet = VALID_FLAG,
 }
 
-impl PackId {
-    pub(crate) fn from_u8(id: u8) -> Result<PackId, CodecError> {
+impl PackType {
+    pub(crate) fn from_u8(id: u8) -> Result<PackType, CodecError> {
         match id {
-            0x00 => Ok(PackId::ConnectedPing),
-            0x01 => Ok(PackId::UnconnectedPing1),
-            0x02 => Ok(PackId::UnconnectedPing2),
-            0x03 => Ok(PackId::ConnectedPong),
-            0x04 => Ok(PackId::LostConnections),
-            0x05 => Ok(PackId::OpenConnectionRequest1),
-            0x06 => Ok(PackId::OpenConnectionReply1),
-            0x07 => Ok(PackId::OpenConnectionRequest2),
-            0x08 => Ok(PackId::OpenConnectionReply2),
-            0x09 => Ok(PackId::ConnectionRequest),
-            0x10 => Ok(PackId::ConnectionRequestAccepted),
-            0x12 => Ok(PackId::AlreadyConnected),
-            0x13 => Ok(PackId::NewIncomingConnection),
-            0x15 => Ok(PackId::DisconnectNotification),
-            0x19 => Ok(PackId::IncompatibleProtocolVersion),
-            0x1c => Ok(PackId::UnconnectedPong),
-            0xfe => Ok(PackId::Game),
-            ACK_FLAG.. => Ok(PackId::Ack),
-            NACK_FLAG.. => Ok(PackId::Nack),
-            VALID_FLAG.. => Ok(PackId::FrameSet),
-            _ => Err(CodecError::InvalidPacketId(id)),
+            0x00 => Ok(PackType::ConnectedPing),
+            0x01 => Ok(PackType::UnconnectedPing1),
+            0x02 => Ok(PackType::UnconnectedPing2),
+            0x03 => Ok(PackType::ConnectedPong),
+            0x04 => Ok(PackType::LostConnections),
+            0x05 => Ok(PackType::OpenConnectionRequest1),
+            0x06 => Ok(PackType::OpenConnectionReply1),
+            0x07 => Ok(PackType::OpenConnectionRequest2),
+            0x08 => Ok(PackType::OpenConnectionReply2),
+            0x09 => Ok(PackType::ConnectionRequest),
+            0x10 => Ok(PackType::ConnectionRequestAccepted),
+            0x12 => Ok(PackType::AlreadyConnected),
+            0x13 => Ok(PackType::NewIncomingConnection),
+            0x15 => Ok(PackType::DisconnectNotification),
+            0x19 => Ok(PackType::IncompatibleProtocolVersion),
+            0x1c => Ok(PackType::UnconnectedPong),
+            0xfe => Ok(PackType::Game),
+            ACK_FLAG.. => Ok(PackType::Ack),
+            NACK_FLAG.. => Ok(PackType::Nack),
+            VALID_FLAG.. => Ok(PackType::FrameSet),
+            _ => Err(CodecError::InvalidPacketType(id)),
         }
     }
 
     /// Check if it is unconnected ping
     pub(crate) fn is_unconnected_ping(&self) -> bool {
-        matches!(self, PackId::UnconnectedPing1 | PackId::UnconnectedPing2)
+        matches!(
+            self,
+            PackType::UnconnectedPing1 | PackType::UnconnectedPing2
+        )
     }
 
     /// Check if it is a frame set packet
     pub(crate) fn is_frame_set(&self) -> bool {
-        matches!(self, PackId::FrameSet)
+        matches!(self, PackType::FrameSet)
     }
 
     /// Check if it is a ack packet
     pub(crate) fn is_ack(&self) -> bool {
-        matches!(self, PackId::Ack)
+        matches!(self, PackType::Ack)
     }
 
     /// Check if it is a nack packet
     pub(crate) fn is_nack(&self) -> bool {
-        matches!(self, PackId::Nack)
+        matches!(self, PackType::Nack)
     }
 }
 
-impl TryFrom<u8> for PackId {
+impl TryFrom<u8> for PackType {
     type Error = CodecError;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
@@ -120,30 +124,31 @@ impl TryFrom<u8> for PackId {
     }
 }
 
-impl From<PackId> for u8 {
-    fn from(value: PackId) -> Self {
+impl From<PackType> for u8 {
+    fn from(value: PackType) -> Self {
         value as u8
     }
 }
 
 /// Raknet packet
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) enum Packet<B: Buf> {
-    Unconnected(unconnected::Packet<B>),
+pub(crate) enum Packet<B> {
+    Unconnected(unconnected::Packet),
     Connected(connected::Packet<B>),
 }
 
-impl<B: Buf> Packet<B> {
-    /// Get the packet id
-    pub(crate) fn pack_id(&self) -> PackId {
+impl<B> Packet<B> {
+    /// Get the packet type
+    pub(crate) fn pack_type(&self) -> PackType {
         match self {
-            Packet::Unconnected(pack) => pack.pack_id(),
-            Packet::Connected(pack) => pack.pack_id(),
+            Packet::Unconnected(pack) => pack.pack_type(),
+            Packet::Connected(pack) => pack.pack_type(),
         }
     }
+}
 
+impl<B: Buf> Packet<B> {
     pub(crate) fn write(self, buf: &mut BytesMut) {
-        buf.put_u8(self.pack_id().into());
         match self {
             Packet::Unconnected(packet) => {
                 packet.write(buf);
@@ -170,7 +175,7 @@ impl Packet<BytesMut> {
             Packet::Connected(connected::Packet::Nack(nack)) => {
                 Packet::Connected(connected::Packet::Nack(nack))
             }
-            Packet::Unconnected(pack) => Packet::Unconnected(pack.freeze()),
+            Packet::Unconnected(pack) => Packet::Unconnected(pack),
         }
     }
 
@@ -178,54 +183,54 @@ impl Packet<BytesMut> {
         if buf.is_empty() {
             return Ok(None);
         }
-        let pack_id: PackId = read_buf!(buf, 1, buf.get_u8().try_into()?);
-        if pack_id.is_frame_set() {
+        let pack_type: PackType = read_buf!(buf, 1, buf.get_u8().try_into()?);
+        if pack_type.is_frame_set() {
             return Ok(Some(Self::Connected(connected::Packet::read_frame_set(
                 buf,
             )?)));
         }
-        if pack_id.is_ack() {
+        if pack_type.is_ack() {
             return Ok(Some(Self::Connected(connected::Packet::read_ack(buf)?)));
         }
-        if pack_id.is_nack() {
+        if pack_type.is_nack() {
             return Ok(Some(Self::Connected(connected::Packet::read_nack(buf)?)));
         }
-        match pack_id {
-            PackId::UnconnectedPing1 | PackId::UnconnectedPing2 => {
+        match pack_type {
+            PackType::UnconnectedPing1 | PackType::UnconnectedPing2 => {
                 read_buf!(buf, 32, unconnected::Packet::read_unconnected_ping(buf))
             }
-            PackId::UnconnectedPong => {
+            PackType::UnconnectedPong => {
                 read_buf!(buf, 32, unconnected::Packet::read_unconnected_pong(buf))
             }
-            PackId::OpenConnectionRequest1 => {
+            PackType::OpenConnectionRequest1 => {
                 read_buf!(
                     buf,
                     19,
                     unconnected::Packet::read_open_connection_request1(buf)
                 )
             }
-            PackId::OpenConnectionReply1 => {
+            PackType::OpenConnectionReply1 => {
                 read_buf!(
                     buf,
                     27,
                     unconnected::Packet::read_open_connection_reply1(buf)
                 )
             }
-            PackId::IncompatibleProtocolVersion => {
+            PackType::IncompatibleProtocolVersion => {
                 read_buf!(
                     buf,
                     25,
                     unconnected::Packet::read_incompatible_protocol(buf)
                 )
             }
-            PackId::AlreadyConnected => {
+            PackType::AlreadyConnected => {
                 read_buf!(buf, 24, unconnected::Packet::read_already_connected(buf))
             }
-            PackId::OpenConnectionRequest2 => {
+            PackType::OpenConnectionRequest2 => {
                 unconnected::Packet::read_open_connection_request2(buf)
             }
-            PackId::OpenConnectionReply2 => unconnected::Packet::read_open_connection_reply2(buf),
-            _ => Err(CodecError::InvalidPacketId(pack_id.into())),
+            PackType::OpenConnectionReply2 => unconnected::Packet::read_open_connection_reply2(buf),
+            _ => Err(CodecError::InvalidPacketType(pack_type.into())),
         }
         .map(|packet| Some(Self::Unconnected(packet)))
     }

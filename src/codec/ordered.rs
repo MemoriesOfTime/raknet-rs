@@ -12,7 +12,7 @@ use tracing::debug;
 use super::PollPacket;
 use crate::errors::CodecError;
 use crate::packet::connected::Frame;
-use crate::packet::{connected, PackId, Packet};
+use crate::packet::{connected, PackType, Packet};
 
 const INITIAL_ORDERING_MAP_CAP: usize = 64;
 
@@ -171,7 +171,7 @@ where
         let this = self.project();
 
         if let Packet::Connected(connected::Packet::FrameSet(frame_set)) = &mut packet {
-            if frame_set.first_pack_id() == PackId::DisconnectNotification {
+            if frame_set.first_pack_type() == PackType::DisconnectNotification {
                 debug!("disconnect from {}, clean it's ordering buffer", addr);
                 this.ordering.remove(&addr);
             }
@@ -200,7 +200,7 @@ mod test {
     use super::Order;
     use crate::errors::CodecError;
     use crate::packet::connected::{self, Flags, Frame, FrameSet, Ordered, Uint24le};
-    use crate::packet::{PackId, Packet};
+    use crate::packet::Packet;
 
     fn frame_set(idx: impl IntoIterator<Item = (u8, u32)>) -> Packet<Bytes> {
         Packet::Connected(connected::Packet::FrameSet(FrameSet {
@@ -208,7 +208,6 @@ mod test {
             frames: idx
                 .into_iter()
                 .map(|(channel, frame_index)| Frame {
-                    id: PackId::Game,
                     flags: Flags::parse(0b011_11100),
                     reliable_frame_index: None,
                     seq_frame_index: None,

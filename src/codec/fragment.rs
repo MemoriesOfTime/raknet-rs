@@ -15,7 +15,7 @@ use tracing::debug;
 use crate::codec::PollPacket;
 use crate::errors::CodecError;
 use crate::packet::connected::{Fragment, Frame};
-use crate::packet::{connected, PackId, Packet};
+use crate::packet::{connected, PackType, Packet};
 
 /// reassemble parts helper. [`LruCache`] used to protect from causing OOM due to malicious
 /// users sending a large number of parted IDs.
@@ -124,8 +124,7 @@ where
                         .reduce(|mut acc, next| {
                             // merge all parted frames
                             acc.body.put(next.body);
-                            // remove the fragment info to keep hash of this frame normal
-                            acc.fragment = None;
+                            acc.reassembled();
                             acc
                         })
                         .expect("there is at least one frame");
@@ -167,7 +166,7 @@ where
     ) -> Result<(), Self::Error> {
         let this = self.project();
         if let Packet::Connected(connected::Packet::FrameSet(frame_set)) = &packet {
-            if frame_set.first_pack_id() == PackId::DisconnectNotification {
+            if frame_set.first_pack_type() == PackType::DisconnectNotification {
                 debug!("disconnect from {}, clean it's frame parts buffer", addr);
                 this.parts.remove(&addr);
             }
@@ -197,7 +196,7 @@ mod test {
     use super::DeFragment;
     use crate::errors::CodecError;
     use crate::packet::connected::{self, Flags, Fragment, Frame, FrameSet, Uint24le};
-    use crate::packet::{PackId, Packet};
+    use crate::packet::Packet;
 
     fn frame_set<'a, T: AsRef<str> + 'a>(
         idx: impl IntoIterator<Item = &'a (u32, u16, u32, T)>,
@@ -207,7 +206,6 @@ mod test {
             frames: idx
                 .into_iter()
                 .map(|(parted_size, parted_id, parted_index, body)| Frame {
-                    id: PackId::Game,
                     flags: Flags::parse(0b011_11100),
                     reliable_frame_index: None,
                     seq_frame_index: None,
@@ -229,7 +227,6 @@ mod test {
             frames: bodies
                 .into_iter()
                 .map(|body| Frame {
-                    id: PackId::Game,
                     flags: Flags::parse(0b011_11100),
                     reliable_frame_index: None,
                     seq_frame_index: None,
