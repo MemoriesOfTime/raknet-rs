@@ -1,18 +1,12 @@
-use std::collections::{HashMap, VecDeque};
-use std::fmt::Debug;
-use std::net::SocketAddr;
+use std::collections::VecDeque;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use bytes::Buf;
-use futures::{Sink, Stream};
+use futures::{ready, Stream, StreamExt};
 use pin_project_lite::pin_project;
-use tracing::{debug, warn};
 
-use crate::codec::PollPacket;
 use crate::errors::CodecError;
-use crate::packet::connected::Uint24le;
-use crate::packet::{connected, PackType, Packet};
+use crate::packet::connected::{self, Uint24le};
 
 const USIZE_BITS: usize = std::mem::size_of::<usize>() * 8;
 const DEFAULT_BIT_VEC_QUEUE_CAP: usize = 256 * USIZE_BITS;
@@ -178,12 +172,12 @@ impl DuplicateWindow {
 pin_project! {
     /// Deduplication layer, abort duplicated packets, should be placed as the first layer
     /// on UdpFramed to maximum its effect
-    pub(super) struct Dedup<F> {
+    pub(crate) struct Dedup<F> {
         #[pin]
         frame: F,
         // Limit the maximum reliable_frame_index gap for a connection. 0 means no limit.
         max_gap: usize,
-        windows: HashMap<SocketAddr, DuplicateWindow>
+        window: DuplicateWindow
     }
 }
 
@@ -196,94 +190,49 @@ impl<T> Deduplicated for T {
         Dedup {
             frame: self,
             max_gap,
-            windows: HashMap::new(),
+            window: DuplicateWindow::default(),
         }
     }
 }
 
-impl<F, B: Buf> Stream for Dedup<F>
+impl<F, B> Stream for Dedup<F>
 where
-    F: Stream<Item = Result<(Packet<B>, SocketAddr), CodecError>>,
+    F: Stream<Item = Result<connected::Packet<B>, CodecError>>,
 {
-    type Item = Result<(Packet<B>, SocketAddr), CodecError>;
+    type Item = Result<connected::Packet<B>, CodecError>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
-
         loop {
-            let (packet, addr) = match this.frame.as_mut().poll_packet(cx) {
-                Ok(v) => v,
-                Err(poll) => return poll,
+            let Some(packet) = ready!(this.frame.poll_next_unpin(cx)?) else {
+                return Poll::Ready(None);
             };
 
-            let Packet::Connected(connected::Packet::FrameSet(mut frame_set)) = packet else {
-                return Poll::Ready(Some(Ok((packet, addr))));
+            let connected::Packet::FrameSet(mut frame_set) = packet else {
+                return Poll::Ready(Some(Ok(packet)));
             };
-            let window = this.windows.entry(addr).or_default();
-            if *this.max_gap != 0 && window.received_status.len() > *this.max_gap {
-                warn!(
-                    "connection from {addr} reaches its maximum gap {}",
-                    *this.max_gap
-                );
+            if *this.max_gap != 0 && this.window.received_status.len() > *this.max_gap {
                 return Poll::Ready(Some(Err(CodecError::DedupExceed(
                     *this.max_gap,
-                    window.received_status.len(),
+                    this.window.received_status.len(),
                 ))));
             }
             frame_set.frames.retain(|frame| {
                 let Some(reliable_frame_index) = frame.reliable_frame_index else {
                     return true;
                 };
-                !window.duplicate(reliable_frame_index)
+                !this.window.duplicate(reliable_frame_index)
             });
             if !frame_set.frames.is_empty() {
-                return Poll::Ready(Some(Ok((
-                    Packet::Connected(connected::Packet::FrameSet(frame_set)),
-                    addr,
-                ))));
+                return Poll::Ready(Some(Ok(connected::Packet::FrameSet(frame_set))));
             }
         }
-    }
-}
-
-impl<F, B: Buf> Sink<(Packet<B>, SocketAddr)> for Dedup<F>
-where
-    F: Sink<(Packet<B>, SocketAddr), Error = CodecError>,
-{
-    type Error = CodecError;
-
-    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.project().frame.poll_ready(cx)
-    }
-
-    fn start_send(
-        self: Pin<&mut Self>,
-        (packet, addr): (Packet<B>, SocketAddr),
-    ) -> Result<(), Self::Error> {
-        let this = self.project();
-        if let Packet::Connected(connected::Packet::FrameSet(frame_set)) = &packet {
-            if frame_set.first_pack_type() == PackType::DisconnectNotification {
-                debug!("disconnect from {}, clean it's dedup window", addr);
-                this.windows.remove(&addr);
-            }
-        };
-        this.frame.start_send((packet, addr))
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.project().frame.poll_flush(cx)
-    }
-
-    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.project().frame.poll_close(cx)
     }
 }
 
 #[cfg(test)]
 mod test {
 
-    use std::collections::HashMap;
-    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::ops::Sub;
 
     use bytes::Bytes;
@@ -291,11 +240,9 @@ mod test {
     use futures_async_stream::stream;
     use indexmap::IndexSet;
 
-    use super::Dedup;
-    use crate::codec::dedup::DuplicateWindow;
+    use super::*;
     use crate::errors::CodecError;
     use crate::packet::connected::{self, Flags, Frame, FrameSet, Uint24le};
-    use crate::packet::Packet;
 
     #[test]
     fn test_duplicate_windows_check_ordered() {
@@ -346,8 +293,8 @@ mod test {
         assert_eq!(window.received_status.len(), 0);
     }
 
-    fn frame_set(idx: impl IntoIterator<Item = u32>) -> Packet<Bytes> {
-        Packet::Connected(connected::Packet::FrameSet(FrameSet {
+    fn frame_set(idx: impl IntoIterator<Item = u32>) -> connected::Packet<Bytes> {
+        connected::Packet::FrameSet(FrameSet {
             seq_num: Uint24le(0),
             frames: idx
                 .into_iter()
@@ -360,80 +307,57 @@ mod test {
                     body: Bytes::new(),
                 })
                 .collect(),
-        }))
+        })
     }
 
     #[tokio::test]
     async fn test_dedup_works() {
-        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
-        let addr1 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8081);
         let frame = {
             #[stream]
             async {
-                yield (frame_set(0..64), addr);
-                yield (frame_set(0..64), addr); // duplicated
-                yield (frame_set(0..64), addr1); // not duplicated
-                yield (frame_set([65, 66, 68, 69]), addr);
-                yield (frame_set([67, 68]), addr);
-                yield (frame_set([71, 71, 72]), addr);
-                yield (frame_set([70]), addr);
+                yield frame_set(0..64);
+                yield frame_set(0..64); // duplicated
+                yield frame_set([65, 66, 68, 69]);
+                yield frame_set([67, 68]);
+                yield frame_set([71, 71, 72]);
+                yield frame_set([70]);
             }
         };
         tokio::pin!(frame);
         let mut dedup = Dedup {
             frame: frame.map(Ok),
             max_gap: 100,
-            windows: HashMap::new(),
+            window: DuplicateWindow::default(),
         };
 
+        assert_eq!(dedup.next().await.unwrap().unwrap(), frame_set(0..64));
         assert_eq!(
             dedup.next().await.unwrap().unwrap(),
-            (frame_set(0..64), addr)
+            frame_set([65, 66, 68, 69])
         );
-        assert_eq!(
-            dedup.next().await.unwrap().unwrap(),
-            (frame_set(0..64), addr1)
-        );
-        assert_eq!(
-            dedup.next().await.unwrap().unwrap(),
-            (frame_set([65, 66, 68, 69]), addr)
-        );
-        assert_eq!(
-            dedup.next().await.unwrap().unwrap(),
-            (frame_set([67]), addr)
-        );
-        assert_eq!(
-            dedup.next().await.unwrap().unwrap(),
-            (frame_set([71, 72]), addr)
-        );
-        assert_eq!(
-            dedup.next().await.unwrap().unwrap(),
-            (frame_set([70]), addr)
-        );
+        assert_eq!(dedup.next().await.unwrap().unwrap(), frame_set([67]));
+        assert_eq!(dedup.next().await.unwrap().unwrap(), frame_set([71, 72]));
+        assert_eq!(dedup.next().await.unwrap().unwrap(), frame_set([70]));
     }
 
     #[tokio::test]
     async fn test_dedup_exceed() {
-        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
         let frame = {
             #[stream]
             async {
-                yield (frame_set([0]), addr);
-                yield (frame_set([101]), addr);
-                yield (frame_set([102]), addr);
+                yield frame_set([0]);
+                yield frame_set([101]);
+                yield frame_set([102]);
             }
         };
         tokio::pin!(frame);
         let mut dedup = Dedup {
             frame: frame.map(Ok),
             max_gap: 100,
-            windows: HashMap::new(),
+            window: DuplicateWindow::default(),
         };
-        assert_eq!(dedup.next().await.unwrap().unwrap(), (frame_set([0]), addr));
-        assert_eq!(
-            dedup.next().await.unwrap().unwrap(),
-            (frame_set([101]), addr)
-        );
+        assert_eq!(dedup.next().await.unwrap().unwrap(), frame_set([0]));
+        assert_eq!(dedup.next().await.unwrap().unwrap(), frame_set([101]));
         assert!(matches!(
             dedup.next().await.unwrap(),
             Err(CodecError::DedupExceed(..))
@@ -442,29 +366,27 @@ mod test {
 
     #[tokio::test]
     async fn test_dedup_same() {
-        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
         let frame = {
             #[stream]
             async {
-                yield (frame_set([0, 1, 2, 3]), addr);
-                yield (frame_set([0, 1, 2, 3]), addr);
+                yield frame_set([0, 1, 2, 3]);
+                yield frame_set([0, 1, 2, 3]);
             }
         };
         tokio::pin!(frame);
         let mut dedup = Dedup {
             frame: frame.map(Ok),
             max_gap: 100,
-            windows: HashMap::new(),
+            window: DuplicateWindow::default(),
         };
         assert_eq!(
             dedup.next().await.unwrap().unwrap(),
-            (frame_set([0, 1, 2, 3]), addr)
+            frame_set([0, 1, 2, 3])
         );
         assert!(dedup.next().await.is_none());
     }
 
     async fn test_dedup_fuzzing_with_scale(scale: usize) {
-        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
         let idx1 = std::iter::repeat_with(rand::random::<u32>)
             .map(|i| i % scale as u32)
             .take(scale)
@@ -481,28 +403,25 @@ mod test {
         let frame = {
             #[stream]
             async {
-                yield (frame_set(idx1), addr);
-                yield (frame_set(idx2), addr);
+                yield frame_set(idx1);
+                yield frame_set(idx2);
             }
         };
         tokio::pin!(frame);
         let mut dedup = Dedup {
             frame: frame.map(Ok),
             max_gap: scale,
-            windows: HashMap::new(),
+            window: DuplicateWindow::default(),
         };
         assert_eq!(
             dedup.next().await.unwrap().unwrap(),
-            (frame_set(idx1_set.clone()), addr)
+            frame_set(idx1_set.clone())
         );
 
         if diff.is_empty() {
             assert!(dedup.next().await.is_none());
         } else {
-            assert_eq!(
-                dedup.next().await.unwrap().unwrap(),
-                (frame_set(diff), addr)
-            );
+            assert_eq!(dedup.next().await.unwrap().unwrap(), frame_set(diff));
         }
     }
 

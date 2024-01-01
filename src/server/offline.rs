@@ -10,6 +10,7 @@ use tracing::{debug, error, warn};
 
 use crate::errors::CodecError;
 use crate::packet::{connected, unconnected, PackType, Packet};
+use crate::Peer;
 
 #[derive(Debug, Clone)]
 pub(super) struct Config {
@@ -21,15 +22,9 @@ pub(super) struct Config {
     support_version: Vec<u8>,
 }
 
-#[derive(Debug, Clone)]
-pub(super) struct Peer {
-    pub(super) addr: SocketAddr,
-    pub(super) mtu: u16,
-}
-
 pin_project! {
-    /// OfflineHandShake takes the codec frame and perform offline handshake.
-    struct OfflineHandShake<F> {
+    /// OfflineHandler takes the codec frame and perform offline handshake.
+    struct OfflineHandler<F> {
         #[pin]
         frame: F,
         config: Config,
@@ -38,7 +33,7 @@ pin_project! {
     }
 }
 
-impl<F> OfflineHandShake<F>
+impl<F> OfflineHandler<F>
 where
     F: Sink<(Packet<Bytes>, SocketAddr), Error = CodecError>,
 {
@@ -65,7 +60,7 @@ where
     }
 }
 
-impl<F> Stream for OfflineHandShake<F>
+impl<F> Stream for OfflineHandler<F>
 where
     F: Stream<Item = (Packet<Bytes>, SocketAddr)>
         + Sink<(Packet<Bytes>, SocketAddr), Error = CodecError>,
@@ -135,10 +130,8 @@ where
                         mtu: final_mtu,
                     }
                 }
-                unconnected::Packet::OpenConnectionRequest2 {
-                    mtu, client_guid, ..
-                } => {
-                    let Some(proto_ver) = this.pending.pop(&addr) else {
+                unconnected::Packet::OpenConnectionRequest2 { mtu, .. } => {
+                    if this.pending.pop(&addr).is_none() {
                         debug!("received open connection request 2 from {addr} without open connection request 1");
                         let mut send = this
                             .frame
@@ -182,7 +175,7 @@ where
     }
 }
 
-impl<F> Sink<(Packet<Bytes>, SocketAddr)> for OfflineHandShake<F>
+impl<F> Sink<(Packet<Bytes>, SocketAddr)> for OfflineHandler<F>
 where
     F: Sink<(Packet<Bytes>, SocketAddr), Error = CodecError>,
 {

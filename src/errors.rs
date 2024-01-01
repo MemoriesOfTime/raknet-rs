@@ -23,3 +23,11 @@ pub enum CodecError {
     #[error("magic number not matched, pos {0}, byte {1}")]
     MagicNotMatched(usize, u8),
 }
+
+#[derive(thiserror::Error, Debug)]
+pub enum Error {
+    #[error(transparent)]
+    Codec(#[from] CodecError),
+    #[error("connection closed, reason {0}")]
+    ConnectionClosed(&'static str),
+}

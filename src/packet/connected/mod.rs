@@ -1,7 +1,7 @@
 use std::fmt::Display;
 use std::hash::Hash;
 
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 use crate::errors::CodecError;
 use crate::packet::PackType;
@@ -23,7 +23,7 @@ pub(crate) enum Packet<B> {
 }
 
 impl<B> Packet<B> {
-    pub(super) fn pack_type(&self) -> PackType {
+    pub(crate) fn pack_type(&self) -> PackType {
         match self {
             Packet::FrameSet(_) => PackType::FrameSet,
             Packet::Ack(_) => PackType::Ack,
@@ -66,6 +66,14 @@ impl<B: Buf> Packet<B> {
 impl Packet<BytesMut> {
     pub(super) fn read_frame_set(buf: &mut BytesMut) -> Result<Self, CodecError> {
         Ok(Packet::FrameSet(FrameSet::read(buf)?))
+    }
+
+    pub(crate) fn freeze(self) -> Packet<Bytes> {
+        match self {
+            Packet::FrameSet(frame_set) => Packet::FrameSet(frame_set.freeze()),
+            Packet::Ack(ack) => Packet::Ack(ack),
+            Packet::Nack(nack) => Packet::Nack(nack),
+        }
     }
 }
 

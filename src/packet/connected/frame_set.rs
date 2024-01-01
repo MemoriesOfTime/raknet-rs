@@ -4,9 +4,7 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 use super::Uint24le;
 use crate::errors::CodecError;
-use crate::packet::{
-    PackType, SocketAddrRead, SocketAddrWrite, NEEDS_B_AND_AS_FLAG, PARTED_FLAG, VALID_FLAG,
-};
+use crate::packet::{PackType, SocketAddrRead, SocketAddrWrite, NEEDS_B_AND_AS_FLAG, PARTED_FLAG};
 use crate::read_buf;
 
 #[derive(Eq, PartialEq, Clone)]
@@ -152,6 +150,13 @@ impl FrameSet<BytesMut> {
             return Err(CodecError::InvalidPacketLength("frame set"));
         }
         Ok(FrameSet { seq_num, frames })
+    }
+
+    pub(super) fn freeze(self) -> FrameSet<Bytes> {
+        FrameSet {
+            seq_num: self.seq_num,
+            frames: self.frames.into_iter().map(Frame::freeze).collect(),
+        }
     }
 }
 

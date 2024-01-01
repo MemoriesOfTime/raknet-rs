@@ -6,7 +6,7 @@ use crate::read_buf;
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct AckOrNack {
-    records: Vec<Record>,
+    pub(crate) records: Vec<Record>,
 }
 
 impl AckOrNack {

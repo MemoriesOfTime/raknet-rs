@@ -161,24 +161,6 @@ impl<B: Buf> Packet<B> {
 }
 
 impl Packet<BytesMut> {
-    pub(crate) fn freeze(self) -> Packet<Bytes> {
-        match self {
-            Packet::Connected(connected::Packet::FrameSet(FrameSet { seq_num, frames })) => {
-                Packet::Connected(connected::Packet::FrameSet(FrameSet {
-                    seq_num,
-                    frames: frames.into_iter().map(Frame::freeze).collect::<Vec<_>>(),
-                }))
-            }
-            Packet::Connected(connected::Packet::Ack(ack)) => {
-                Packet::Connected(connected::Packet::Ack(ack))
-            }
-            Packet::Connected(connected::Packet::Nack(nack)) => {
-                Packet::Connected(connected::Packet::Nack(nack))
-            }
-            Packet::Unconnected(pack) => Packet::Unconnected(pack),
-        }
-    }
-
     pub(crate) fn read(buf: &mut BytesMut) -> Result<Option<Self>, CodecError> {
         if buf.is_empty() {
             return Ok(None);

@@ -1,40 +1,33 @@
 use std::cmp::Reverse;
-use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::collections::VecDeque;
 use std::num::NonZeroUsize;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use bytes::{Buf, BufMut, Bytes, BytesMut};
-use futures::{Sink, Stream};
+use bytes::{BufMut, Bytes, BytesMut};
+use futures::{ready, Stream, StreamExt};
 use lru::LruCache;
 use pin_project_lite::pin_project;
 use priority_queue::PriorityQueue;
-use tracing::debug;
 
-use crate::codec::PollPacket;
 use crate::errors::CodecError;
-use crate::packet::connected::{Fragment, Frame};
-use crate::packet::{connected, PackType, Packet};
+use crate::packet::connected::{self, Fragment, Frame, FrameSet};
 
-/// reassemble parts helper. [`LruCache`] used to protect from causing OOM due to malicious
-/// users sending a large number of parted IDs.
-type DeFragmentMap =
-    HashMap<SocketAddr, LruCache<u16, PriorityQueue<Frame<BytesMut>, Reverse<u32>>>>;
+const DEFAULT_DEFRAGMENT_BUF_SIZE: usize = 512;
 
 pin_project! {
     /// Defragment the frame set packet from stream [`UdpFramed`]. Enable external consumption of
     /// continuous frame set packets.
-    pub(super) struct DeFragment<F> {
+    pub(crate) struct DeFragment<F> {
         #[pin]
         frame: F,
         // limit the max size of a parted frames set, 0 means no limit
         // it will abort the split frame if the parted_size reaches limit.
         limit_size: u32,
-        // limit the max count of all parted frames sets from an address
-        // it might cause client resending frames if the limit is reached.
-        limit_parted: usize,
-        parts: DeFragmentMap,
+        // reassemble parts helper. [`LruCache`] used to protect from causing OOM due to malicious
+        // users sending a large number of parted IDs.
+        parts: LruCache<u16, PriorityQueue<Frame<BytesMut>, Reverse<u32>>>,
+        buffer: VecDeque<FrameSet<Bytes>>,
     }
 }
 
@@ -47,17 +40,17 @@ impl<F> DeFragmented for F {
         DeFragment {
             frame: self,
             limit_size,
-            limit_parted,
-            parts: HashMap::new(),
+            parts: LruCache::new(NonZeroUsize::new(limit_parted).expect("limit_parted > 0")),
+            buffer: VecDeque::with_capacity(DEFAULT_DEFRAGMENT_BUF_SIZE),
         }
     }
 }
 
 impl<F> Stream for DeFragment<F>
 where
-    F: Stream<Item = Result<(Packet<BytesMut>, SocketAddr), CodecError>>,
+    F: Stream<Item = Result<connected::Packet<BytesMut>, CodecError>>,
 {
-    type Item = Result<(Packet<Bytes>, SocketAddr), CodecError>;
+    type Item = Result<connected::Packet<Bytes>, CodecError>;
 
     // TODO
     // Splitted frames in a FrameSet are usually ordered, so use Vec instead of PriorityQueue
@@ -66,17 +59,19 @@ where
         let mut this = self.project();
 
         loop {
-            let (packet, addr) = match this.frame.as_mut().poll_packet(cx) {
-                Ok(v) => v,
-                Err(poll) => return poll,
+            // empty buffer
+            while let Some(pack) = this.buffer.pop_front() {
+                return Poll::Ready(Some(Ok(connected::Packet::FrameSet(pack))));
+            }
+
+            let Some(packet) = ready!(this.frame.poll_next_unpin(cx)?) else {
+                return Poll::Ready(None);
             };
 
-            let Packet::Connected(connected::Packet::FrameSet(frame_set)) = packet else {
-                return Poll::Ready(Some(Ok((packet.freeze(), addr))));
+            let connected::Packet::FrameSet(frame_set) = packet else {
+                return Poll::Ready(Some(Ok(packet.freeze())));
             };
 
-            let mut frames = None;
-            let frames_len = frame_set.frames.len();
             for frame in frame_set.frames {
                 if let Some(Fragment {
                     parted_size,
@@ -97,13 +92,8 @@ where
                             parted_size, *this.limit_size
                         )))));
                     }
-                    let parts = this.parts.entry(addr).or_insert_with(|| {
-                        LruCache::new(
-                            NonZeroUsize::new(*this.limit_parted).expect("limit_parted > 0"),
-                        )
-                    });
-                    let frames_queue = parts.get_or_insert_mut(parted_id, || {
-                        debug!("new parted_id {parted_id} from {addr}");
+
+                    let frames_queue = this.parts.get_or_insert_mut(parted_id, || {
                         // init the PriorityQueue with the capacity defined by user.
                         PriorityQueue::with_capacity(parted_size as usize)
                     });
@@ -114,7 +104,8 @@ where
                     // parted_index is always less than parted_size, frames_queue length
                     // reaches parted_size and frame is hashed by parted_index, so here we
                     // get the complete frames vector
-                    let acc_frame: Frame<BytesMut> = parts
+                    let acc_frame: Frame<Bytes> = this
+                        .parts
                         .pop(&parted_id)
                         .unwrap_or_else(|| {
                             unreachable!("parted_id {parted_id} should be set before")
@@ -127,81 +118,44 @@ where
                             acc.reassembled();
                             acc
                         })
-                        .expect("there is at least one frame");
-                    frames
-                        .get_or_insert_with(|| Vec::with_capacity(frames_len))
-                        .push(acc_frame.freeze());
+                        .expect("there is at least one frame")
+                        .freeze();
+
+                    // TODO: optimize vec![]
+                    this.buffer.push_back(FrameSet {
+                        seq_num: frame_set.seq_num,
+                        frames: vec![acc_frame],
+                    });
                     continue;
                 }
-                frames
-                    .get_or_insert_with(|| Vec::with_capacity(frames_len))
-                    .push(frame.freeze());
-            }
-            if let Some(frames) = frames {
-                return Poll::Ready(Some(Ok((
-                    Packet::Connected(connected::Packet::FrameSet(connected::FrameSet {
-                        frames,
-                        ..frame_set
-                    })),
-                    addr,
-                ))));
+                this.buffer.push_back(FrameSet {
+                    seq_num: frame_set.seq_num,
+                    frames: vec![frame.freeze()],
+                });
             }
         }
     }
 }
 
-impl<F, B: Buf> Sink<(Packet<B>, SocketAddr)> for DeFragment<F>
-where
-    F: Sink<(Packet<B>, SocketAddr), Error = CodecError>,
-{
-    type Error = CodecError;
-
-    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.project().frame.poll_ready(cx)
-    }
-
-    fn start_send(
-        self: Pin<&mut Self>,
-        (packet, addr): (Packet<B>, SocketAddr),
-    ) -> Result<(), Self::Error> {
-        let this = self.project();
-        if let Packet::Connected(connected::Packet::FrameSet(frame_set)) = &packet {
-            if frame_set.first_pack_type() == PackType::DisconnectNotification {
-                debug!("disconnect from {}, clean it's frame parts buffer", addr);
-                this.parts.remove(&addr);
-            }
-        };
-        this.frame.start_send((packet, addr))
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.project().frame.poll_flush(cx)
-    }
-
-    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.project().frame.poll_close(cx)
-    }
-}
-
 #[cfg(test)]
 mod test {
-    use std::collections::HashMap;
-    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    use std::collections::VecDeque;
+    use std::num::NonZeroUsize;
 
     use bytes::BytesMut;
     use futures::StreamExt;
     use futures_async_stream::stream;
+    use lru::LruCache;
     use rand::seq::SliceRandom;
 
     use super::DeFragment;
     use crate::errors::CodecError;
     use crate::packet::connected::{self, Flags, Fragment, Frame, FrameSet, Uint24le};
-    use crate::packet::Packet;
 
     fn frame_set<'a, T: AsRef<str> + 'a>(
         idx: impl IntoIterator<Item = &'a (u32, u16, u32, T)>,
-    ) -> Packet<BytesMut> {
-        Packet::Connected(connected::Packet::FrameSet(FrameSet {
+    ) -> connected::Packet<BytesMut> {
+        connected::Packet::FrameSet(FrameSet {
             seq_num: Uint24le(0),
             frames: idx
                 .into_iter()
@@ -218,11 +172,13 @@ mod test {
                     body: BytesMut::from(body.as_ref()),
                 })
                 .collect(),
-        }))
+        })
     }
 
-    fn no_frag_frame_set<'a>(bodies: impl IntoIterator<Item = &'a str>) -> Packet<BytesMut> {
-        Packet::Connected(connected::Packet::FrameSet(FrameSet {
+    fn no_frag_frame_set<'a>(
+        bodies: impl IntoIterator<Item = &'a str>,
+    ) -> connected::Packet<BytesMut> {
+        connected::Packet::FrameSet(FrameSet {
             seq_num: Uint24le(0),
             frames: bodies
                 .into_iter()
@@ -235,39 +191,21 @@ mod test {
                     body: BytesMut::from(body),
                 })
                 .collect(),
-        }))
+        })
     }
 
     #[tokio::test]
     async fn test_defragment_works() {
-        let addr1 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
-        let addr2 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
-
         let frame = {
             #[stream]
             async {
-                yield (
-                    frame_set([
-                        &(5, 7, 0, "h"),
-                        &(5, 7, 3, "p"),
-                        &(5, 7, 4, "y"),
-                        &(5, 6, 4, "k"),
-                    ]),
-                    addr1,
-                );
-                yield (
-                    frame_set([&(5, 11, 0, "f"), &(5, 11, 3, "n"), &(5, 11, 4, "y")]),
-                    addr2,
-                );
-
-                yield (
-                    frame_set([&(5, 7, 2, "p"), &(5, 7, 1, "a"), &(5, 7, 4, "y")]),
-                    addr1,
-                );
-                yield (
-                    frame_set([&(5, 11, 2, "n"), &(5, 11, 1, "u"), &(5, 11, 0, "f")]),
-                    addr2,
-                );
+                yield frame_set([
+                    &(5, 7, 0, "h"),
+                    &(5, 7, 3, "p"),
+                    &(5, 7, 4, "y"),
+                    &(5, 6, 4, "k"),
+                ]);
+                yield frame_set([&(5, 7, 2, "p"), &(5, 7, 1, "a"), &(5, 7, 4, "y")]);
             }
         };
 
@@ -275,57 +213,36 @@ mod test {
         let mut frag = DeFragment {
             frame: frame.map(Ok),
             limit_size: 0,
-            limit_parted: 512,
-            parts: HashMap::new(),
+            parts: LruCache::new(NonZeroUsize::new(512).expect("limit_parted > 0")),
+            buffer: VecDeque::new(),
         };
 
-        {
-            let (set, addr) = frag.next().await.unwrap().unwrap();
-            assert_eq!(addr, addr1);
+        let set = frag.next().await.unwrap().unwrap();
+        let connected::Packet::FrameSet(set) = set else {
+            panic!("should be a frameset")
+        };
 
-            let Packet::Connected(connected::Packet::FrameSet(set)) = set else {
-                panic!("should be a frameset")
-            };
+        // frames should be merged
+        assert_eq!(set.frames.len(), 1);
+        assert_eq!(
+            String::from_utf8(set.frames[0].body.to_vec()).unwrap(),
+            "happy"
+        );
+        // wiped
+        assert!(!set.frames[0].flags.parted());
+        assert!(set.frames[0].fragment.is_none());
 
-            // frames should be merged
-            assert_eq!(set.frames.len(), 1);
-            assert_eq!(
-                String::from_utf8(set.frames[0].body.to_vec()).unwrap(),
-                "happy"
-            );
-            // wiped
-            assert!(set.frames[0].fragment.is_none());
-        }
-
-        {
-            let (set, addr) = frag.next().await.unwrap().unwrap();
-            assert_eq!(addr, addr2);
-
-            let Packet::Connected(connected::Packet::FrameSet(set)) = set else {
-                panic!("should be a frameset")
-            };
-            assert_eq!(set.frames.len(), 1);
-            assert_eq!(
-                String::from_utf8(set.frames[0].body.to_vec()).unwrap(),
-                "funny"
-            );
-            // wiped
-            assert!(set.frames[0].fragment.is_none());
-        }
-
-        // could only be polled twice
+        // could only be polled once
         assert!(frag.next().await.is_none());
     }
 
     #[tokio::test]
     async fn test_defragment_bad_parted_index() {
-        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
-
         let frame = {
             #[stream]
             async {
-                yield (frame_set([&(10, 7, 10, "h")]), addr);
-                yield (frame_set([&(22, 7, 6, "h")]), addr);
+                yield frame_set([&(10, 7, 10, "h")]);
+                yield frame_set([&(22, 7, 6, "h")]);
             }
         };
 
@@ -333,8 +250,8 @@ mod test {
         let mut frag = DeFragment {
             frame: frame.map(Ok),
             limit_size: 20,
-            limit_parted: 512,
-            parts: HashMap::new(),
+            parts: LruCache::new(NonZeroUsize::new(512).expect("limit_parted > 0")),
+            buffer: VecDeque::new(),
         };
 
         assert!(matches!(
@@ -352,19 +269,17 @@ mod test {
 
     #[tokio::test]
     async fn test_defragment_lru_dropped() {
-        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
-
         let frame = {
             #[stream]
             async {
-                yield (frame_set([&(3, 0, 0, "0")]), addr);
-                yield (frame_set([&(3, 1, 0, "0")]), addr);
-                yield (frame_set([&(3, 2, 0, "0")]), addr); // 3rd one will motivate lru to drop 1st one
+                yield frame_set([&(3, 0, 0, "0")]);
+                yield frame_set([&(3, 1, 0, "0")]);
+                yield frame_set([&(3, 2, 0, "0")]); // 3rd one will motivate lru to drop 1st one
 
-                yield (frame_set([&(3, 0, 1, "1")]), addr);
-                yield (frame_set([&(3, 0, 2, "2")]), addr); // cannot collect parted_id 0
+                yield frame_set([&(3, 0, 1, "1")]);
+                yield frame_set([&(3, 0, 2, "2")]); // cannot collect parted_id 0
 
-                yield (frame_set([&(3, 2, 2, "2")]), addr);
+                yield frame_set([&(3, 2, 2, "2")]);
             }
         };
 
@@ -372,38 +287,30 @@ mod test {
         let mut frag = DeFragment {
             frame: frame.map(Ok),
             limit_size: 0,
-            limit_parted: 2,
-            parts: HashMap::new(),
+            parts: LruCache::new(NonZeroUsize::new(2).expect("limit_parted > 0")),
+            buffer: VecDeque::new(),
         };
 
         assert!(frag.next().await.is_none());
-        let lru = frag.parts.get(&addr).unwrap();
-        assert_eq!(lru.len(), 2);
-        assert_eq!(lru.peek(&0).unwrap().len(), 2);
-        assert_eq!(lru.peek(&2).unwrap().len(), 2);
+
+        assert_eq!(frag.parts.len(), 2);
+        assert_eq!(frag.parts.peek(&0).unwrap().len(), 2);
+        assert_eq!(frag.parts.peek(&2).unwrap().len(), 2);
     }
 
     #[tokio::test]
     async fn test_defragment_mixed() {
-        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
-
         let frame = {
             #[stream]
             async {
-                yield (
-                    frame_set([
-                        &(5, 7, 0, "h"),
-                        &(5, 7, 3, "p"),
-                        &(5, 7, 4, "y"),
-                        &(5, 6, 4, "k"),
-                    ]),
-                    addr,
-                );
-                yield (no_frag_frame_set(["funny"]), addr);
-                yield (
-                    frame_set([&(5, 7, 2, "p"), &(5, 7, 1, "a"), &(5, 7, 4, "y")]),
-                    addr,
-                );
+                yield frame_set([
+                    &(5, 7, 0, "h"),
+                    &(5, 7, 3, "p"),
+                    &(5, 7, 4, "y"),
+                    &(5, 6, 4, "k"),
+                ]);
+                yield no_frag_frame_set(["funny"]);
+                yield frame_set([&(5, 7, 2, "p"), &(5, 7, 1, "a"), &(5, 7, 4, "y")]);
             }
         };
 
@@ -411,13 +318,13 @@ mod test {
         let mut frag = DeFragment {
             frame: frame.map(Ok),
             limit_size: 0,
-            limit_parted: 2,
-            parts: HashMap::new(),
+            parts: LruCache::new(NonZeroUsize::new(2).expect("limit_parted > 0")),
+            buffer: VecDeque::new(),
         };
 
         {
-            let (set, _) = frag.next().await.unwrap().unwrap();
-            let Packet::Connected(connected::Packet::FrameSet(set)) = set else {
+            let set = frag.next().await.unwrap().unwrap();
+            let connected::Packet::FrameSet(set) = set else {
                 panic!("should be a frameset")
             };
             assert_eq!(set.frames.len(), 1);
@@ -428,8 +335,8 @@ mod test {
         }
 
         {
-            let (set, _) = frag.next().await.unwrap().unwrap();
-            let Packet::Connected(connected::Packet::FrameSet(set)) = set else {
+            let set = frag.next().await.unwrap().unwrap();
+            let connected::Packet::FrameSet(set) = set else {
                 panic!("should be a frameset")
             };
             assert_eq!(set.frames.len(), 1);
@@ -441,7 +348,6 @@ mod test {
     }
 
     async fn test_defragment_fuzzing_with_scale(scale: usize) {
-        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
         let mut parted_slice = (0..scale).collect::<Vec<_>>();
         let final_body = parted_slice
             .iter()
@@ -459,7 +365,7 @@ mod test {
                     .collect::<Vec<_>>()
                     .chunks(chunk_size)
                 {
-                    yield (frame_set(chunk), addr);
+                    yield frame_set(chunk);
                 }
             }
         };
@@ -468,12 +374,12 @@ mod test {
         let mut frag = DeFragment {
             frame: frame.map(Ok),
             limit_size: 0,
-            limit_parted: 2,
-            parts: HashMap::new(),
+            parts: LruCache::new(NonZeroUsize::new(1).expect("limit_parted > 0")),
+            buffer: VecDeque::new(),
         };
 
-        let (set, _) = frag.next().await.unwrap().unwrap();
-        let Packet::Connected(connected::Packet::FrameSet(set)) = set else {
+        let set = frag.next().await.unwrap().unwrap();
+        let connected::Packet::FrameSet(set) = set else {
             panic!("should be a frameset")
         };
         assert_eq!(set.frames.len(), 1);

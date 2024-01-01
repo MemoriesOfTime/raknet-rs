@@ -1,28 +1,35 @@
-use std::alloc::System;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use bytes::{Buf, Bytes};
 use futures::{ready, Stream, StreamExt};
 use pin_project_lite::pin_project;
 
-use super::offline::Peer;
-use crate::packet::connected::FrameBody;
-use crate::packet::{connected, PackType};
+use crate::packet::connected::{self, FrameBody};
+use crate::Peer;
 
 pin_project! {
-    struct OnlineHandShake<F> {
+    struct HandShake<F> {
         #[pin]
         frame: F,
     }
 }
 
-impl<F> Stream for OnlineHandShake<F>
+pub(super) trait HandShaking: Sized {
+    fn handshaking(self) -> HandShake<Self>;
+}
+
+impl<F> HandShaking for F {
+    fn handshaking(self) -> HandShake<Self> {
+        HandShake { frame: self }
+    }
+}
+
+impl<F> Stream for HandShake<F>
 where
-    F: Stream<Item = (connected::Packet<Bytes>, Peer)>,
+    F: Stream<Item = (connected::Packet<FrameBody>, Peer)>,
 {
-    type Item = (connected::Packet<Bytes>, Peer);
+    type Item = (connected::Packet<FrameBody>, Peer);
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
@@ -33,12 +40,11 @@ where
             return Poll::Ready(Some((packet, peer)));
         };
         for frame in frame_set.frames {
-            let body = FrameBody::read(frame.body).expect("TODO");
             let timestamp = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_millis();
-            match body {
+            match frame.body {
                 FrameBody::ConnectedPing { client_timestamp } => {
                     let pong = FrameBody::ConnectedPong {
                         client_timestamp,

@@ -36,6 +36,7 @@
     clippy::wildcard_imports
 )]
 #![feature(impl_trait_in_assoc_type)]
+#![feature(type_alias_impl_trait)]
 #![feature(ip_bits)]
 #![feature(exclusive_range_pattern)]
 #![feature(type_changing_struct_update)]
@@ -54,6 +55,8 @@ mod server;
 /// Service
 pub mod service;
 
-#[cfg(feature = "micro-bench")]
-pub use codec::micro_bench::*;
-pub use codec::CodecConfig;
+#[derive(Debug, Clone)]
+struct Peer {
+    addr: std::net::SocketAddr,
+    mtu: u16,
+}
