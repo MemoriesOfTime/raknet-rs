@@ -6,10 +6,9 @@ use futures::{ready, Stream, StreamExt};
 use pin_project_lite::pin_project;
 
 use crate::packet::connected::{self, FrameBody};
-use crate::Peer;
 
 pin_project! {
-    struct HandShake<F> {
+    pub(super) struct HandShake<F> {
         #[pin]
         frame: F,
     }
@@ -27,17 +26,17 @@ impl<F> HandShaking for F {
 
 impl<F> Stream for HandShake<F>
 where
-    F: Stream<Item = (connected::Packet<FrameBody>, Peer)>,
+    F: Stream<Item = connected::Packet<FrameBody>>,
 {
-    type Item = (connected::Packet<FrameBody>, Peer);
+    type Item = connected::Packet<FrameBody>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
-        let Some((packet, peer)) = ready!(this.frame.poll_next_unpin(cx)) else {
+        let Some(packet) = ready!(this.frame.poll_next_unpin(cx)) else {
             return Poll::Ready(None);
         };
         let connected::Packet::FrameSet(frame_set) = packet else {
-            return Poll::Ready(Some((packet, peer)));
+            return Poll::Ready(Some(packet));
         };
         for frame in frame_set.frames {
             let timestamp = SystemTime::now()
@@ -61,7 +60,10 @@ where
                     system_addresses,
                     request_timestamp,
                     accepted_timestamp,
-                } => todo!(),
+                } => {}
+                FrameBody::Disconnect => {
+                    return Poll::Ready(None);
+                }
                 _ => todo!(),
             };
         }

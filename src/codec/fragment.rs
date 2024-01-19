@@ -60,7 +60,7 @@ where
 
         loop {
             // empty buffer
-            while let Some(pack) = this.buffer.pop_front() {
+            if let Some(pack) = this.buffer.pop_front() {
                 return Poll::Ready(Some(Ok(connected::Packet::FrameSet(pack))));
             }
 
@@ -121,7 +121,7 @@ where
                         .expect("there is at least one frame")
                         .freeze();
 
-                    // TODO: optimize vec![]
+                    // TODO: optimize vec![] to single frame set
                     this.buffer.push_back(FrameSet {
                         seq_num: frame_set.seq_num,
                         frames: vec![acc_frame],

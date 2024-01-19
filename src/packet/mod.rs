@@ -3,9 +3,8 @@ pub(crate) mod unconnected;
 
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, BytesMut};
 
-use self::connected::{Frame, FrameSet};
 use crate::errors::CodecError;
 
 #[macro_export]

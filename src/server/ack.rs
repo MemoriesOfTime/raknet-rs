@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::os::unix::net::SocketAddr;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -7,13 +6,13 @@ use bytes::Bytes;
 use futures::{ready, Stream, StreamExt};
 use pin_project_lite::pin_project;
 
-use crate::packet::connected::{self, AckOrNack, FrameSet};
+use crate::packet::connected::{self, AckOrNack, FrameBody, FrameSet};
 
 pin_project! {
-    struct AckHandler<F> {
+    pub(super) struct AckHandler<F> {
         #[pin]
         frame: F,
-        resending: HashMap<u32, FrameSet<Bytes>>
+        resending: HashMap<u32, FrameSet<FrameBody>>
     }
 }
 
@@ -31,23 +30,30 @@ impl<F> AckHandler<F> {
     }
 }
 
+pub(super) trait Acknowledge: Sized {
+    fn ack(self) -> AckHandler<Self>;
+}
+
+impl<F> Acknowledge for F {
+    fn ack(self) -> AckHandler<Self> {
+        AckHandler {
+            frame: self,
+            resending: HashMap::new(),
+        }
+    }
+}
+
 impl<F> Stream for AckHandler<F>
 where
-    F: Stream<Item = (connected::Packet<Bytes>, SocketAddr)>,
+    F: Stream<Item = connected::Packet<FrameBody>>,
 {
-    type Item = (FrameSet<Bytes>, SocketAddr);
+    type Item = Bytes;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
-        let Some((pack, addr)) = ready!(this.frame.poll_next_unpin(cx)) else {
+        let Some(pack) = ready!(this.frame.poll_next_unpin(cx)) else {
             return Poll::Ready(None);
         };
-        let (ack, is_nack) = match pack {
-            connected::Packet::FrameSet(frame_set) => return Poll::Ready(Some((frame_set, addr))),
-            connected::Packet::Ack(a) => (a, false),
-            connected::Packet::Nack(na) => (na, true),
-        };
-
         todo!()
     }
 }

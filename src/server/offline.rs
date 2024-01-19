@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::num::NonZeroUsize;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use futures::{ready, FutureExt, Sink, SinkExt, Stream};
 use pin_project_lite::pin_project;
 use tracing::{debug, error, warn};
@@ -11,6 +12,23 @@ use tracing::{debug, error, warn};
 use crate::errors::CodecError;
 use crate::packet::{connected, unconnected, PackType, Packet};
 use crate::Peer;
+
+pub(super) trait HandleOffline: Sized {
+    fn handle_offline(self, config: Config) -> OfflineHandler<Self>;
+}
+
+impl<F> HandleOffline for F {
+    fn handle_offline(self, config: Config) -> OfflineHandler<Self> {
+        OfflineHandler {
+            frame: self,
+            pending: lru::LruCache::new(
+                NonZeroUsize::new(config.max_pending).expect("max_pending > 0"),
+            ),
+            config,
+            connected: HashMap::new(),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(super) struct Config {
@@ -20,11 +38,12 @@ pub(super) struct Config {
     max_mtu: u16,
     // Supported raknet versions, sorted
     support_version: Vec<u8>,
+    max_pending: usize,
 }
 
 pin_project! {
     /// OfflineHandler takes the codec frame and perform offline handshake.
-    struct OfflineHandler<F> {
+    pub(super) struct OfflineHandler<F> {
         #[pin]
         frame: F,
         config: Config,
@@ -62,10 +81,10 @@ where
 
 impl<F> Stream for OfflineHandler<F>
 where
-    F: Stream<Item = (Packet<Bytes>, SocketAddr)>
+    F: Stream<Item = (Packet<BytesMut>, SocketAddr)>
         + Sink<(Packet<Bytes>, SocketAddr), Error = CodecError>,
 {
-    type Item = (connected::Packet<Bytes>, Peer);
+    type Item = (connected::Packet<BytesMut>, Peer);
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();

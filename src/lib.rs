@@ -44,14 +44,22 @@
 
 /// Protocol codec
 mod codec;
+
 /// Errors
 mod errors;
+
 /// Protocol packet
 mod packet;
+
+/// Utils
+mod utils;
+
 /// Runtime
 pub mod rt;
+
 /// Raknet server
-mod server;
+pub mod server;
+
 /// Service
 pub mod service;
 

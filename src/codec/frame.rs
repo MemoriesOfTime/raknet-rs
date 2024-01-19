@@ -9,7 +9,7 @@ use crate::errors::CodecError;
 use crate::packet::connected::{self, Frame, FrameBody, FrameSet};
 
 pin_project! {
-    struct FrameDecoder<F> {
+    pub(crate) struct FrameDecoder<F> {
         #[pin]
         frame: F
     }

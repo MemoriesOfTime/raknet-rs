@@ -3,15 +3,15 @@ mod fragment;
 mod frame;
 mod ordered;
 
+use std::borrow::Borrow;
 use std::net::SocketAddr;
-use std::pin::Pin;
-use std::task::{Context, Poll};
 
 use bytes::{Buf, Bytes, BytesMut};
 use derive_builder::Builder;
-use futures::{ready, Stream};
-use pin_project_lite::pin_project;
+use futures::{Sink, Stream, StreamExt};
+use tokio::net::UdpSocket;
 use tokio_util::codec::{Decoder, Encoder};
+use tokio_util::udp::UdpFramed;
 use tracing::{debug, trace};
 
 use self::frame::FrameDecoded;
@@ -21,10 +21,11 @@ use crate::codec::fragment::DeFragmented;
 use crate::errors::CodecError;
 use crate::packet::connected::FrameBody;
 use crate::packet::{connected, Packet};
+use crate::utils::Logged;
 
 /// Codec config
 #[derive(Clone, Copy, Debug, Builder)]
-pub struct CodecConfig {
+pub struct Config {
     /// Limit the max size of a parted frames set, 0 means no limit
     /// It will abort the split frame if the parted_size reaches limit.
     /// Enable it to avoid DoS attack.
@@ -42,7 +43,7 @@ pub struct CodecConfig {
     max_dedup_gap: usize,
 }
 
-impl Default for CodecConfig {
+impl Default for Config {
     fn default() -> Self {
         // recommend configuration
         Self {
@@ -55,79 +56,27 @@ impl Default for CodecConfig {
 }
 
 pub(crate) trait Decoded {
-    fn decoded(
-        self,
-        addr: SocketAddr,
-        config: CodecConfig,
-    ) -> impl Stream<Item = connected::Packet<FrameBody>>;
+    fn decoded(self, config: Config) -> impl Stream<Item = connected::Packet<FrameBody>>;
 }
 
 impl<F> Decoded for F
 where
-    F: Stream<Item = Result<connected::Packet<BytesMut>, CodecError>>,
+    F: Stream<Item = connected::Packet<BytesMut>>,
 {
-    fn decoded(
-        self,
-        addr: SocketAddr,
-        config: CodecConfig,
-    ) -> impl Stream<Item = connected::Packet<FrameBody>> {
-        self.deduplicated(config.max_dedup_gap)
+    fn decoded(self, config: Config) -> impl Stream<Item = connected::Packet<FrameBody>> {
+        fn ok_f(pack: &connected::Packet<FrameBody>) {
+            trace!("[decoder] received packet: {:?}", pack.pack_type());
+        }
+        fn err_f(err: CodecError) {
+            debug!("[decoder] got codec error: {err} when decode packet");
+        }
+
+        self.map(Ok)
+            .deduplicated(config.max_dedup_gap)
             .defragmented(config.max_parted_size, config.max_parted_count)
             .ordered(config.max_channels)
             .frame_decoded()
-            .logged(addr)
-    }
-}
-
-pin_project! {
-    /// Log the error of the packet codec while reading.
-    /// We probably don't care about the codec error while decoding request packets.
-    struct Log<F> {
-        #[pin]
-        frame: F,
-        addr: SocketAddr,
-    }
-}
-
-pub(crate) trait Logged: Sized {
-    fn logged(self, addr: SocketAddr) -> Log<Self>;
-}
-
-impl<F> Logged for F {
-    fn logged(self, addr: SocketAddr) -> Log<Self> {
-        Log { frame: self, addr }
-    }
-}
-
-impl<F, B> Stream for Log<F>
-where
-    F: Stream<Item = Result<connected::Packet<B>, CodecError>>,
-{
-    type Item = connected::Packet<B>;
-
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let mut this = self.project();
-        loop {
-            let Some(res) = ready!(this.frame.as_mut().poll_next(cx)) else {
-                return Poll::Ready(None);
-            };
-            let packet = match res {
-                Ok(packet) => packet,
-                Err(err) => {
-                    debug!(
-                        "raknet codec error: {err} from {}, ignore this packet",
-                        this.addr
-                    );
-                    continue;
-                }
-            };
-            trace!(
-                "received packet: {:?} from {}",
-                packet.pack_type(),
-                this.addr
-            );
-            return Poll::Ready(Some(packet));
-        }
+            .logged_all(ok_f, err_f)
     }
 }
 
@@ -150,5 +99,24 @@ impl Decoder for Codec {
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         Packet::read(src)
+    }
+}
+
+pub(crate) trait Framed {
+    fn framed(
+        self,
+    ) -> impl Stream<Item = (Packet<BytesMut>, SocketAddr)>
+           + Sink<(Packet<Bytes>, SocketAddr), Error = CodecError>;
+}
+
+impl<B: Borrow<UdpSocket>> Framed for B {
+    fn framed(
+        self,
+    ) -> impl Stream<Item = (Packet<BytesMut>, SocketAddr)>
+           + Sink<(Packet<Bytes>, SocketAddr), Error = CodecError> {
+        fn err_f(err: CodecError) {
+            debug!("[frame] got codec error: {err} when decode packet");
+        }
+        UdpFramed::new(self, Codec).logged_err(err_f)
     }
 }
