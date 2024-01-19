@@ -10,7 +10,7 @@ use pin_project_lite::pin_project;
 use tracing::{debug, error, warn};
 
 use crate::errors::CodecError;
-use crate::packet::{connected, unconnected, PackType, Packet};
+use crate::packet::{connected, unconnected, Packet};
 use crate::Peer;
 
 pub(super) trait HandleOffline: Sized {
@@ -49,6 +49,13 @@ pin_project! {
         config: Config,
         pending: lru::LruCache<SocketAddr, u8>,
         connected: HashMap<SocketAddr, Peer>,
+    }
+}
+
+impl<F> OfflineHandler<F> {
+    pub(super) fn disconnect(&mut self, addr: &SocketAddr) {
+        self.pending.pop(addr);
+        self.connected.remove(addr);
     }
 }
 
@@ -191,39 +198,5 @@ where
                 }
             };
         }
-    }
-}
-
-impl<F> Sink<(Packet<Bytes>, SocketAddr)> for OfflineHandler<F>
-where
-    F: Sink<(Packet<Bytes>, SocketAddr), Error = CodecError>,
-{
-    type Error = CodecError;
-
-    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.project().frame.poll_ready(cx)
-    }
-
-    fn start_send(
-        self: Pin<&mut Self>,
-        (packet, addr): (Packet<Bytes>, SocketAddr),
-    ) -> Result<(), Self::Error> {
-        let this = self.project();
-        if let Packet::Connected(connected::Packet::FrameSet(frame_set)) = &packet {
-            if frame_set.first_pack_type() == PackType::DisconnectNotification {
-                debug!("disconnect from {}, clean it's frame parts buffer", addr);
-                this.connected.remove(&addr);
-                this.pending.pop(&addr);
-            }
-        };
-        this.frame.start_send((packet, addr))
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.project().frame.poll_flush(cx)
-    }
-
-    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.project().frame.poll_close(cx)
     }
 }

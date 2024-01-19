@@ -9,36 +9,62 @@ use flume::r#async::SendSink;
 use futures::{ready, FutureExt, Sink, SinkExt, Stream, StreamExt};
 use pin_project_lite::pin_project;
 use tokio::net::UdpSocket;
-use tracing::error;
+use tokio_util::udp::UdpFramed;
+use tracing::{debug, error};
 
 use super::ack::Acknowledge;
 use super::handshake::HandShaking;
 use super::offline::{self, HandleOffline};
 use super::IO;
-use crate::codec::{self, Decoded, Framed};
+use crate::codec::{self, Codec, Decoded};
 use crate::errors::{CodecError, Error};
 use crate::packet::{connected, Packet};
+use crate::utils::{Log, Logged};
 
-struct Config {
-    offline: offline::Config,
-    codec: codec::Config,
-}
+type OfflineHandler = offline::OfflineHandler<
+    Log<UdpFramed<Codec, Arc<UdpSocket>>, (Packet<BytesMut>, SocketAddr), CodecError>,
+>;
 
 struct Incoming {
+    offline: OfflineHandler,
     socket: Arc<UdpSocket>,
-    config: Config,
+    codec_config: codec::Config,
     router: HashMap<SocketAddr, SendSink<'static, connected::Packet<BytesMut>>>,
+}
+
+impl Incoming {
+    fn new(
+        socket: UdpSocket,
+        offline_config: offline::Config,
+        codec_config: codec::Config,
+    ) -> Self {
+        fn err_f(err: CodecError) {
+            debug!("[frame] got codec error: {err} when decode frames");
+        }
+
+        let socket = Arc::new(socket);
+        Self {
+            offline: UdpFramed::new(Arc::clone(&socket), Codec)
+                .logged_err(err_f)
+                .handle_offline(offline_config),
+            socket,
+            codec_config,
+            router: HashMap::new(),
+        }
+    }
+
+    fn disconnect(&mut self, addr: &SocketAddr) {
+        self.router.remove(addr);
+        self.offline.disconnect(addr);
+    }
 }
 
 impl Stream for Incoming {
     type Item = IO;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let mut frame = Arc::clone(&self.socket)
-            .framed()
-            .handle_offline(self.config.offline.clone());
         loop {
-            let Some((pack, peer)) = ready!(frame.poll_next_unpin(cx)) else {
+            let Some((pack, peer)) = ready!(self.offline.poll_next_unpin(cx)) else {
                 return Poll::Ready(None);
             };
             if let Some(router_tx) = self.router.get_mut(&peer.addr) {
@@ -52,10 +78,10 @@ impl Stream for Incoming {
             self.router.insert(peer.addr, router_tx.into_sink());
 
             let io = IOImpl {
-                output: frame,
+                output: UdpFramed::new(Arc::clone(&self.socket), Codec),
                 input: router_rx
                     .into_stream()
-                    .decoded(self.config.codec)
+                    .decoded(self.codec_config)
                     .handshaking()
                     .ack(),
             };

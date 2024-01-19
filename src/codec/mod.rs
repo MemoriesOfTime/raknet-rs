@@ -3,15 +3,10 @@ mod fragment;
 mod frame;
 mod ordered;
 
-use std::borrow::Borrow;
-use std::net::SocketAddr;
-
-use bytes::{Buf, Bytes, BytesMut};
+use bytes::{Buf, BytesMut};
 use derive_builder::Builder;
-use futures::{Sink, Stream, StreamExt};
-use tokio::net::UdpSocket;
+use futures::{Stream, StreamExt};
 use tokio_util::codec::{Decoder, Encoder};
-use tokio_util::udp::UdpFramed;
 use tracing::{debug, trace};
 
 use self::frame::FrameDecoded;
@@ -99,24 +94,5 @@ impl Decoder for Codec {
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         Packet::read(src)
-    }
-}
-
-pub(crate) trait Framed {
-    fn framed(
-        self,
-    ) -> impl Stream<Item = (Packet<BytesMut>, SocketAddr)>
-           + Sink<(Packet<Bytes>, SocketAddr), Error = CodecError>;
-}
-
-impl<B: Borrow<UdpSocket>> Framed for B {
-    fn framed(
-        self,
-    ) -> impl Stream<Item = (Packet<BytesMut>, SocketAddr)>
-           + Sink<(Packet<Bytes>, SocketAddr), Error = CodecError> {
-        fn err_f(err: CodecError) {
-            debug!("[frame] got codec error: {err} when decode packet");
-        }
-        UdpFramed::new(self, Codec).logged_err(err_f)
     }
 }
