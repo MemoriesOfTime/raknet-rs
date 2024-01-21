@@ -1,5 +1,4 @@
 mod decoder;
-mod encoder;
 
 use bytes::{Buf, BytesMut};
 use derive_builder::Builder;
