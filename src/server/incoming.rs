@@ -21,10 +21,13 @@ use crate::packet::connected::Frames;
 use crate::packet::{connected, Packet};
 use crate::utils::{Log, Logged};
 
+/// Instantiate here to avoid some strange generic issues.
 type OfflineHandler = offline::OfflineHandler<
     Log<UdpFramed<Codec, Arc<UdpSocket>>, (Packet<Frames<BytesMut>>, SocketAddr), CodecError>,
 >;
 
+/// An async iterator that infinitely accepts connections from raknet clients, And forward UDP
+/// packets collected by the underlying layer to different connections.
 struct Incoming {
     offline: OfflineHandler,
     socket: Arc<UdpSocket>,
@@ -78,6 +81,7 @@ impl Stream for Incoming {
             self.router.insert(peer.addr, router_tx.into_sink());
 
             let io = IOImpl {
+                // TODO: implement encoder to make it Sink<Bytes>
                 output: UdpFramed::new(Arc::clone(&self.socket), Codec),
                 input: router_rx
                     .into_stream()
@@ -91,6 +95,7 @@ impl Stream for Incoming {
 }
 
 pin_project! {
+    /// The detailed implementation of [`IO`]connections
     struct IOImpl<I, O> {
         #[pin]
         input: I,

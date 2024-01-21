@@ -18,7 +18,10 @@ pub(super) trait HandleOffline: Sized {
     fn handle_offline(self, config: Config) -> OfflineHandler<Self>;
 }
 
-impl<F> HandleOffline for F {
+impl<F> HandleOffline for F
+where
+    F: Sink<(Packet<Frames<Bytes>>, SocketAddr), Error = CodecError>,
+{
     fn handle_offline(self, config: Config) -> OfflineHandler<Self> {
         OfflineHandler {
             frame: self,
