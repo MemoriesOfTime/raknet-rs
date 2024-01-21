@@ -12,13 +12,13 @@ env:
   SCCACHE_GHA_ENABLED: "on"
 
 jobs:
-  build:
+  check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
       - uses: taiki-e/install-action@cargo-binstall
 
-      - name: Install Deps
+      - name: Install Dependencies
         run: |
           rustup component add rustfmt llvm-tools-preview clippy
           cargo binstall -y --no-symlinks cargo-llvm-cov cargo-nextest cargo-sort cargo-audit
@@ -33,5 +33,5 @@ jobs:
             core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
             core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
 
-      - name: Test
+      - name: Run Checking
         run: ci/scripts/run-ci-test.sh
