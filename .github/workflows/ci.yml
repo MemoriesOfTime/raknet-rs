@@ -9,6 +9,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: "on"
 
 jobs:
   build:
@@ -24,6 +25,13 @@ jobs:
           wget https://github.com/mozilla/sccache/releases/download/v0.7.5/sccache-v0.7.5-x86_64-unknown-linux-musl.tar.gz
           mkdir sccache-install && tar -xzf sccache-v0.7.5-x86_64-unknown-linux-musl.tar.gz -C sccache-install --strip-components=1
           mv sccache-install/sccache /usr/local/bin && rm -rf sccache-install/
+
+      - name: Configure sccache
+        uses: actions/github-script@v6
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
 
       - name: Test
         run: ci/scripts/run-ci-test.sh
