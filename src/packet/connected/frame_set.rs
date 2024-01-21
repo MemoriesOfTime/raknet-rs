@@ -59,9 +59,7 @@ impl Frame<BytesMut> {
         if !self.flags.parted {
             return;
         }
-        let raw = self.flags.raw;
-        let raw = raw & (PARTED_FLAG.reverse_bits());
-        self.flags.raw = raw;
+        self.flags.raw &= PARTED_FLAG.reverse_bits();
         self.flags.parted = false;
         self.fragment = None;
     }
@@ -161,17 +159,6 @@ impl FrameSet<BytesMut> {
 }
 
 impl<B: Buf> FrameSet<B> {
-    /// Get the inner packet type
-    pub(crate) fn first_pack_type(&self) -> PackType {
-        // len(frames) > 0 and len(chunks()) > 0
-        let packet = &self.frames[0];
-        if packet.fragment.is_some() {
-            panic!("you should not obtain the pack type from a parted packet");
-        }
-        PackType::from_u8(packet.body.chunk()[0])
-            .expect("first frame should have a valid pack type")
-    }
-
     pub(super) fn write(self, buf: &mut BytesMut) {
         self.seq_num.write(buf);
         for frame in self.frames {

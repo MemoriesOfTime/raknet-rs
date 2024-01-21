@@ -1,17 +1,17 @@
 use std::cmp::Reverse;
-use std::collections::VecDeque;
 use std::num::NonZeroUsize;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use bytes::{BufMut, Bytes, BytesMut};
 use futures::{ready, Stream, StreamExt};
+use indexmap::IndexMap;
 use lru::LruCache;
 use pin_project_lite::pin_project;
 use priority_queue::PriorityQueue;
 
 use crate::errors::CodecError;
-use crate::packet::connected::{self, Fragment, Frame, FrameSet};
+use crate::packet::connected::{self, Fragment, Frame, FrameSet, Uint24le};
 
 const DEFAULT_DEFRAGMENT_BUF_SIZE: usize = 512;
 
@@ -27,7 +27,8 @@ pin_project! {
         // reassemble parts helper. [`LruCache`] used to protect from causing OOM due to malicious
         // users sending a large number of parted IDs.
         parts: LruCache<u16, PriorityQueue<Frame<BytesMut>, Reverse<u32>>>,
-        buffer: VecDeque<FrameSet<Bytes>>,
+        // Ordered map seq_num => frames
+        buffer: IndexMap<Uint24le, Vec<Frame<Bytes>>>,
     }
 }
 
@@ -41,7 +42,7 @@ impl<F> DeFragmented for F {
             frame: self,
             limit_size,
             parts: LruCache::new(NonZeroUsize::new(limit_parted).expect("limit_parted > 0")),
-            buffer: VecDeque::with_capacity(DEFAULT_DEFRAGMENT_BUF_SIZE),
+            buffer: IndexMap::with_capacity(DEFAULT_DEFRAGMENT_BUF_SIZE),
         }
     }
 }
@@ -52,24 +53,31 @@ where
 {
     type Item = Result<connected::Packet<Bytes>, CodecError>;
 
-    // TODO
-    // Split frames in a FrameSet are usually ordered, so use Vec instead of PriorityQueue
-    // might be better, we should have a benchmark.
+    // TODO Yield continuous seq_num to outside
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
 
         loop {
             // empty buffer
-            if let Some(pack) = this.buffer.pop_front() {
-                return Poll::Ready(Some(Ok(connected::Packet::FrameSet(pack))));
+            if let Some((seq_num, frames)) = this.buffer.pop() {
+                return Poll::Ready(Some(Ok(connected::Packet::FrameSet(FrameSet {
+                    seq_num,
+                    frames,
+                }))));
             }
 
             let Some(packet) = ready!(this.frame.poll_next_unpin(cx)?) else {
                 return Poll::Ready(None);
             };
 
-            let connected::Packet::FrameSet(frame_set) = packet else {
-                return Poll::Ready(Some(Ok(packet.freeze())));
+            let frame_set = match packet {
+                connected::Packet::FrameSet(frame_set) => frame_set,
+                connected::Packet::Ack(ack) => {
+                    return Poll::Ready(Some(Ok(connected::Packet::Ack(ack))))
+                }
+                connected::Packet::Nack(nack) => {
+                    return Poll::Ready(Some(Ok(connected::Packet::Nack(nack))))
+                }
             };
 
             for frame in frame_set.frames {
@@ -104,7 +112,7 @@ where
                     // parted_index is always less than parted_size, frames_queue length
                     // reaches parted_size and frame is hashed by parted_index, so here we
                     // get the complete frames vector
-                    let acc_frame: Frame<Bytes> = this
+                    let merged_frame: Frame<Bytes> = this
                         .parts
                         .pop(&parted_id)
                         .unwrap_or_else(|| {
@@ -121,17 +129,16 @@ where
                         .expect("there is at least one frame")
                         .freeze();
 
-                    // TODO: optimize vec![] to single frame set
-                    this.buffer.push_back(FrameSet {
-                        seq_num: frame_set.seq_num,
-                        frames: vec![acc_frame],
-                    });
+                    this.buffer
+                        .entry(frame_set.seq_num)
+                        .or_default()
+                        .push(merged_frame);
                     continue;
                 }
-                this.buffer.push_back(FrameSet {
-                    seq_num: frame_set.seq_num,
-                    frames: vec![frame.freeze()],
-                });
+                this.buffer
+                    .entry(frame_set.seq_num)
+                    .or_default()
+                    .push(frame.freeze());
             }
         }
     }
@@ -139,12 +146,12 @@ where
 
 #[cfg(test)]
 mod test {
-    use std::collections::VecDeque;
     use std::num::NonZeroUsize;
 
     use bytes::BytesMut;
     use futures::StreamExt;
     use futures_async_stream::stream;
+    use indexmap::IndexMap;
     use lru::LruCache;
     use rand::seq::SliceRandom;
 
@@ -214,7 +221,7 @@ mod test {
             frame: frame.map(Ok),
             limit_size: 0,
             parts: LruCache::new(NonZeroUsize::new(512).expect("limit_parted > 0")),
-            buffer: VecDeque::new(),
+            buffer: IndexMap::new(),
         };
 
         let set = frag.next().await.unwrap().unwrap();
@@ -251,7 +258,7 @@ mod test {
             frame: frame.map(Ok),
             limit_size: 20,
             parts: LruCache::new(NonZeroUsize::new(512).expect("limit_parted > 0")),
-            buffer: VecDeque::new(),
+            buffer: IndexMap::new(),
         };
 
         assert!(matches!(
@@ -288,7 +295,7 @@ mod test {
             frame: frame.map(Ok),
             limit_size: 0,
             parts: LruCache::new(NonZeroUsize::new(2).expect("limit_parted > 0")),
-            buffer: VecDeque::new(),
+            buffer: IndexMap::new(),
         };
 
         assert!(frag.next().await.is_none());
@@ -319,7 +326,7 @@ mod test {
             frame: frame.map(Ok),
             limit_size: 0,
             parts: LruCache::new(NonZeroUsize::new(2).expect("limit_parted > 0")),
-            buffer: VecDeque::new(),
+            buffer: IndexMap::new(),
         };
 
         {
@@ -375,7 +382,7 @@ mod test {
             frame: frame.map(Ok),
             limit_size: 0,
             parts: LruCache::new(NonZeroUsize::new(1).expect("limit_parted > 0")),
-            buffer: VecDeque::new(),
+            buffer: IndexMap::new(),
         };
 
         let set = frag.next().await.unwrap().unwrap();
