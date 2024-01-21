@@ -15,7 +15,7 @@ pin_project! {
     }
 }
 
-pub(super) trait FrameDecoded: Sized {
+pub(crate) trait FrameDecoded: Sized {
     fn frame_decoded(self) -> FrameDecoder<Self>;
 }
 
