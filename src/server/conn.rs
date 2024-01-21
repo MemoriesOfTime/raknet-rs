@@ -18,4 +18,3 @@ pin_project! {
         peer_addr: SocketAddr,
     }
 }
-

@@ -53,7 +53,7 @@ where
     type Item = Result<connected::Packet<Bytes>, CodecError>;
 
     // TODO
-    // Splitted frames in a FrameSet are usually ordered, so use Vec instead of PriorityQueue
+    // Split frames in a FrameSet are usually ordered, so use Vec instead of PriorityQueue
     // might be better, we should have a benchmark.
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
