@@ -6,7 +6,7 @@ use futures::{ready, Stream, StreamExt};
 use pin_project_lite::pin_project;
 
 use crate::errors::CodecError;
-use crate::packet::connected::{self, Uint24le};
+use crate::packet::connected::{FrameSet, Frames, Uint24le};
 
 const USIZE_BITS: usize = std::mem::size_of::<usize>() * 8;
 const DEFAULT_BIT_VEC_QUEUE_CAP: usize = 256 * USIZE_BITS;
@@ -185,7 +185,10 @@ pub(crate) trait Deduplicated: Sized {
     fn deduplicated(self, max_gap: usize) -> Dedup<Self>;
 }
 
-impl<T> Deduplicated for T {
+impl<F, B> Deduplicated for F
+where
+    F: Stream<Item = Result<FrameSet<Frames<B>>, CodecError>>,
+{
     fn deduplicated(self, max_gap: usize) -> Dedup<Self> {
         Dedup {
             frame: self,
@@ -197,34 +200,31 @@ impl<T> Deduplicated for T {
 
 impl<F, B> Stream for Dedup<F>
 where
-    F: Stream<Item = Result<connected::Packet<B>, CodecError>>,
+    F: Stream<Item = Result<FrameSet<Frames<B>>, CodecError>>,
 {
-    type Item = Result<connected::Packet<B>, CodecError>;
+    type Item = Result<FrameSet<Frames<B>>, CodecError>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
         loop {
-            let Some(packet) = ready!(this.frame.poll_next_unpin(cx)?) else {
+            let Some(mut frame_set) = ready!(this.frame.poll_next_unpin(cx)?) else {
                 return Poll::Ready(None);
             };
 
-            let connected::Packet::FrameSet(mut frame_set) = packet else {
-                return Poll::Ready(Some(Ok(packet)));
-            };
             if *this.max_gap != 0 && this.window.received_status.len() > *this.max_gap {
                 return Poll::Ready(Some(Err(CodecError::DedupExceed(
                     *this.max_gap,
                     this.window.received_status.len(),
                 ))));
             }
-            frame_set.frames.retain(|frame| {
+            frame_set.set.retain(|frame| {
                 let Some(reliable_frame_index) = frame.reliable_frame_index else {
                     return true;
                 };
                 !this.window.duplicate(reliable_frame_index)
             });
-            if !frame_set.frames.is_empty() {
-                return Poll::Ready(Some(Ok(connected::Packet::FrameSet(frame_set))));
+            if !frame_set.set.is_empty() {
+                return Poll::Ready(Some(Ok(frame_set)));
             }
         }
     }
@@ -242,7 +242,7 @@ mod test {
 
     use super::*;
     use crate::errors::CodecError;
-    use crate::packet::connected::{self, Flags, Frame, FrameSet, Uint24le};
+    use crate::packet::connected::{Flags, Frame, FrameSet, Uint24le};
 
     #[test]
     fn test_duplicate_windows_check_ordered() {
@@ -293,10 +293,10 @@ mod test {
         assert_eq!(window.received_status.len(), 0);
     }
 
-    fn frame_set(idx: impl IntoIterator<Item = u32>) -> connected::Packet<Bytes> {
-        connected::Packet::FrameSet(FrameSet {
+    fn frame_set(idx: impl IntoIterator<Item = u32>) -> FrameSet<Frames<Bytes>> {
+        FrameSet {
             seq_num: Uint24le(0),
-            frames: idx
+            set: idx
                 .into_iter()
                 .map(|i| Frame {
                     flags: Flags::parse(0b011_11100),
@@ -307,7 +307,7 @@ mod test {
                     body: Bytes::new(),
                 })
                 .collect(),
-        })
+        }
     }
 
     #[tokio::test]

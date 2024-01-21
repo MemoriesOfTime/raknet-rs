@@ -1,17 +1,17 @@
 use std::cmp::Reverse;
+use std::collections::VecDeque;
 use std::num::NonZeroUsize;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use bytes::{BufMut, Bytes, BytesMut};
 use futures::{ready, Stream, StreamExt};
-use indexmap::IndexMap;
 use lru::LruCache;
 use pin_project_lite::pin_project;
 use priority_queue::PriorityQueue;
 
 use crate::errors::CodecError;
-use crate::packet::connected::{self, Fragment, Frame, FrameSet, Uint24le};
+use crate::packet::connected::{Fragment, Frame, FrameSet, Frames};
 
 const DEFAULT_DEFRAGMENT_BUF_SIZE: usize = 512;
 
@@ -27,8 +27,7 @@ pin_project! {
         // reassemble parts helper. [`LruCache`] used to protect from causing OOM due to malicious
         // users sending a large number of parted IDs.
         parts: LruCache<u16, PriorityQueue<Frame<BytesMut>, Reverse<u32>>>,
-        // Ordered map seq_num => frames
-        buffer: IndexMap<Uint24le, Vec<Frame<Bytes>>>,
+        buffer: VecDeque<FrameSet<Frame<Bytes>>>,
     }
 }
 
@@ -36,22 +35,25 @@ pub(crate) trait DeFragmented: Sized {
     fn defragmented(self, limit_size: u32, limit_parted: usize) -> DeFragment<Self>;
 }
 
-impl<F> DeFragmented for F {
+impl<F> DeFragmented for F
+where
+    F: Stream<Item = Result<FrameSet<Frames<BytesMut>>, CodecError>>,
+{
     fn defragmented(self, limit_size: u32, limit_parted: usize) -> DeFragment<Self> {
         DeFragment {
             frame: self,
             limit_size,
             parts: LruCache::new(NonZeroUsize::new(limit_parted).expect("limit_parted > 0")),
-            buffer: IndexMap::with_capacity(DEFAULT_DEFRAGMENT_BUF_SIZE),
+            buffer: VecDeque::with_capacity(DEFAULT_DEFRAGMENT_BUF_SIZE),
         }
     }
 }
 
 impl<F> Stream for DeFragment<F>
 where
-    F: Stream<Item = Result<connected::Packet<BytesMut>, CodecError>>,
+    F: Stream<Item = Result<FrameSet<Frames<BytesMut>>, CodecError>>,
 {
-    type Item = Result<connected::Packet<Bytes>, CodecError>;
+    type Item = Result<FrameSet<Frame<Bytes>>, CodecError>;
 
     // TODO Yield continuous seq_num to outside
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -59,28 +61,15 @@ where
 
         loop {
             // empty buffer
-            if let Some((seq_num, frames)) = this.buffer.pop() {
-                return Poll::Ready(Some(Ok(connected::Packet::FrameSet(FrameSet {
-                    seq_num,
-                    frames,
-                }))));
+            if let Some(frame_set) = this.buffer.pop_front() {
+                return Poll::Ready(Some(Ok(frame_set)));
             }
 
-            let Some(packet) = ready!(this.frame.poll_next_unpin(cx)?) else {
+            let Some(frame_set) = ready!(this.frame.poll_next_unpin(cx)?) else {
                 return Poll::Ready(None);
             };
 
-            let frame_set = match packet {
-                connected::Packet::FrameSet(frame_set) => frame_set,
-                connected::Packet::Ack(ack) => {
-                    return Poll::Ready(Some(Ok(connected::Packet::Ack(ack))))
-                }
-                connected::Packet::Nack(nack) => {
-                    return Poll::Ready(Some(Ok(connected::Packet::Nack(nack))))
-                }
-            };
-
-            for frame in frame_set.frames {
+            for frame in frame_set.set {
                 if let Some(Fragment {
                     parted_size,
                     parted_id,
@@ -129,16 +118,16 @@ where
                         .expect("there is at least one frame")
                         .freeze();
 
-                    this.buffer
-                        .entry(frame_set.seq_num)
-                        .or_default()
-                        .push(merged_frame);
+                    this.buffer.push_back(FrameSet {
+                        seq_num: frame_set.seq_num,
+                        set: merged_frame,
+                    });
                     continue;
                 }
-                this.buffer
-                    .entry(frame_set.seq_num)
-                    .or_default()
-                    .push(frame.freeze());
+                this.buffer.push_back(FrameSet {
+                    seq_num: frame_set.seq_num,
+                    set: frame.freeze(),
+                });
             }
         }
     }
@@ -146,25 +135,25 @@ where
 
 #[cfg(test)]
 mod test {
+    use std::collections::VecDeque;
     use std::num::NonZeroUsize;
 
     use bytes::BytesMut;
     use futures::StreamExt;
     use futures_async_stream::stream;
-    use indexmap::IndexMap;
     use lru::LruCache;
     use rand::seq::SliceRandom;
 
     use super::DeFragment;
     use crate::errors::CodecError;
-    use crate::packet::connected::{self, Flags, Fragment, Frame, FrameSet, Uint24le};
+    use crate::packet::connected::{Flags, Fragment, Frame, FrameSet, Frames, Uint24le};
 
     fn frame_set<'a, T: AsRef<str> + 'a>(
         idx: impl IntoIterator<Item = &'a (u32, u16, u32, T)>,
-    ) -> connected::Packet<BytesMut> {
-        connected::Packet::FrameSet(FrameSet {
+    ) -> FrameSet<Frames<BytesMut>> {
+        FrameSet {
             seq_num: Uint24le(0),
-            frames: idx
+            set: idx
                 .into_iter()
                 .map(|(parted_size, parted_id, parted_index, body)| Frame {
                     flags: Flags::parse(0b011_11100),
@@ -179,15 +168,15 @@ mod test {
                     body: BytesMut::from(body.as_ref()),
                 })
                 .collect(),
-        })
+        }
     }
 
     fn no_frag_frame_set<'a>(
         bodies: impl IntoIterator<Item = &'a str>,
-    ) -> connected::Packet<BytesMut> {
-        connected::Packet::FrameSet(FrameSet {
+    ) -> FrameSet<Frames<BytesMut>> {
+        FrameSet {
             seq_num: Uint24le(0),
-            frames: bodies
+            set: bodies
                 .into_iter()
                 .map(|body| Frame {
                     flags: Flags::parse(0b011_11100),
@@ -198,7 +187,7 @@ mod test {
                     body: BytesMut::from(body),
                 })
                 .collect(),
-        })
+        }
     }
 
     #[tokio::test]
@@ -221,23 +210,16 @@ mod test {
             frame: frame.map(Ok),
             limit_size: 0,
             parts: LruCache::new(NonZeroUsize::new(512).expect("limit_parted > 0")),
-            buffer: IndexMap::new(),
+            buffer: VecDeque::new(),
         };
 
         let set = frag.next().await.unwrap().unwrap();
-        let connected::Packet::FrameSet(set) = set else {
-            panic!("should be a frameset")
-        };
 
         // frames should be merged
-        assert_eq!(set.frames.len(), 1);
-        assert_eq!(
-            String::from_utf8(set.frames[0].body.to_vec()).unwrap(),
-            "happy"
-        );
+        assert_eq!(String::from_utf8(set.set.body.to_vec()).unwrap(), "happy");
         // wiped
-        assert!(!set.frames[0].flags.parted());
-        assert!(set.frames[0].fragment.is_none());
+        assert!(!set.set.flags.parted());
+        assert!(set.set.fragment.is_none());
 
         // could only be polled once
         assert!(frag.next().await.is_none());
@@ -258,7 +240,7 @@ mod test {
             frame: frame.map(Ok),
             limit_size: 20,
             parts: LruCache::new(NonZeroUsize::new(512).expect("limit_parted > 0")),
-            buffer: IndexMap::new(),
+            buffer: VecDeque::new(),
         };
 
         assert!(matches!(
@@ -295,7 +277,7 @@ mod test {
             frame: frame.map(Ok),
             limit_size: 0,
             parts: LruCache::new(NonZeroUsize::new(2).expect("limit_parted > 0")),
-            buffer: IndexMap::new(),
+            buffer: VecDeque::new(),
         };
 
         assert!(frag.next().await.is_none());
@@ -326,31 +308,17 @@ mod test {
             frame: frame.map(Ok),
             limit_size: 0,
             parts: LruCache::new(NonZeroUsize::new(2).expect("limit_parted > 0")),
-            buffer: IndexMap::new(),
+            buffer: VecDeque::new(),
         };
 
         {
             let set = frag.next().await.unwrap().unwrap();
-            let connected::Packet::FrameSet(set) = set else {
-                panic!("should be a frameset")
-            };
-            assert_eq!(set.frames.len(), 1);
-            assert_eq!(
-                String::from_utf8(set.frames[0].body.to_vec()).unwrap(),
-                "funny"
-            );
+            assert_eq!(String::from_utf8(set.set.body.to_vec()).unwrap(), "funny");
         }
 
         {
             let set = frag.next().await.unwrap().unwrap();
-            let connected::Packet::FrameSet(set) = set else {
-                panic!("should be a frameset")
-            };
-            assert_eq!(set.frames.len(), 1);
-            assert_eq!(
-                String::from_utf8(set.frames[0].body.to_vec()).unwrap(),
-                "happy"
-            );
+            assert_eq!(String::from_utf8(set.set.body.to_vec()).unwrap(), "happy");
         }
     }
 
@@ -382,16 +350,12 @@ mod test {
             frame: frame.map(Ok),
             limit_size: 0,
             parts: LruCache::new(NonZeroUsize::new(1).expect("limit_parted > 0")),
-            buffer: IndexMap::new(),
+            buffer: VecDeque::new(),
         };
 
         let set = frag.next().await.unwrap().unwrap();
-        let connected::Packet::FrameSet(set) = set else {
-            panic!("should be a frameset")
-        };
-        assert_eq!(set.frames.len(), 1);
         assert_eq!(
-            String::from_utf8(set.frames[0].body.to_vec()).unwrap(),
+            String::from_utf8(set.set.body.to_vec()).unwrap(),
             final_body
         );
     }

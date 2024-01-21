@@ -12,24 +12,24 @@ use tokio::net::UdpSocket;
 use tokio_util::udp::UdpFramed;
 use tracing::{debug, error};
 
-use super::ack::Acknowledge;
 use super::handshake::HandShaking;
 use super::offline::{self, HandleOffline};
 use super::IO;
 use crate::codec::{self, Codec, Decoded};
 use crate::errors::{CodecError, Error};
+use crate::packet::connected::Frames;
 use crate::packet::{connected, Packet};
 use crate::utils::{Log, Logged};
 
 type OfflineHandler = offline::OfflineHandler<
-    Log<UdpFramed<Codec, Arc<UdpSocket>>, (Packet<BytesMut>, SocketAddr), CodecError>,
+    Log<UdpFramed<Codec, Arc<UdpSocket>>, (Packet<Frames<BytesMut>>, SocketAddr), CodecError>,
 >;
 
 struct Incoming {
     offline: OfflineHandler,
     socket: Arc<UdpSocket>,
     codec_config: codec::Config,
-    router: HashMap<SocketAddr, SendSink<'static, connected::Packet<BytesMut>>>,
+    router: HashMap<SocketAddr, SendSink<'static, connected::Packet<Frames<BytesMut>>>>,
 }
 
 impl Incoming {
@@ -82,8 +82,7 @@ impl Stream for Incoming {
                 input: router_rx
                     .into_stream()
                     .decoded(self.codec_config)
-                    .handshaking()
-                    .ack(),
+                    .handshaking(),
             };
 
             return Poll::Ready(Some(io));
@@ -113,7 +112,7 @@ where
 
 impl<I, O> Sink<Bytes> for IOImpl<I, O>
 where
-    O: Sink<(Packet<Bytes>, SocketAddr), Error = CodecError>,
+    O: Sink<(Packet<Frames<Bytes>>, SocketAddr), Error = CodecError>,
 {
     type Error = Error;
 

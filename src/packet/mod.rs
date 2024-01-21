@@ -5,6 +5,7 @@ use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
 use bytes::{Buf, BufMut, BytesMut};
 
+use self::connected::{Frame, Frames};
 use crate::errors::CodecError;
 
 #[macro_export]
@@ -131,12 +132,12 @@ impl From<PackType> for u8 {
 
 /// Raknet packet
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) enum Packet<B> {
+pub(crate) enum Packet<S> {
     Unconnected(unconnected::Packet),
-    Connected(connected::Packet<B>),
+    Connected(connected::Packet<S>),
 }
 
-impl<B> Packet<B> {
+impl<S> Packet<S> {
     /// Get the packet type
     pub(crate) fn pack_type(&self) -> PackType {
         match self {
@@ -146,7 +147,7 @@ impl<B> Packet<B> {
     }
 }
 
-impl<B: Buf> Packet<B> {
+impl<B: Buf> Packet<Frames<B>> {
     pub(crate) fn write(self, buf: &mut BytesMut) {
         match self {
             Packet::Unconnected(packet) => {
@@ -159,7 +160,20 @@ impl<B: Buf> Packet<B> {
     }
 }
 
-impl Packet<BytesMut> {
+impl<B: Buf> Packet<Frame<B>> {
+    pub(crate) fn write(self, buf: &mut BytesMut) {
+        match self {
+            Packet::Unconnected(packet) => {
+                packet.write(buf);
+            }
+            Packet::Connected(packet) => {
+                packet.write(buf);
+            }
+        }
+    }
+}
+
+impl Packet<Frames<BytesMut>> {
     pub(crate) fn read(buf: &mut BytesMut) -> Result<Option<Self>, CodecError> {
         if buf.is_empty() {
             return Ok(None);

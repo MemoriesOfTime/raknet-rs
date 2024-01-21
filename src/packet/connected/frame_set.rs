@@ -7,6 +7,47 @@ use crate::errors::CodecError;
 use crate::packet::{PackType, SocketAddrRead, SocketAddrWrite, NEEDS_B_AND_AS_FLAG, PARTED_FLAG};
 use crate::read_buf;
 
+pub(crate) type Frames<B> = Vec<Frame<B>>;
+
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) struct FrameSet<S> {
+    pub(crate) seq_num: Uint24le,
+    pub(crate) set: S,
+}
+
+impl FrameSet<Frames<BytesMut>> {
+    pub(super) fn read(buf: &mut BytesMut) -> Result<Self, CodecError> {
+        let seq_num = read_buf!(buf, 3, Uint24le::read(buf));
+        let mut frames = Vec::new();
+        while buf.has_remaining() {
+            frames.push(Frame::read(buf)?);
+        }
+        if frames.is_empty() {
+            return Err(CodecError::InvalidPacketLength("frame set"));
+        }
+        Ok(FrameSet {
+            seq_num,
+            set: frames,
+        })
+    }
+}
+
+impl<B: Buf> FrameSet<Frames<B>> {
+    pub(super) fn write(self, buf: &mut BytesMut) {
+        self.seq_num.write(buf);
+        for frame in self.set {
+            frame.write(buf);
+        }
+    }
+}
+
+impl<B: Buf> FrameSet<Frame<B>> {
+    pub(super) fn write(self, buf: &mut BytesMut) {
+        self.seq_num.write(buf);
+        self.set.write(buf);
+    }
+}
+
 #[derive(Eq, PartialEq, Clone)]
 pub(crate) struct Frame<B> {
     pub(crate) flags: Flags,
@@ -128,42 +169,6 @@ impl<B: Buf> Frame<B> {
             fragment.write(buf);
         }
         buf.put(self.body);
-    }
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) struct FrameSet<B> {
-    pub(crate) seq_num: Uint24le,
-    pub(crate) frames: Vec<Frame<B>>,
-}
-
-impl FrameSet<BytesMut> {
-    pub(super) fn read(buf: &mut BytesMut) -> Result<Self, CodecError> {
-        let seq_num = read_buf!(buf, 3, Uint24le::read(buf));
-        let mut frames = Vec::new();
-        while buf.has_remaining() {
-            frames.push(Frame::read(buf)?);
-        }
-        if frames.is_empty() {
-            return Err(CodecError::InvalidPacketLength("frame set"));
-        }
-        Ok(FrameSet { seq_num, frames })
-    }
-
-    pub(super) fn freeze(self) -> FrameSet<Bytes> {
-        FrameSet {
-            seq_num: self.seq_num,
-            frames: self.frames.into_iter().map(Frame::freeze).collect(),
-        }
-    }
-}
-
-impl<B: Buf> FrameSet<B> {
-    pub(super) fn write(self, buf: &mut BytesMut) {
-        self.seq_num.write(buf);
-        for frame in self.frames {
-            frame.write(buf);
-        }
     }
 }
 

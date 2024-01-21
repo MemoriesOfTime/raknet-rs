@@ -9,12 +9,12 @@ use pin_project_lite::pin_project;
 use tracing::debug;
 
 use crate::errors::CodecError;
-use crate::packet::connected::{self, Frame};
+use crate::packet::connected::{self, Frame, FrameSet};
 
 const INITIAL_ORDERING_MAP_CAP: usize = 64;
 
 struct Ordering<B> {
-    map: HashMap<u32, Frame<B>>,
+    map: HashMap<u32, FrameSet<Frame<B>>>,
     read: u32,
 }
 
@@ -38,12 +38,15 @@ pin_project! {
     }
 }
 
-pub(crate) trait Ordered: Sized {
-    fn ordered<B: Buf>(self, max_channels: usize) -> Order<Self, B>;
+pub(crate) trait Ordered<B: Buf>: Sized {
+    fn ordered(self, max_channels: usize) -> Order<Self, B>;
 }
 
-impl<T> Ordered for T {
-    fn ordered<B: Buf>(self, max_channels: usize) -> Order<Self, B> {
+impl<F, B: Buf> Ordered<B> for F
+where
+    F: Stream<Item = Result<FrameSet<Frame<B>>, CodecError>>,
+{
+    fn ordered(self, max_channels: usize) -> Order<Self, B> {
         assert!(
             max_channels < usize::from(u8::MAX),
             "max channels should not be larger than u8::MAX"
@@ -62,83 +65,60 @@ impl<T> Ordered for T {
 
 impl<F, B> Stream for Order<F, B>
 where
-    F: Stream<Item = Result<connected::Packet<B>, CodecError>>,
+    F: Stream<Item = Result<FrameSet<Frame<B>>, CodecError>>,
 {
-    type Item = Result<connected::Packet<B>, CodecError>;
+    type Item = Result<FrameSet<Frame<B>>, CodecError>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
 
         loop {
-            let Some(packet) = ready!(this.frame.poll_next_unpin(cx)?) else {
+            // empty each channel in order
+            for channel in 0..*this.max_channels {
+                let ordering = this
+                    .ordering
+                    .get_mut(channel)
+                    .expect("channel < max_channels");
+                // check if we could read next
+                if let Some(next) = ordering.map.remove(&ordering.read) {
+                    ordering.read.add_assign(1);
+                    return Poll::Ready(Some(Ok(next)));
+                }
+            }
+
+            let Some(frame_set) = ready!(this.frame.poll_next_unpin(cx)?) else {
                 return Poll::Ready(None);
             };
 
-            let connected::Packet::FrameSet(frame_set) = packet else {
-                return Poll::Ready(Some(Ok(packet)));
-            };
+            if let Some(connected::Ordered {
+                frame_index,
+                channel,
+            }) = frame_set.set.ordered.clone()
+            {
+                let channel = usize::from(channel);
+                if channel >= *this.max_channels {
+                    return Poll::Ready(Some(Err(CodecError::OrderedFrame(format!(
+                        "channel {} >= max_channels {}",
+                        channel, *this.max_channels
+                    )))));
+                }
+                let ordering = this
+                    .ordering
+                    .get_mut(channel)
+                    .expect("channel < max_channels");
 
-            let mut frames = None;
-            let frames_len = frame_set.frames.len();
-            for frame in frame_set.frames {
-                if let Some(connected::Ordered {
-                    frame_index,
-                    channel,
-                }) = frame.ordered.clone()
-                {
-                    let channel = usize::from(channel);
-                    if channel >= *this.max_channels {
-                        return Poll::Ready(Some(Err(CodecError::OrderedFrame(format!(
-                            "channel {} >= max_channels {}",
-                            channel, *this.max_channels
-                        )))));
-                    }
-                    let ordering = this
-                        .ordering
-                        .get_mut(channel)
-                        .expect("channel < max_channels");
-
-                    match frame_index.0.cmp(&ordering.read) {
-                        std::cmp::Ordering::Less => {
-                            debug!("ignore old ordered frame index {frame_index}");
-                            continue;
-                        }
-                        std::cmp::Ordering::Greater => {
-                            ordering.map.insert(frame_index.0, frame);
-                            continue;
-                        }
-                        std::cmp::Ordering::Equal => {
-                            ordering.read.add_assign(1);
-                        }
-                    }
-
-                    // then we got a frame index equal to read index, we could read it
-                    frames
-                        .get_or_insert_with(|| Vec::with_capacity(frames_len))
-                        .push(frame);
-
-                    // check if we could read more
-                    while let Some(next) = ordering.map.remove(&ordering.read) {
-                        ordering.read.add_assign(1);
-                        frames
-                            .get_or_insert_with(|| Vec::with_capacity(frames_len))
-                            .push(next);
-                    }
-
-                    // we cannot read anymore
+                if frame_index.0 < ordering.read {
+                    debug!("ignore old ordered frame index {frame_index}");
                     continue;
                 }
-                // the frameset which does not require ordered
-                frames
-                    .get_or_insert_with(|| Vec::with_capacity(frames_len))
-                    .push(frame);
+
+                ordering.map.insert(frame_index.0, frame_set);
+
+                // we cannot read anymore
+                continue;
             }
-            if let Some(frames) = frames {
-                return Poll::Ready(Some(Ok(connected::Packet::FrameSet(connected::FrameSet {
-                    frames,
-                    ..frame_set
-                }))));
-            }
+            // the frame set which does not require ordered
+            return Poll::Ready(Some(Ok(frame_set)));
         }
     }
 }
@@ -151,14 +131,13 @@ mod test {
 
     use super::*;
     use crate::errors::CodecError;
-    use crate::packet::connected::{self, Flags, Frame, FrameSet, Ordered, Uint24le};
+    use crate::packet::connected::{Flags, Frame, FrameSet, Ordered, Uint24le};
 
-    fn frame_set(idx: impl IntoIterator<Item = (u8, u32)>) -> connected::Packet<Bytes> {
-        connected::Packet::FrameSet(FrameSet {
-            seq_num: Uint24le(0),
-            frames: idx
-                .into_iter()
-                .map(|(channel, frame_index)| Frame {
+    fn frame_sets(idx: impl IntoIterator<Item = (u8, u32)>) -> Vec<FrameSet<Frame<Bytes>>> {
+        idx.into_iter()
+            .map(|(channel, frame_index)| FrameSet {
+                seq_num: Uint24le(0),
+                set: Frame {
                     flags: Flags::parse(0b011_11100),
                     reliable_frame_index: None,
                     seq_frame_index: None,
@@ -168,9 +147,9 @@ mod test {
                     }),
                     fragment: None,
                     body: Bytes::new(),
-                })
-                .collect(),
-        })
+                },
+            })
+            .collect()
     }
 
     #[tokio::test]
@@ -178,8 +157,11 @@ mod test {
         let frame = {
             #[stream]
             async {
-                yield frame_set([(0, 1), (0, 0), (0, 2), (0, 4), (0, 3)]);
-                yield frame_set([(1, 1)]);
+                for frame_set in
+                    frame_sets([(0, 1), (0, 0), (0, 2), (0, 0), (0, 4), (0, 3), (1, 1)])
+                {
+                    yield frame_set;
+                }
             }
         };
         tokio::pin!(frame);
@@ -190,10 +172,11 @@ mod test {
             ordering: std::iter::repeat_with(Ordering::default).take(10).collect(),
         };
 
-        assert_eq!(
-            ordered.next().await.unwrap().unwrap(),
-            frame_set([(0, 0), (0, 1), (0, 2), (0, 3), (0, 4)])
-        );
+        let cmp_sets = frame_sets([(0, 0), (0, 1), (0, 2), (0, 3), (0, 4)]).into_iter();
+        for next in cmp_sets {
+            assert_eq!(ordered.next().await.unwrap().unwrap(), next);
+        }
+
         assert!(ordered.next().await.is_none());
     }
 
@@ -202,7 +185,9 @@ mod test {
         let frame = {
             #[stream]
             async {
-                yield frame_set([(10, 1)]);
+                for frame_set in frame_sets([(10, 1)]) {
+                    yield frame_set;
+                }
             }
         };
         tokio::pin!(frame);
