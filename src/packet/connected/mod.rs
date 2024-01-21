@@ -67,14 +67,6 @@ impl Packet<BytesMut> {
     pub(super) fn read_frame_set(buf: &mut BytesMut) -> Result<Self, CodecError> {
         Ok(Packet::FrameSet(FrameSet::read(buf)?))
     }
-
-    pub(crate) fn freeze(self) -> Packet<Bytes> {
-        match self {
-            Packet::FrameSet(frame_set) => Packet::FrameSet(frame_set.freeze()),
-            Packet::Ack(ack) => Packet::Ack(ack),
-            Packet::Nack(nack) => Packet::Nack(nack),
-        }
-    }
 }
 
 /// `uint24` little-endian but actually occupies 4 bytes.
