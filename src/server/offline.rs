@@ -10,6 +10,7 @@ use pin_project_lite::pin_project;
 use tracing::{debug, error, warn};
 
 use crate::errors::CodecError;
+use crate::packet::connected::Frames;
 use crate::packet::{connected, unconnected, Packet};
 use crate::Peer;
 
@@ -61,9 +62,9 @@ impl<F> OfflineHandler<F> {
 
 impl<F> OfflineHandler<F>
 where
-    F: Sink<(Packet<Bytes>, SocketAddr), Error = CodecError>,
+    F: Sink<(Packet<Frames<Bytes>>, SocketAddr), Error = CodecError>,
 {
-    fn make_incompatible_version(config: &Config) -> Packet<Bytes> {
+    fn make_incompatible_version(config: &Config) -> Packet<Frames<Bytes>> {
         Packet::Unconnected(unconnected::Packet::IncompatibleProtocol {
             server_protocol: *config.support_version.last().unwrap(),
             magic: (),
@@ -71,14 +72,14 @@ where
         })
     }
 
-    fn make_already_connected(config: &Config) -> Packet<Bytes> {
+    fn make_already_connected(config: &Config) -> Packet<Frames<Bytes>> {
         Packet::Unconnected(unconnected::Packet::AlreadyConnected {
             magic: (),
             server_guid: config.sever_guid,
         })
     }
 
-    fn make_connection_request_failed(config: &Config) -> Packet<Bytes> {
+    fn make_connection_request_failed(config: &Config) -> Packet<Frames<Bytes>> {
         Packet::Unconnected(unconnected::Packet::ConnectionRequestFailed {
             magic: (),
             server_guid: config.sever_guid,
@@ -88,10 +89,10 @@ where
 
 impl<F> Stream for OfflineHandler<F>
 where
-    F: Stream<Item = (Packet<BytesMut>, SocketAddr)>
-        + Sink<(Packet<Bytes>, SocketAddr), Error = CodecError>,
+    F: Stream<Item = (Packet<Frames<BytesMut>>, SocketAddr)>
+        + Sink<(Packet<Frames<Bytes>>, SocketAddr), Error = CodecError>,
 {
-    type Item = (connected::Packet<BytesMut>, Peer);
+    type Item = (connected::Packet<Frames<BytesMut>>, Peer);
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();

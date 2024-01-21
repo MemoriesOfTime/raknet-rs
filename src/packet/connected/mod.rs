@@ -1,7 +1,7 @@
 use std::fmt::Display;
 use std::hash::Hash;
 
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, BytesMut};
 
 use crate::errors::CodecError;
 use crate::packet::PackType;
@@ -16,13 +16,13 @@ use super::{ACK_FLAG, CONTINUOUS_SEND_FLAG, NACK_FLAG, NEEDS_B_AND_AS_FLAG, VALI
 
 // Packet when RakNet has established a connection
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) enum Packet<B> {
-    FrameSet(FrameSet<B>),
+pub(crate) enum Packet<S> {
+    FrameSet(FrameSet<S>),
     Ack(AckOrNack),
     Nack(AckOrNack),
 }
 
-impl<B> Packet<B> {
+impl<S> Packet<S> {
     pub(crate) fn pack_type(&self) -> PackType {
         match self {
             Packet::FrameSet(_) => PackType::FrameSet,
@@ -40,12 +40,12 @@ impl<B> Packet<B> {
     }
 }
 
-impl<B: Buf> Packet<B> {
+impl<B: Buf> Packet<Frames<B>> {
     pub(super) fn write(self, buf: &mut BytesMut) {
         match self {
             Packet::FrameSet(frame) => {
                 let mut flag = VALID_FLAG | NEEDS_B_AND_AS_FLAG;
-                if frame.frames[0].flags.parted() {
+                if frame.set[0].flags.parted() {
                     flag |= CONTINUOUS_SEND_FLAG;
                 }
                 buf.put_u8(flag);
@@ -63,7 +63,27 @@ impl<B: Buf> Packet<B> {
     }
 }
 
-impl Packet<BytesMut> {
+impl<B: Buf> Packet<Frame<B>> {
+    pub(super) fn write(self, buf: &mut BytesMut) {
+        match self {
+            Packet::FrameSet(frame) => {
+                let mut flag = VALID_FLAG | NEEDS_B_AND_AS_FLAG;
+                buf.put_u8(flag);
+                frame.write(buf);
+            }
+            Packet::Ack(ack) => {
+                buf.put_u8(ACK_FLAG);
+                ack.write(buf);
+            }
+            Packet::Nack(ack) => {
+                buf.put_u8(NACK_FLAG);
+                ack.write(buf);
+            }
+        }
+    }
+}
+
+impl Packet<Frames<BytesMut>> {
     pub(super) fn read_frame_set(buf: &mut BytesMut) -> Result<Self, CodecError> {
         Ok(Packet::FrameSet(FrameSet::read(buf)?))
     }

@@ -7,8 +7,9 @@ use tokio_util::codec::{Decoder, Encoder};
 use tracing::{debug, trace};
 
 use self::decoder::{DeFragmented, Deduplicated, FrameDecoded, Ordered};
+use crate::codec::decoder::AckDispatched;
 use crate::errors::CodecError;
-use crate::packet::connected::FrameBody;
+use crate::packet::connected::{FrameBody, Frames};
 use crate::packet::{connected, Packet};
 use crate::utils::Logged;
 
@@ -45,22 +46,26 @@ impl Default for Config {
 }
 
 pub(crate) trait Decoded {
-    fn decoded(self, config: Config) -> impl Stream<Item = connected::Packet<FrameBody>>;
+    fn decoded(self, config: Config) -> impl Stream<Item = FrameBody>;
 }
 
 impl<F> Decoded for F
 where
-    F: Stream<Item = connected::Packet<BytesMut>>,
+    F: Stream<Item = connected::Packet<Frames<BytesMut>>>,
 {
-    fn decoded(self, config: Config) -> impl Stream<Item = connected::Packet<FrameBody>> {
-        fn ok_f(pack: &connected::Packet<FrameBody>) {
-            trace!("[decoder] received packet: {:?}", pack.pack_type());
+    fn decoded(self, config: Config) -> impl Stream<Item = FrameBody> {
+        fn ok_f(pack: &FrameBody) {
+            trace!("[decoder] received packet: {:?}", pack);
         }
         fn err_f(err: CodecError) {
             debug!("[decoder] got codec error: {err} when decode packet");
         }
 
+        let (ack_tx, ack_rx) = flume::unbounded();
+        let (nack_tx, nack_rx) = flume::unbounded();
+
         self.map(Ok)
+            .dispatch_recv_ack(ack_tx, nack_tx)
             .deduplicated(config.max_dedup_gap)
             .defragmented(config.max_parted_size, config.max_parted_count)
             .ordered(config.max_channels)
@@ -72,10 +77,10 @@ where
 /// The raknet codec
 pub(crate) struct Codec;
 
-impl<B: Buf> Encoder<Packet<B>> for Codec {
+impl<B: Buf> Encoder<Packet<Frames<B>>> for Codec {
     type Error = CodecError;
 
-    fn encode(&mut self, item: Packet<B>, dst: &mut BytesMut) -> Result<(), Self::Error> {
+    fn encode(&mut self, item: Packet<Frames<B>>, dst: &mut BytesMut) -> Result<(), Self::Error> {
         item.write(dst);
         Ok(())
     }
@@ -84,7 +89,7 @@ impl<B: Buf> Encoder<Packet<B>> for Codec {
 impl Decoder for Codec {
     type Error = CodecError;
     // we might want to update the package during codec
-    type Item = Packet<BytesMut>;
+    type Item = Packet<Frames<BytesMut>>;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         Packet::read(src)

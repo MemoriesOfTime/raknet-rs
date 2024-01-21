@@ -1,7 +1,6 @@
 use bytes::Bytes;
 use futures::{Sink, Stream};
 
-mod ack;
 mod handshake;
 mod incoming;
 mod offline;
