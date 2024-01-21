@@ -32,7 +32,7 @@ pin_project! {
     }
 }
 
-pub(super) trait DeFragmented: Sized {
+pub(crate) trait DeFragmented: Sized {
     fn defragmented(self, limit_size: u32, limit_parted: usize) -> DeFragment<Self>;
 }
 

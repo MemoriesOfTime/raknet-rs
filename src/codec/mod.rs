@@ -1,7 +1,4 @@
-mod dedup;
-mod fragment;
-mod frame;
-mod ordered;
+mod decoder;
 
 use bytes::{Buf, BytesMut};
 use derive_builder::Builder;
@@ -9,10 +6,7 @@ use futures::{Stream, StreamExt};
 use tokio_util::codec::{Decoder, Encoder};
 use tracing::{debug, trace};
 
-use self::frame::FrameDecoded;
-use self::ordered::Ordered;
-use crate::codec::dedup::Deduplicated;
-use crate::codec::fragment::DeFragmented;
+use self::decoder::{DeFragmented, Deduplicated, FrameDecoded, Ordered};
 use crate::errors::CodecError;
 use crate::packet::connected::FrameBody;
 use crate::packet::{connected, Packet};

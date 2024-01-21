@@ -181,7 +181,7 @@ pin_project! {
     }
 }
 
-pub(super) trait Deduplicated: Sized {
+pub(crate) trait Deduplicated: Sized {
     fn deduplicated(self, max_gap: usize) -> Dedup<Self>;
 }
 

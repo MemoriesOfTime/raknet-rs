@@ -38,7 +38,7 @@ pin_project! {
     }
 }
 
-pub(super) trait Ordered: Sized {
+pub(crate) trait Ordered: Sized {
     fn ordered<B: Buf>(self, max_channels: usize) -> Order<Self, B>;
 }
 
