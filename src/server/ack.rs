@@ -5,11 +5,10 @@ use flume::Sender;
 use futures::{Stream, StreamExt};
 use pin_project_lite::pin_project;
 
-use crate::errors::CodecError;
 use crate::packet::connected::{self, AckOrNack, FrameSet};
 
 pin_project! {
-    pub(crate) struct AckDispatcher<F> {
+    pub(super) struct IncomingAck<F> {
         #[pin]
         frame: F,
         ack_tx: Sender<AckOrNack>,
@@ -17,24 +16,24 @@ pin_project! {
     }
 }
 
-pub(crate) trait AckDispatched: Sized {
-    fn dispatch_recv_ack(
+pub(super) trait HandleIncomingAck: Sized {
+    fn handle_incoming_ack(
         self,
         ack_tx: Sender<AckOrNack>,
         nack_tx: Sender<AckOrNack>,
-    ) -> AckDispatcher<Self>;
+    ) -> IncomingAck<Self>;
 }
 
-impl<F, S> AckDispatched for F
+impl<F, S> HandleIncomingAck for F
 where
-    F: Stream<Item = Result<connected::Packet<S>, CodecError>>,
+    F: Stream<Item = connected::Packet<S>>,
 {
-    fn dispatch_recv_ack(
+    fn handle_incoming_ack(
         self,
         ack_tx: Sender<AckOrNack>,
         nack_tx: Sender<AckOrNack>,
-    ) -> AckDispatcher<Self> {
-        AckDispatcher {
+    ) -> IncomingAck<Self> {
+        IncomingAck {
             frame: self,
             ack_tx,
             nack_tx,
@@ -42,22 +41,22 @@ where
     }
 }
 
-impl<F, S> Stream for AckDispatcher<F>
+impl<F, S> Stream for IncomingAck<F>
 where
-    F: Stream<Item = Result<connected::Packet<S>, CodecError>>,
+    F: Stream<Item = connected::Packet<S>>,
 {
-    type Item = Result<FrameSet<S>, CodecError>;
+    type Item = FrameSet<S>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
 
         loop {
-            let Some(packet) = ready!(this.frame.poll_next_unpin(cx)?) else {
+            let Some(packet) = ready!(this.frame.poll_next_unpin(cx)) else {
                 return Poll::Ready(None);
             };
             // TODO: async send here?
             match packet {
-                connected::Packet::FrameSet(frame_set) => return Poll::Ready(Some(Ok(frame_set))),
+                connected::Packet::FrameSet(frame_set) => return Poll::Ready(Some(frame_set)),
                 connected::Packet::Ack(ack) => {
                     this.ack_tx.send(ack).expect("ack_rx must not be dropped");
                 }

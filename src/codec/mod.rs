@@ -1,3 +1,4 @@
+/// Frame decoder
 mod decoder;
 
 use bytes::{Buf, BytesMut};
@@ -7,10 +8,9 @@ use tokio_util::codec::{Decoder, Encoder};
 use tracing::{debug, trace};
 
 use self::decoder::{DeFragmented, Deduplicated, FrameDecoded, Ordered};
-use crate::codec::decoder::AckDispatched;
 use crate::errors::CodecError;
-use crate::packet::connected::{FrameBody, Frames};
-use crate::packet::{connected, Packet};
+use crate::packet::connected::{FrameBody, FrameSet, Frames};
+use crate::packet::Packet;
 use crate::utils::Logged;
 
 /// Codec config
@@ -51,7 +51,7 @@ pub(crate) trait Decoded {
 
 impl<F> Decoded for F
 where
-    F: Stream<Item = connected::Packet<Frames<BytesMut>>>,
+    F: Stream<Item = FrameSet<Frames<BytesMut>>>,
 {
     fn decoded(self, config: Config) -> impl Stream<Item = FrameBody> {
         fn ok_f(pack: &FrameBody) {
@@ -61,11 +61,7 @@ where
             debug!("[decoder] got codec error: {err} when decode packet");
         }
 
-        let (ack_tx, ack_rx) = flume::unbounded();
-        let (nack_tx, nack_rx) = flume::unbounded();
-
         self.map(Ok)
-            .dispatch_recv_ack(ack_tx, nack_tx)
             .deduplicated(config.max_dedup_gap)
             .defragmented(config.max_parted_size, config.max_parted_count)
             .ordered(config.max_channels)

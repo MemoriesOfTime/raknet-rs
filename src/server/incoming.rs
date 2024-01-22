@@ -12,6 +12,7 @@ use tokio::net::UdpSocket;
 use tokio_util::udp::UdpFramed;
 use tracing::{debug, error};
 
+use super::ack::HandleIncomingAck;
 use super::handshake::HandShaking;
 use super::offline::{self, HandleOffline};
 use super::IO;
@@ -80,11 +81,15 @@ impl Stream for Incoming {
             let (router_tx, router_rx) = flume::unbounded();
             self.router.insert(peer.addr, router_tx.into_sink());
 
+            let (ack_tx, ack_rx) = flume::unbounded();
+            let (nack_tx, nack_rx) = flume::unbounded();
+
             let io = IOImpl {
                 // TODO: implement encoder to make it Sink<Bytes>
                 output: UdpFramed::new(Arc::clone(&self.socket), Codec),
                 input: router_rx
                     .into_stream()
+                    .handle_incoming_ack(ack_tx, nack_tx)
                     .decoded(self.codec_config)
                     .handshaking(),
             };
