@@ -210,7 +210,6 @@ where
             let Some(mut frame_set) = ready!(this.frame.poll_next_unpin(cx)?) else {
                 return Poll::Ready(None);
             };
-
             if *this.max_gap != 0 && this.window.received_status.len() > *this.max_gap {
                 return Poll::Ready(Some(Err(CodecError::DedupExceed(
                     *this.max_gap,
