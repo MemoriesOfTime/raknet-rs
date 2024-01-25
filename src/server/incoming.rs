@@ -5,8 +5,8 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use bytes::{Bytes, BytesMut};
-use flume::r#async::SendSink;
-use futures::{ready, FutureExt, Sink, SinkExt, Stream, StreamExt};
+use flume::Sender;
+use futures::{ready, Sink, Stream, StreamExt};
 use pin_project_lite::pin_project;
 use tokio::net::UdpSocket;
 use tokio_util::udp::UdpFramed;
@@ -27,13 +27,17 @@ type OfflineHandler = offline::OfflineHandler<
     Log<UdpFramed<Codec, Arc<UdpSocket>>, (Packet<Frames<BytesMut>>, SocketAddr), CodecError>,
 >;
 
-/// An async iterator that infinitely accepts connections from raknet clients, And forward UDP
-/// packets collected by the underlying layer to different connections.
-struct Incoming {
-    offline: OfflineHandler,
-    socket: Arc<UdpSocket>,
-    codec_config: codec::Config,
-    router: HashMap<SocketAddr, SendSink<'static, connected::Packet<Frames<BytesMut>>>>,
+pin_project! {
+    /// An async iterator that infinitely accepts connections from raknet clients, And forward UDP
+    /// packets collected by the underlying layer to different connections.
+    #[project(!Unpin)] // `OfflineHandler` is !Unpin, so it must be !Unpin
+    struct Incoming {
+        #[pin]
+        offline: OfflineHandler,
+        socket: Arc<UdpSocket>,
+        codec_config: codec::Config,
+        router: HashMap<SocketAddr, Sender<connected::Packet<Frames<BytesMut>>>>,
+    }
 }
 
 impl Incoming {
@@ -57,40 +61,42 @@ impl Incoming {
         }
     }
 
-    fn disconnect(&mut self, addr: &SocketAddr) {
-        self.router.remove(addr);
-        self.offline.disconnect(addr);
+    fn disconnect(self: Pin<&mut Self>, addr: &SocketAddr) {
+        let this = self.project();
+        this.router.remove(addr);
+        this.offline.disconnect(addr);
     }
 }
 
 impl Stream for Incoming {
     type Item = IO;
 
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let mut this = self.project();
         loop {
-            let Some((pack, peer)) = ready!(self.offline.poll_next_unpin(cx)) else {
+            let Some((pack, peer)) = ready!(this.offline.poll_next_unpin(cx)) else {
                 return Poll::Ready(None);
             };
-            if let Some(router_tx) = self.router.get_mut(&peer.addr) {
-                if ready!(router_tx.send(pack).poll_unpin(cx)).is_err() {
+            if let Some(router_tx) = this.router.get_mut(&peer.addr) {
+                if router_tx.send(pack).is_err() {
                     error!("connection was dropped before closed");
-                    self.router.remove(&peer.addr);
+                    this.router.remove(&peer.addr);
                 }
                 continue;
             }
             let (router_tx, router_rx) = flume::unbounded();
-            self.router.insert(peer.addr, router_tx.into_sink());
+            this.router.insert(peer.addr, router_tx);
 
             let (ack_tx, ack_rx) = flume::unbounded();
             let (nack_tx, nack_rx) = flume::unbounded();
 
             let io = IOImpl {
                 // TODO: implement encoder to make it Sink<Bytes>
-                output: UdpFramed::new(Arc::clone(&self.socket), Codec),
+                output: UdpFramed::new(Arc::clone(this.socket), Codec),
                 input: router_rx
                     .into_stream()
                     .handle_incoming_ack(ack_tx, nack_tx)
-                    .decoded(self.codec_config)
+                    .decoded(*this.codec_config)
                     .handshaking(),
             };
 
