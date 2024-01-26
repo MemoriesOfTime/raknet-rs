@@ -98,7 +98,6 @@ where
                     frame_index: Uint24le(this.order_write_index[order_channel as usize]),
                     channel: order_channel,
                 });
-                this.order_write_index[order_channel as usize] += 1;
             }
             Ok((reliable_frame_index, ordered))
         };
@@ -106,6 +105,10 @@ where
         if msg.get_data().len() < max_len {
             // not exceeding the mtu, no need to split.
             let (reliable_frame_index, ordered) = common()?;
+            if reliability.is_sequenced_or_ordered() {
+                this.order_write_index[order_channel as usize] += 1;
+            }
+
             let frame = Frame {
                 flags: Flags::new(reliability, false),
                 reliable_frame_index,
@@ -142,6 +145,10 @@ where
                 body: data.split_to(min(per_len, data.len())),
             };
             frames.push(frame);
+        }
+
+        if reliability.is_sequenced_or_ordered() {
+            this.order_write_index[order_channel as usize] += 1;
         }
 
         debug_assert!(
@@ -296,14 +303,19 @@ mod test {
         // 1
         dst.close().await.unwrap();
 
-        assert!(dst.frame.buf.len() == 7);
+        assert_eq!(dst.order_write_index[0], 1);
+        assert_eq!(dst.order_write_index[1], 1);
+        assert_eq!(dst.reliable_write_index, 8);
+
+        assert_eq!(dst.frame.buf.len(), 7);
         // adjusted
-        assert!(dst.frame.buf[4].flags.reliability() == Reliability::Reliable);
-        assert!(dst.frame.buf[5].flags.reliability() == Reliability::Reliable);
+        assert_eq!(dst.frame.buf[4].flags.reliability(), Reliability::Reliable);
+        assert_eq!(dst.frame.buf[5].flags.reliability(), Reliability::Reliable);
 
         // closed
-        assert!(
-            dst.frame.buf[6].body == Bytes::from_static(&[PackType::DisconnectNotification as u8])
+        assert_eq!(
+            dst.frame.buf[6].body,
+            Bytes::from_static(&[PackType::DisconnectNotification as u8])
         );
     }
 }
