@@ -60,6 +60,7 @@ pin_project! {
         #[pin]
         frame: F,
         config: Config,
+        // Half-connected queue
         pending: lru::LruCache<SocketAddr, u8>,
         connected: HashMap<SocketAddr, Peer>,
         // refer to self.frame, send notification to client
@@ -172,7 +173,7 @@ where
                         debug!("received duplicate open connection request 1 from {addr}");
                     }
                     // max_mtu >= final_mtu >= min_mtu
-                    let final_mtu = this.config.max_mtu.min(this.config.min_mtu.max(mtu));
+                    let final_mtu = mtu.clamp(this.config.min_mtu, this.config.max_mtu);
                     unconnected::Packet::OpenConnectionReply1 {
                         magic: (),
                         server_guid: this.config.sever_guid,
@@ -230,6 +231,7 @@ mod test {
     use futures::StreamExt;
 
     use super::*;
+    use crate::server::offline::test::connected::{FrameSet, Uint24le};
 
     struct TestCase {
         source: VecDeque<Packet<Frames<BytesMut>>>,
@@ -304,6 +306,12 @@ mod test {
             ]
             .into_iter()
             .map(Packet::Unconnected)
+            .chain(std::iter::once(Packet::Connected(
+                connected::Packet::FrameSet(FrameSet {
+                    seq_num: Uint24le(0),
+                    set: Frames::new(),
+                }),
+            )))
             .collect(),
             dst: vec![],
         };
@@ -316,7 +324,13 @@ mod test {
             max_pending: 10,
         });
         tokio::pin!(handler);
-        assert!(handler.next().await.is_none());
+        assert_eq!(
+            handler.next().await.unwrap().0,
+            connected::Packet::FrameSet(FrameSet {
+                seq_num: Uint24le(0),
+                set: vec![]
+            })
+        );
         assert_eq!(
             handler.project().frame.dst,
             vec![
@@ -346,5 +360,204 @@ mod test {
         );
     }
 
-    // TODO: add more test
+    #[tokio::test]
+    async fn test_offline_reject_unconnected_packet() {
+        let test_case = TestCase {
+            source: vec![Packet::Connected(connected::Packet::FrameSet(FrameSet {
+                seq_num: Uint24le(0),
+                set: Frames::new(),
+            }))]
+            .into_iter()
+            .collect(),
+            dst: vec![],
+        };
+        let handler = test_case.handle_offline(Config {
+            sever_guid: 1919810,
+            advertisement: Bytes::from_static(b"hello"),
+            min_mtu: 800,
+            max_mtu: 1400,
+            support_version: vec![8, 11, 12],
+            max_pending: 10,
+        });
+        tokio::pin!(handler);
+        assert!(handler.next().await.is_none());
+        assert_eq!(
+            handler.project().frame.dst,
+            vec![Packet::Unconnected(
+                unconnected::Packet::ConnectionRequestFailed {
+                    magic: (),
+                    server_guid: 1919810,
+                }
+            )]
+        );
+    }
+
+    #[tokio::test]
+    #[tracing_test::traced_test]
+    async fn test_offline_reject_wrong_connect_flow() {
+        let test_cases = [
+            (
+                TestCase {
+                    // wrong order
+                    source: vec![
+                        unconnected::Packet::OpenConnectionRequest2 {
+                            magic: (),
+                            server_address: "0.0.0.0:1".parse().unwrap(),
+                            mtu: 1000,
+                            client_guid: 114514,
+                        },
+                        unconnected::Packet::OpenConnectionRequest1 {
+                            magic: (),
+                            protocol_version: 11,
+                            mtu: 1000,
+                        },
+                    ]
+                    .into_iter()
+                    .map(Packet::Unconnected)
+                    .collect(),
+                    dst: vec![],
+                },
+                vec![
+                    Packet::Unconnected(unconnected::Packet::IncompatibleProtocol {
+                        server_protocol: 12,
+                        magic: (),
+                        server_guid: 1919810,
+                    }),
+                    Packet::Unconnected(unconnected::Packet::OpenConnectionReply1 {
+                        magic: (),
+                        server_guid: 1919810,
+                        use_encryption: false,
+                        mtu: 1000,
+                    }),
+                ],
+            ),
+            (
+                TestCase {
+                    // wrong proto version
+                    source: vec![unconnected::Packet::OpenConnectionRequest1 {
+                        magic: (),
+                        protocol_version: 100,
+                        mtu: 1000,
+                    }]
+                    .into_iter()
+                    .map(Packet::Unconnected)
+                    .collect(),
+                    dst: vec![],
+                },
+                vec![Packet::Unconnected(
+                    unconnected::Packet::IncompatibleProtocol {
+                        server_protocol: 12,
+                        magic: (),
+                        server_guid: 1919810,
+                    },
+                )],
+            ),
+            (
+                TestCase {
+                    // already connected
+                    source: vec![
+                        unconnected::Packet::OpenConnectionRequest1 {
+                            magic: (),
+                            protocol_version: 11,
+                            mtu: 1000,
+                        },
+                        unconnected::Packet::OpenConnectionRequest2 {
+                            magic: (),
+                            server_address: "0.0.0.0:1".parse().unwrap(),
+                            mtu: 1000,
+                            client_guid: 114514,
+                        },
+                        unconnected::Packet::OpenConnectionRequest1 {
+                            magic: (),
+                            protocol_version: 11,
+                            mtu: 1000,
+                        },
+                        unconnected::Packet::OpenConnectionRequest2 {
+                            magic: (),
+                            server_address: "0.0.0.0:1".parse().unwrap(),
+                            mtu: 1000,
+                            client_guid: 114514,
+                        },
+                    ]
+                    .into_iter()
+                    .map(Packet::Unconnected)
+                    .collect(),
+                    dst: vec![],
+                },
+                vec![
+                    Packet::Unconnected(unconnected::Packet::OpenConnectionReply1 {
+                        magic: (),
+                        server_guid: 1919810,
+                        use_encryption: false,
+                        mtu: 1000,
+                    }),
+                    Packet::Unconnected(unconnected::Packet::OpenConnectionReply2 {
+                        magic: (),
+                        server_guid: 1919810,
+                        client_address: "0.0.0.0:0".parse().unwrap(),
+                        mtu: 1000,
+                        encryption_enabled: false, // must set to false
+                    }),
+                    Packet::Unconnected(unconnected::Packet::OpenConnectionReply1 {
+                        magic: (),
+                        server_guid: 1919810,
+                        use_encryption: false,
+                        mtu: 1000,
+                    }),
+                    Packet::Unconnected(unconnected::Packet::AlreadyConnected {
+                        magic: (),
+                        server_guid: 1919810,
+                    }),
+                ],
+            ),
+            (
+                TestCase {
+                    // disjoint mtu
+                    source: vec![
+                        unconnected::Packet::OpenConnectionRequest1 {
+                            magic: (),
+                            protocol_version: 11,
+                            mtu: 10,
+                        },
+                        unconnected::Packet::OpenConnectionRequest2 {
+                            magic: (),
+                            server_address: "0.0.0.0:1".parse().unwrap(),
+                            mtu: 10,
+                            client_guid: 114514,
+                        },
+                    ]
+                    .into_iter()
+                    .map(Packet::Unconnected)
+                    .collect(),
+                    dst: vec![],
+                },
+                vec![
+                    Packet::Unconnected(unconnected::Packet::OpenConnectionReply1 {
+                        magic: (),
+                        server_guid: 1919810,
+                        use_encryption: false,
+                        mtu: 800,
+                    }),
+                    Packet::Unconnected(unconnected::Packet::AlreadyConnected {
+                        magic: (),
+                        server_guid: 1919810,
+                    }),
+                ],
+            ),
+        ];
+
+        for (case, expect) in test_cases {
+            let handler = case.handle_offline(Config {
+                sever_guid: 1919810,
+                advertisement: Bytes::from_static(b"hello"),
+                min_mtu: 800,
+                max_mtu: 1400,
+                support_version: vec![8, 11, 12],
+                max_pending: 10,
+            });
+            tokio::pin!(handler);
+            assert!(handler.next().await.is_none());
+            assert_eq!(handler.project().frame.dst, expect);
+        }
+    }
 }

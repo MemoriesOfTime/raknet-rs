@@ -60,12 +60,6 @@ impl Incoming {
             router: HashMap::new(),
         }
     }
-
-    fn disconnect(self: Pin<&mut Self>, addr: &SocketAddr) {
-        let this = self.project();
-        this.router.remove(addr);
-        this.offline.disconnect(addr);
-    }
 }
 
 impl Stream for Incoming {
@@ -81,6 +75,7 @@ impl Stream for Incoming {
                 if router_tx.send(pack).is_err() {
                     error!("connection was dropped before closed");
                     this.router.remove(&peer.addr);
+                    this.offline.as_mut().disconnect(&peer.addr);
                 }
                 continue;
             }
