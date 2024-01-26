@@ -10,15 +10,15 @@ use futures::{ready, Sink, Stream, StreamExt};
 use pin_project_lite::pin_project;
 use tokio::net::UdpSocket;
 use tokio_util::udp::UdpFramed;
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 use super::ack::HandleIncomingAck;
 use super::handshake::HandShaking;
 use super::offline::{self, HandleOffline};
-use super::IO;
+use super::{IOpts, Message, IO};
 use crate::codec::{self, Codec, Decoded};
 use crate::errors::{CodecError, Error};
-use crate::packet::connected::Frames;
+use crate::packet::connected::{Frames, Reliability};
 use crate::packet::{connected, Packet};
 use crate::utils::{Log, Logged};
 
@@ -79,6 +79,8 @@ impl Stream for Incoming {
                 }
                 continue;
             }
+            info!("new incoming from {}", peer.addr);
+
             let (router_tx, router_rx) = flume::unbounded();
             this.router.insert(peer.addr, router_tx);
 
@@ -93,6 +95,8 @@ impl Stream for Incoming {
                     .handle_incoming_ack(ack_tx, nack_tx)
                     .decoded(*this.codec_config)
                     .handshaking(),
+                default_reliability: Reliability::ReliableOrdered,
+                default_order_channel: 0,
             };
 
             return Poll::Ready(Some(io));
@@ -107,6 +111,8 @@ pin_project! {
         input: I,
         #[pin]
         output: O,
+        default_reliability: Reliability,
+        default_order_channel: u8,
     }
 }
 
@@ -121,7 +127,49 @@ where
     }
 }
 
+impl<I, O> IOpts for IOImpl<I, O> {
+    fn set_default_reliability(&mut self, reliability: Reliability) {
+        self.default_reliability = reliability;
+    }
+
+    fn get_default_reliability(&self) -> Reliability {
+        self.default_reliability
+    }
+
+    fn set_default_order_channel(&mut self, order_channel: u8) {
+        self.default_order_channel = order_channel;
+    }
+
+    fn get_default_order_channel(&self) -> u8 {
+        self.default_order_channel
+    }
+}
+
 impl<I, O> Sink<Bytes> for IOImpl<I, O>
+where
+    O: Sink<(Packet<Frames<Bytes>>, SocketAddr), Error = CodecError>,
+{
+    type Error = Error;
+
+    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Sink::<Message>::poll_ready(self, cx)
+    }
+
+    fn start_send(self: Pin<&mut Self>, item: Bytes) -> Result<(), Self::Error> {
+        let msg = Message::new(self.default_reliability, self.default_order_channel, item);
+        Sink::<Message>::start_send(self, msg)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Sink::<Message>::poll_flush(self, cx)
+    }
+
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Sink::<Message>::poll_close(self, cx)
+    }
+}
+
+impl<I, O> Sink<Message> for IOImpl<I, O>
 where
     O: Sink<(Packet<Frames<Bytes>>, SocketAddr), Error = CodecError>,
 {
@@ -131,7 +179,7 @@ where
         todo!()
     }
 
-    fn start_send(self: Pin<&mut Self>, item: Bytes) -> Result<(), Self::Error> {
+    fn start_send(self: Pin<&mut Self>, item: Message) -> Result<(), Self::Error> {
         todo!()
     }
 

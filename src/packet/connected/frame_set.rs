@@ -190,7 +190,7 @@ impl Hash for Flags {
 
 #[derive(Debug, Clone, Eq, PartialEq, Copy)]
 #[repr(u8)]
-pub(crate) enum Reliability {
+pub enum Reliability {
     /// Direct UDP
     Unreliable = 0b000,
 
@@ -230,7 +230,8 @@ impl Reliability {
         )
     }
 
-    /// Sequenced or Ordered ensures that packets should be received in order as they are sent.
+    /// Sequenced or Ordered ensures that packets should be received in order at their
+    /// `order_channels` as they are sent.
     pub(crate) fn is_sequenced_or_ordered(&self) -> bool {
         matches!(
             self,
@@ -243,7 +244,8 @@ impl Reliability {
         )
     }
 
-    /// No effect?
+    /// Allow a global sequenced order over ordered channels, Sequenced implies Ordered
+    /// TODO: implement sequenced
     pub(crate) fn is_sequenced(&self) -> bool {
         matches!(
             self,
@@ -253,9 +255,39 @@ impl Reliability {
                 | Reliability::ReliableSequencedWithAckReceipt
         )
     }
+
+    /// The header size (without fragment part) implied from reliability
+    pub(crate) fn size(&self) -> usize {
+        // flag(1B) + length(2B)
+        let mut size = 3;
+        if self.is_reliable() {
+            size += 3;
+        }
+        if self.is_sequenced() {
+            size += 3;
+        }
+        if self.is_sequenced_or_ordered() {
+            size += 4;
+        }
+        size
+    }
 }
 
 impl Flags {
+    pub(crate) fn new(reliability: Reliability, parted: bool) -> Self {
+        let mut raw = (reliability as u8) << 5;
+        raw |= NEEDS_B_AND_AS_FLAG;
+        if parted {
+            raw |= PARTED_FLAG;
+        }
+        Self {
+            raw,
+            reliability,
+            parted,
+            needs_bas: true,
+        }
+    }
+
     fn read(buf: &mut BytesMut) -> Self {
         let raw = buf.get_u8();
         Self::parse(raw)

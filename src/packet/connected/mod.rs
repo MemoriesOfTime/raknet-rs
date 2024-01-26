@@ -67,7 +67,7 @@ impl<B: Buf> Packet<Frame<B>> {
     pub(super) fn write(self, buf: &mut BytesMut) {
         match self {
             Packet::FrameSet(frame) => {
-                let mut flag = VALID_FLAG | NEEDS_B_AND_AS_FLAG;
+                let flag = VALID_FLAG | NEEDS_B_AND_AS_FLAG;
                 buf.put_u8(flag);
                 frame.write(buf);
             }

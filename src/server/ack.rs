@@ -1,11 +1,13 @@
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
-use flume::Sender;
-use futures::{Stream, StreamExt};
+use bytes::Bytes;
+use flume::{Receiver, Sender};
+use futures::{Sink, Stream, StreamExt};
 use pin_project_lite::pin_project;
 
-use crate::packet::connected::{self, AckOrNack, FrameSet};
+use crate::errors::CodecError;
+use crate::packet::connected::{self, AckOrNack, FrameSet, Frames};
 
 pin_project! {
     pub(super) struct IncomingAck<F> {
@@ -65,5 +67,39 @@ where
                 }
             };
         }
+    }
+}
+
+pin_project! {
+    struct OutgoingAck<F> {
+        #[pin]
+        frame: F,
+        incoming_ack_rx: Receiver<AckOrNack>,
+        incoming_nack_rx: Receiver<AckOrNack>,
+        outgoing_ack_rx: Receiver<AckOrNack>,
+        outgoing_nack_rx: Receiver<AckOrNack>,
+        window: SlidingWindow,
+    }
+}
+
+struct SlidingWindow;
+
+impl<F> Sink<Frames<Bytes>> for OutgoingAck<F> {
+    type Error = CodecError;
+
+    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        todo!()
+    }
+
+    fn start_send(self: Pin<&mut Self>, item: Frames<Bytes>) -> Result<(), Self::Error> {
+        todo!()
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        todo!()
+    }
+
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        todo!()
     }
 }

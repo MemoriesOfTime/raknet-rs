@@ -1,6 +1,9 @@
 /// Frame decoder
 mod decoder;
 
+/// Frame encoder
+mod encoder;
+
 use bytes::{Buf, BytesMut};
 use derive_builder::Builder;
 use futures::{Stream, StreamExt};
