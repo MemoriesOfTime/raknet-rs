@@ -8,7 +8,7 @@ use pin_project_lite::pin_project;
 
 use crate::errors::CodecError;
 use crate::packet::connected::{self, Flags, Frame, Frames, Ordered, Reliability, Uint24le};
-use crate::packet::PackType;
+use crate::packet::{PackType, FRAME_SET_HEADER_SIZE};
 use crate::server::Message;
 
 pin_project! {
@@ -52,9 +52,6 @@ where
     }
 
     fn start_send(self: Pin<&mut Self>, msg: Message) -> Result<(), Self::Error> {
-        // 1B ID + 3B seq num
-        const FRAME_SET_HEADER_SIZE: usize = 4;
-
         let this = self.project();
 
         let mut reliability = msg.get_reliability();

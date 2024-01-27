@@ -171,6 +171,16 @@ impl<B: Buf> Frame<B> {
         }
         buf.put(self.body);
     }
+
+    /// Get the total ¬size of this frame
+    pub(crate) fn size(&self) -> usize {
+        let mut size = self.flags.reliability.size();
+        if self.fragment.is_some() {
+            size += 10;
+        }
+        size += self.body.remaining();
+        size
+    }
 }
 
 /// Top 3 bits are reliability type, fourth bit is 1 when the frame is fragmented and part of a

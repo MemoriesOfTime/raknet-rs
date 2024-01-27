@@ -55,7 +55,6 @@ where
 {
     type Item = Result<FrameSet<Frame<Bytes>>, CodecError>;
 
-    // TODO Yield continuous seq_num to outside
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
 

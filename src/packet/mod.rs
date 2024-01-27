@@ -26,6 +26,9 @@ const PARTED_FLAG: u8 = 0b0001_0000;
 const CONTINUOUS_SEND_FLAG: u8 = 0b0000_1000;
 const NEEDS_B_AND_AS_FLAG: u8 = 0b0000_0100;
 
+// 1B ID + 3B seq num
+pub(crate) const FRAME_SET_HEADER_SIZE: usize = 4;
+
 /// Packet Types. These packets play important role in raknet protocol.
 /// Some of them appear at the first byte of a UDP data packet (like `UnconnectedPing1`), while
 /// others are encapsulated in a `FrameSet` data packet and appear as the first byte of the body

@@ -6,6 +6,7 @@ mod encoder;
 
 use bytes::{Buf, Bytes, BytesMut};
 use derive_builder::Builder;
+use flume::Sender;
 use futures::{Sink, Stream, StreamExt};
 use tokio_util::codec::{Decoder, Encoder};
 use tracing::{debug, trace};
@@ -51,14 +52,24 @@ impl Default for Config {
 }
 
 pub(crate) trait Decoded {
-    fn decoded(self, config: Config) -> impl Stream<Item = FrameBody>;
+    fn decoded(
+        self,
+        config: Config,
+        outgoing_ack_tx: Sender<u32>,
+        outgoing_nack_tx: Sender<u32>,
+    ) -> impl Stream<Item = FrameBody>;
 }
 
 impl<F> Decoded for F
 where
     F: Stream<Item = FrameSet<Frames<BytesMut>>>,
 {
-    fn decoded(self, config: Config) -> impl Stream<Item = FrameBody> {
+    fn decoded(
+        self,
+        config: Config,
+        outgoing_ack_tx: Sender<u32>,
+        outgoing_nack_tx: Sender<u32>,
+    ) -> impl Stream<Item = FrameBody> {
         fn ok_f(pack: &FrameBody) {
             trace!("[decoder] received packet: {:?}", pack);
         }
@@ -277,7 +288,12 @@ pub mod micro_bench {
             let config = self.config;
             let data = self.data.clone();
             let mut cnt = 0;
-            let stream = self.into_stream().decoded(config);
+            let (outgoing_ack_tx, _outgoing_ack_rx) = flume::unbounded();
+            let (outgoing_nack_tx, _outgoing_nack_rx) = flume::unbounded();
+
+            let stream = self
+                .into_stream()
+                .decoded(config, outgoing_ack_tx, outgoing_nack_tx);
             #[futures_async_stream::for_await]
             for res in stream {
                 cnt += 1;
@@ -293,7 +309,12 @@ pub mod micro_bench {
         #[allow(clippy::semicolon_if_nothing_returned)]
         pub async fn bench_decoded(self) {
             let config = self.config;
-            let stream = self.into_stream().decoded(config);
+            let (outgoing_ack_tx, _outgoing_ack_rx) = flume::unbounded();
+            let (outgoing_nack_tx, _outgoing_nack_rx) = flume::unbounded();
+
+            let stream = self
+                .into_stream()
+                .decoded(config, outgoing_ack_tx, outgoing_nack_tx);
             #[futures_async_stream::for_await]
             for _r in stream {}
         }

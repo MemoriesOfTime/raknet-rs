@@ -6,17 +6,17 @@ use std::task::{Context, Poll};
 
 use bytes::{Bytes, BytesMut};
 use flume::Sender;
-use futures::{ready, Sink, Stream, StreamExt};
+use futures::{ready, Sink, SinkExt, Stream, StreamExt};
 use pin_project_lite::pin_project;
 use tokio::net::UdpSocket;
 use tokio_util::udp::UdpFramed;
 use tracing::{debug, error, info};
 
-use super::ack::HandleIncomingAck;
+use super::ack::{HandleIncomingAck, HandleOutgoingAck};
 use super::handshake::HandShaking;
 use super::offline::{self, HandleOffline};
 use super::{IOpts, Message, IO};
-use crate::codec::{self, Codec, Decoded};
+use crate::codec::{self, Codec, Decoded, Encoded};
 use crate::errors::{CodecError, Error};
 use crate::packet::connected::{Frames, Reliability};
 use crate::packet::{connected, Packet};
@@ -36,6 +36,7 @@ pin_project! {
         offline: OfflineHandler,
         socket: Arc<UdpSocket>,
         codec_config: codec::Config,
+        send_buf_cap: usize,
         router: HashMap<SocketAddr, Sender<connected::Packet<Frames<BytesMut>>>>,
     }
 }
@@ -45,6 +46,7 @@ impl Incoming {
         socket: UdpSocket,
         offline_config: offline::Config,
         codec_config: codec::Config,
+        send_buf_cap: usize,
     ) -> Self {
         fn err_f(err: CodecError) {
             debug!("[frame] got codec error: {err} when decode frames");
@@ -57,6 +59,7 @@ impl Incoming {
                 .handle_offline(offline_config),
             socket,
             codec_config,
+            send_buf_cap,
             router: HashMap::new(),
         }
     }
@@ -84,16 +87,28 @@ impl Stream for Incoming {
             let (router_tx, router_rx) = flume::unbounded();
             this.router.insert(peer.addr, router_tx);
 
-            let (ack_tx, ack_rx) = flume::unbounded();
-            let (nack_tx, nack_rx) = flume::unbounded();
+            let (incoming_ack_tx, incoming_ack_rx) = flume::unbounded();
+            let (incoming_nack_tx, incoming_nack_rx) = flume::unbounded();
+
+            let (outgoing_ack_tx, outgoing_ack_rx) = flume::unbounded();
+            let (outgoing_nack_tx, outgoing_nack_rx) = flume::unbounded();
 
             let io = IOImpl {
-                // TODO: implement encoder to make it Sink<Bytes>
-                output: UdpFramed::new(Arc::clone(this.socket), Codec),
+                output: UdpFramed::new(Arc::clone(this.socket), Codec)
+                    .with(move |u: Packet<Frames<Bytes>>| async move { Ok((u, peer.addr)) })
+                    .handle_outgoing_ack(
+                        incoming_ack_rx,
+                        incoming_nack_rx,
+                        outgoing_ack_rx,
+                        outgoing_nack_rx,
+                        *this.send_buf_cap,
+                        peer.mtu,
+                    )
+                    .encoded(peer.mtu, *this.codec_config),
                 input: router_rx
                     .into_stream()
-                    .handle_incoming_ack(ack_tx, nack_tx)
-                    .decoded(*this.codec_config)
+                    .handle_incoming_ack(incoming_ack_tx, incoming_nack_tx)
+                    .decoded(*this.codec_config, outgoing_ack_tx, outgoing_nack_tx)
                     .handshaking(),
                 default_reliability: Reliability::ReliableOrdered,
                 default_order_channel: 0,
@@ -147,7 +162,7 @@ impl<I, O> IOpts for IOImpl<I, O> {
 
 impl<I, O> Sink<Bytes> for IOImpl<I, O>
 where
-    O: Sink<(Packet<Frames<Bytes>>, SocketAddr), Error = CodecError>,
+    O: Sink<Message, Error = CodecError>,
 {
     type Error = Error;
 
@@ -171,23 +186,27 @@ where
 
 impl<I, O> Sink<Message> for IOImpl<I, O>
 where
-    O: Sink<(Packet<Frames<Bytes>>, SocketAddr), Error = CodecError>,
+    O: Sink<Message, Error = CodecError>,
 {
     type Error = Error;
 
     fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        todo!()
+        ready!(self.project().output.poll_ready(cx))?;
+        Poll::Ready(Ok(()))
     }
 
     fn start_send(self: Pin<&mut Self>, item: Message) -> Result<(), Self::Error> {
-        todo!()
+        self.project().output.start_send(item)?;
+        Ok(())
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        todo!()
+        ready!(self.project().output.poll_flush(cx))?;
+        Poll::Ready(Ok(()))
     }
 
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        todo!()
+        ready!(self.project().output.poll_close(cx))?;
+        Poll::Ready(Ok(()))
     }
 }
