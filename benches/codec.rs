@@ -1,4 +1,4 @@
-use bytes::Bytes;
+use bytes::BytesMut;
 use criterion::async_executor::FuturesExecutor;
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion, Throughput};
 use raknet_rs::codec;
@@ -19,7 +19,7 @@ pub fn codec_benchmark(c: &mut Criterion) {
             .parted_size(10)
             .shuffle(true)
             .seed(seed)
-            .data(Bytes::from_static(include_bytes!("data/body-short.txt")))
+            .data(BytesMut::from_iter(include_bytes!("data/body-short.txt")))
             .build()
             .unwrap();
 
@@ -49,7 +49,7 @@ pub fn codec_benchmark(c: &mut Criterion) {
             .parted_size(10)
             .shuffle(false)
             .seed(seed)
-            .data(Bytes::from_static(include_bytes!("data/body-short.txt")))
+            .data(BytesMut::from_iter(include_bytes!("data/body-short.txt")))
             .build()
             .unwrap();
 
@@ -79,7 +79,7 @@ pub fn codec_benchmark(c: &mut Criterion) {
             .parted_size(3)
             .shuffle(false)
             .seed(seed)
-            .data(Bytes::from_static(include_bytes!("data/body-large.txt")))
+            .data(BytesMut::from_iter(include_bytes!("data/body-large.txt")))
             .build()
             .unwrap();
 

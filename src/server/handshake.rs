@@ -58,10 +58,22 @@ where
                 request_timestamp,
                 accepted_timestamp,
             } => {}
-            FrameBody::Disconnect => {
+            FrameBody::DisconnectNotification => {
                 return Poll::Ready(None);
             }
-            _ => todo!(),
+            FrameBody::ConnectedPong {
+                client_timestamp,
+                server_timestamp,
+            } => todo!(),
+            FrameBody::ConnectionRequestAccepted {
+                client_address,
+                system_index,
+                system_addresses,
+                request_timestamp,
+                accepted_timestamp,
+            } => todo!(),
+            FrameBody::DetectLostConnections => todo!(),
+            FrameBody::User(_) => todo!(),
         };
         todo!()
     }

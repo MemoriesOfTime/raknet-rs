@@ -7,7 +7,7 @@ use futures::{Sink, Stream, StreamExt};
 use pin_project_lite::pin_project;
 
 use crate::errors::CodecError;
-use crate::packet::connected::{self, AckOrNack, FrameSet, Frames};
+use crate::packet::connected::{self, AckOrNack, Frame, FrameSet, Frames};
 
 pin_project! {
     pub(super) struct IncomingAck<F> {
@@ -92,6 +92,26 @@ impl<F> Sink<Frames<Bytes>> for OutgoingAck<F> {
     }
 
     fn start_send(self: Pin<&mut Self>, item: Frames<Bytes>) -> Result<(), Self::Error> {
+        todo!()
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        todo!()
+    }
+
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        todo!()
+    }
+}
+
+impl<F> Sink<Frame<Bytes>> for OutgoingAck<F> {
+    type Error = CodecError;
+
+    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        todo!()
+    }
+
+    fn start_send(self: Pin<&mut Self>, item: Frame<Bytes>) -> Result<(), Self::Error> {
         todo!()
     }
 

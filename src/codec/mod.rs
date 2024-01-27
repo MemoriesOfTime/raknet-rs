@@ -4,16 +4,18 @@ mod decoder;
 /// Frame encoder
 mod encoder;
 
-use bytes::{Buf, BytesMut};
+use bytes::{Buf, Bytes, BytesMut};
 use derive_builder::Builder;
-use futures::{Stream, StreamExt};
+use futures::{Sink, Stream, StreamExt};
 use tokio_util::codec::{Decoder, Encoder};
 use tracing::{debug, trace};
 
 use self::decoder::{DeFragmented, Deduplicated, FrameDecoded, Ordered};
+use self::encoder::{Fragmented, FrameEncoded};
 use crate::errors::CodecError;
-use crate::packet::connected::{FrameBody, FrameSet, Frames};
+use crate::packet::connected::{Frame, FrameBody, FrameSet, Frames};
 use crate::packet::Packet;
+use crate::server::Message;
 use crate::utils::Logged;
 
 /// Codec config
@@ -73,6 +75,33 @@ where
     }
 }
 
+pub(crate) trait Encoded {
+    fn encoded(self, mtu: u16, config: Config) -> impl Sink<Message, Error = CodecError>;
+
+    fn frame_encoded(
+        self,
+        mtu: u16,
+        config: Config,
+    ) -> impl Sink<Message, Error = CodecError> + Sink<FrameBody, Error = CodecError>;
+}
+
+impl<F> Encoded for F
+where
+    F: Sink<Frames<Bytes>, Error = CodecError> + Sink<Frame<Bytes>, Error = CodecError>,
+{
+    fn encoded(self, mtu: u16, config: Config) -> impl Sink<Message, Error = CodecError> {
+        self.fragmented(mtu, config.max_channels)
+    }
+
+    fn frame_encoded(
+        self,
+        mtu: u16,
+        config: Config,
+    ) -> impl Sink<Message, Error = CodecError> + Sink<FrameBody, Error = CodecError> {
+        self.fragmented(mtu, config.max_channels).frame_encoded()
+    }
+}
+
 /// The raknet codec
 pub(crate) struct Codec;
 
@@ -98,14 +127,12 @@ impl Decoder for Codec {
 /// Micro bench helper
 #[cfg(feature = "micro-bench")]
 pub mod micro_bench {
-    use bytes::{BufMut, Bytes};
     use rand::rngs::StdRng;
     use rand::seq::SliceRandom;
     use rand::{Rng, SeedableRng};
 
     use super::{BytesMut, Config, Decoded, FrameSet, Frames, Stream};
     use crate::packet::connected::{Flags, Fragment, Frame, Ordered, Uint24le};
-    use crate::packet::PackType;
 
     #[derive(derive_builder::Builder, Debug, Clone)]
     pub struct Options {
@@ -119,7 +146,7 @@ pub mod micro_bench {
         parted_size: usize,
         shuffle: bool,
         seed: u64,
-        data: Bytes,
+        data: BytesMut,
     }
 
     impl Options {
@@ -146,12 +173,7 @@ pub mod micro_bench {
             let frames: Frames<BytesMut> = std::iter::repeat(self.data.clone())
                 .take(self.frame_per_set * self.frame_set_cnt)
                 .enumerate()
-                .map(|(idx, old_body)| {
-                    let mut body = BytesMut::new();
-                    // Game Packet
-                    body.put_u8(PackType::Game as u8);
-                    body.put(old_body);
-
+                .map(|(idx, mut body)| {
                     let mut raw = 0;
                     let mut reliable_frame_index = None;
                     let mut fragment = None;
@@ -233,7 +255,7 @@ pub mod micro_bench {
     pub struct MicroBench {
         config: Config,
         #[cfg(test)]
-        data: Bytes,
+        data: BytesMut,
         frame_sets: Vec<FrameSet<Frames<BytesMut>>>,
     }
 
@@ -260,7 +282,7 @@ pub mod micro_bench {
             for res in stream {
                 cnt += 1;
                 let body = match res {
-                    crate::packet::connected::FrameBody::Game(body) => body,
+                    crate::packet::connected::FrameBody::User(body) => body,
                     _ => unreachable!("unexpected decoded result"),
                 };
                 tracing::debug!("receive body: {body:?}, cnt: {cnt}");
@@ -301,7 +323,7 @@ pub mod micro_bench {
             .parted_size(4)
             .shuffle(true)
             .seed(114514)
-            .data(Bytes::from_static(b"1145141919810"))
+            .data(BytesMut::from_iter(b"1145141919810"))
             .build()
             .unwrap();
         assert_eq!(

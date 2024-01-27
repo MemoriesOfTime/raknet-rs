@@ -1,4 +1,5 @@
 use std::hash::{Hash, Hasher};
+use std::net::SocketAddr;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
@@ -367,6 +368,9 @@ impl Ordered {
     }
 }
 
+// The max number of addresses from a peer, constant here to avoid alloc heap memory
+const MAX_SYSTEM_ADDRESSES_ENDPOINTS: usize = 20;
+
 #[derive(Clone)]
 pub(crate) enum FrameBody {
     ConnectedPing {
@@ -384,18 +388,20 @@ pub(crate) enum FrameBody {
     ConnectionRequestAccepted {
         client_address: std::net::SocketAddr,
         system_index: u16,
-        system_addresses: [std::net::SocketAddr; 10],
+        system_addresses: [std::net::SocketAddr; MAX_SYSTEM_ADDRESSES_ENDPOINTS],
         request_timestamp: i64,
         accepted_timestamp: i64,
     },
     NewIncomingConnection {
         server_address: std::net::SocketAddr,
-        system_addresses: [std::net::SocketAddr; 10],
+        system_addresses: [std::net::SocketAddr; MAX_SYSTEM_ADDRESSES_ENDPOINTS],
         request_timestamp: i64,
         accepted_timestamp: i64,
     },
-    Disconnect,
-    Game(Bytes),
+    DisconnectNotification,
+    DetectLostConnections,
+    // User Packet
+    User(Bytes),
 }
 
 impl std::fmt::Debug for FrameBody {
@@ -449,56 +455,94 @@ impl std::fmt::Debug for FrameBody {
                 .field("request_timestamp", request_timestamp)
                 .field("accepted_timestamp", accepted_timestamp)
                 .finish(),
-            Self::Disconnect => write!(f, "Disconnect"),
-            Self::Game(data) => write!(f, "Game(data_size:{})", data.remaining()),
+            Self::DisconnectNotification => write!(f, "Disconnect"),
+            Self::DetectLostConnections => write!(f, "DetectLostConnections"),
+            Self::User(data) => write!(f, "User(data_size:{})", data.remaining()),
         }
     }
 }
 
 impl FrameBody {
     pub(crate) fn read(mut buf: Bytes) -> Result<Self, CodecError> {
-        let id = PackType::from_u8(buf.get_u8())?;
+        fn parse_system_addresses(buf: &mut Bytes) -> Result<[SocketAddr; 20], CodecError> {
+            let mut addresses = [buf.get_socket_addr()?; MAX_SYSTEM_ADDRESSES_ENDPOINTS];
+            #[allow(clippy::needless_range_loop)] // do not tech me
+            for i in 1..MAX_SYSTEM_ADDRESSES_ENDPOINTS {
+                if buf.remaining() > 16 {
+                    addresses[i] = buf.get_socket_addr()?;
+                    continue;
+                }
+                // early exit to parse `request_timestamp(8B)` and `accepted_timestamp(8B)`
+                break;
+            }
+            if buf.remaining() < 16 {
+                return Err(CodecError::InvalidPacketLength("frame body"));
+            }
+            debug_assert!(buf.remaining() == 16);
+            Ok(addresses)
+        }
+
+        // checked in FrameSet, length is always greater than 0
+        let id = PackType::from_u8(buf.chunk()[0])?;
+
         match id {
             PackType::ConnectedPing => Ok(Self::ConnectedPing {
-                client_timestamp: buf.get_i64(),
+                client_timestamp: read_buf!(buf, 9, {
+                    buf.advance(1); // 1
+                    buf.get_i64() // 8
+                }),
             }),
-            PackType::ConnectedPong => Ok(Self::ConnectedPong {
-                client_timestamp: buf.get_i64(),
-                server_timestamp: buf.get_i64(),
-            }),
-            PackType::ConnectionRequest => Ok(Self::ConnectionRequest {
-                client_guid: buf.get_u64(),
-                request_timestamp: buf.get_i64(),
-                use_encryption: buf.get_u8() != 0,
-            }),
+            PackType::ConnectedPong => Ok(read_buf!(buf, 17, {
+                buf.advance(1); // 1
+                Self::ConnectedPong {
+                    client_timestamp: buf.get_i64(), // 8,
+                    server_timestamp: buf.get_i64(), // 8
+                }
+            })),
+            PackType::ConnectionRequest => Ok(read_buf!(buf, 18, {
+                buf.advance(1); // 1
+                Self::ConnectionRequest {
+                    client_guid: buf.get_u64(),        // 8
+                    request_timestamp: buf.get_i64(),  // 8
+                    use_encryption: buf.get_u8() != 0, // 1
+                }
+            })),
             PackType::ConnectionRequestAccepted => Ok(Self::ConnectionRequestAccepted {
-                client_address: buf.get_socket_addr()?,
-                system_index: buf.get_u16(),
-                system_addresses: todo!(),
+                client_address: {
+                    buf.advance(1);
+                    buf.get_socket_addr()?
+                },
+                system_index: read_buf!(buf, 2, buf.get_u16()),
+                system_addresses: parse_system_addresses(&mut buf)?,
                 request_timestamp: buf.get_i64(),
                 accepted_timestamp: buf.get_i64(),
             }),
             PackType::NewIncomingConnection => Ok(Self::NewIncomingConnection {
-                server_address: buf.get_socket_addr()?,
-                system_addresses: todo!(),
+                server_address: {
+                    buf.advance(1);
+                    buf.get_socket_addr()?
+                },
+                system_addresses: parse_system_addresses(&mut buf)?,
                 request_timestamp: buf.get_i64(),
                 accepted_timestamp: buf.get_i64(),
             }),
-            PackType::DisconnectNotification => Ok(Self::Disconnect),
-            PackType::Game => Ok(Self::Game(buf)),
-            _ => Err(CodecError::InvalidPacketType(id.into())),
+            PackType::DisconnectNotification => Ok(Self::DisconnectNotification),
+            PackType::DetectLostConnections => Ok(Self::DetectLostConnections),
+            _ => Ok(Self::User(buf)),
         }
     }
 
     pub(crate) fn write(self, buf: &mut BytesMut) {
         match self {
             FrameBody::ConnectedPing { client_timestamp } => {
+                buf.put_u8(PackType::ConnectedPing as u8);
                 buf.put_i64(client_timestamp);
             }
             FrameBody::ConnectedPong {
                 client_timestamp,
                 server_timestamp,
             } => {
+                buf.put_u8(PackType::ConnectedPong as u8);
                 buf.put_i64(client_timestamp);
                 buf.put_i64(server_timestamp);
             }
@@ -507,6 +551,7 @@ impl FrameBody {
                 request_timestamp,
                 use_encryption,
             } => {
+                buf.put_u8(PackType::ConnectionRequest as u8);
                 buf.put_u64(client_guid);
                 buf.put_i64(request_timestamp);
                 buf.put_u8(u8::from(use_encryption));
@@ -518,10 +563,14 @@ impl FrameBody {
                 request_timestamp,
                 accepted_timestamp,
             } => {
+                buf.put_u8(PackType::ConnectionRequestAccepted as u8);
                 buf.put_socket_addr(client_address);
                 buf.put_u16(system_index);
                 for addr in system_addresses {
-                    buf.put_socket_addr(addr);
+                    // check if valid
+                    if addr.port() != 0 {
+                        buf.put_socket_addr(addr);
+                    }
                 }
                 buf.put_i64(request_timestamp);
                 buf.put_i64(accepted_timestamp);
@@ -532,15 +581,24 @@ impl FrameBody {
                 request_timestamp,
                 accepted_timestamp,
             } => {
+                buf.put_u8(PackType::NewIncomingConnection as u8);
                 buf.put_socket_addr(server_address);
                 for addr in system_addresses {
-                    buf.put_socket_addr(addr);
+                    // check if valid
+                    if addr.port() != 0 {
+                        buf.put_socket_addr(addr);
+                    }
                 }
                 buf.put_i64(request_timestamp);
                 buf.put_i64(accepted_timestamp);
             }
-            FrameBody::Disconnect => {}
-            FrameBody::Game(data) => {
+            FrameBody::DisconnectNotification => {
+                buf.put_u8(PackType::DisconnectNotification as u8);
+            }
+            FrameBody::DetectLostConnections => {
+                buf.put_u8(PackType::DetectLostConnections as u8);
+            }
+            FrameBody::User(data) => {
                 buf.put(data);
             }
         }

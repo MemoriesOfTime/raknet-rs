@@ -37,7 +37,7 @@ pub(crate) enum PackType {
     UnconnectedPing1 = 0x01,
     UnconnectedPing2 = 0x02,
     ConnectedPong = 0x03,
-    LostConnections = 0x04,
+    DetectLostConnections = 0x04,
     OpenConnectionRequest1 = 0x05,
     OpenConnectionReply1 = 0x06,
     OpenConnectionRequest2 = 0x07,
@@ -56,7 +56,6 @@ pub(crate) enum PackType {
     Timestamp = 0x1b,
     UnconnectedPong = 0x1c,
     AdvertiseSystem = 0x1d,
-    Game = 0xfe,
 
     /// The types of these three packets form a range, and only the one with the flag will be used
     /// here.
@@ -72,7 +71,7 @@ impl PackType {
             0x01 => Ok(PackType::UnconnectedPing1),
             0x02 => Ok(PackType::UnconnectedPing2),
             0x03 => Ok(PackType::ConnectedPong),
-            0x04 => Ok(PackType::LostConnections),
+            0x04 => Ok(PackType::DetectLostConnections),
             0x05 => Ok(PackType::OpenConnectionRequest1),
             0x06 => Ok(PackType::OpenConnectionReply1),
             0x07 => Ok(PackType::OpenConnectionRequest2),
@@ -84,7 +83,6 @@ impl PackType {
             0x15 => Ok(PackType::DisconnectNotification),
             0x19 => Ok(PackType::IncompatibleProtocolVersion),
             0x1c => Ok(PackType::UnconnectedPong),
-            0xfe => Ok(PackType::Game),
             ACK_FLAG.. => Ok(PackType::Ack),
             NACK_FLAG.. => Ok(PackType::Nack),
             VALID_FLAG.. => Ok(PackType::FrameSet),
