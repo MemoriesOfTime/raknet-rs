@@ -30,7 +30,7 @@ pub fn codec_benchmark(c: &mut Criterion) {
             opts.input_mtu(),
         );
         group.throughput(Throughput::Elements(opts.input_data_cnt() as u64));
-        group.bench_function("decode_large_packets", |bencher| {
+        group.bench_function("decode_large_packets_same_data_cnt", |bencher| {
             bencher.to_async(FuturesExecutor).iter_batched(
                 || codec::micro_bench::MicroBench::new(opts.clone()),
                 |bench| bench.bench_decoded(),
@@ -39,7 +39,7 @@ pub fn codec_benchmark(c: &mut Criterion) {
         });
     }
 
-    // medium packets, every frame set only contains 10 frame
+    // medium packets, every frame set contains 6 frame
     {
         let opts = codec::micro_bench::Options::builder()
             .config(codec::Config::default())
@@ -62,7 +62,7 @@ pub fn codec_benchmark(c: &mut Criterion) {
             opts.input_mtu(),
         );
         group.throughput(Throughput::Elements(opts.input_data_cnt() as u64));
-        group.bench_function("decode_medium_packets", |bencher| {
+        group.bench_function("decode_medium_packets_same_data_cnt", |bencher| {
             bencher.to_async(FuturesExecutor).iter_batched(
                 || codec::micro_bench::MicroBench::new(opts.clone()),
                 |bench| bench.bench_decoded(),
@@ -71,7 +71,7 @@ pub fn codec_benchmark(c: &mut Criterion) {
         });
     }
 
-    // short packets, every frame set only contains 30 frame
+    // short packets, every frame set contains 36 frame
     {
         let opts = codec::micro_bench::Options::builder()
             .config(codec::Config::default())
@@ -94,7 +94,103 @@ pub fn codec_benchmark(c: &mut Criterion) {
             opts.input_mtu(),
         );
         group.throughput(Throughput::Elements(opts.input_data_cnt() as u64));
-        group.bench_function("decode_short_packets", |bencher| {
+        group.bench_function("decode_short_packets_same_data_cnt", |bencher| {
+            bencher.to_async(FuturesExecutor).iter_batched(
+                || codec::micro_bench::MicroBench::new(opts.clone()),
+                |bench| bench.bench_decoded(),
+                BatchSize::SmallInput,
+            );
+        });
+    }
+
+    // large packets, every frame set only contains one frame
+    {
+        let opts = codec::micro_bench::Options::builder()
+            .config(codec::Config::default())
+            .frame_per_set(1)
+            .frame_set_cnt(1440)
+            .duplicated_ratio(0.01)
+            .unordered(true)
+            .parted_size(4)
+            .shuffle(false)
+            .seed(seed)
+            .data(BytesMut::from_iter(include_bytes!("data/body-large.txt")))
+            .build()
+            .unwrap();
+
+        // total data size: 1,636,920 bytes, data count: 360, mtu: 1136
+        println!(
+            "total data size: {} bytes, data count: {}, mtu: {}",
+            opts.input_data_size(),
+            opts.input_data_cnt(),
+            opts.input_mtu(),
+        );
+        group.throughput(Throughput::Bytes(opts.input_data_size() as u64));
+        group.bench_function("decode_large_packets_same_data_size", |bencher| {
+            bencher.to_async(FuturesExecutor).iter_batched(
+                || codec::micro_bench::MicroBench::new(opts.clone()),
+                |bench| bench.bench_decoded(),
+                BatchSize::SmallInput,
+            );
+        });
+    }
+
+    // medium packets, every frame set contains 6 frame
+    {
+        let opts = codec::micro_bench::Options::builder()
+            .config(codec::Config::default())
+            .frame_per_set(6)
+            .frame_set_cnt(1550)
+            .duplicated_ratio(0.01)
+            .unordered(true)
+            .parted_size(1)
+            .shuffle(false)
+            .seed(seed)
+            .data(BytesMut::from_iter(include_bytes!("data/body-medium.txt")))
+            .build()
+            .unwrap();
+
+        // total data size: 1,636,800 bytes, data count: 9300, mtu: 1056
+        println!(
+            "total data size: {} bytes, data count: {}, mtu: {}",
+            opts.input_data_size(),
+            opts.input_data_cnt(),
+            opts.input_mtu(),
+        );
+        group.throughput(Throughput::Bytes(opts.input_data_size() as u64));
+        group.bench_function("decode_medium_packets_same_data_size", |bencher| {
+            bencher.to_async(FuturesExecutor).iter_batched(
+                || codec::micro_bench::MicroBench::new(opts.clone()),
+                |bench| bench.bench_decoded(),
+                BatchSize::SmallInput,
+            );
+        });
+    }
+
+    // short packets, every frame set contains 36 frame
+    {
+        let opts = codec::micro_bench::Options::builder()
+            .config(codec::Config::default())
+            .frame_per_set(36)
+            .frame_set_cnt(1378)
+            .duplicated_ratio(0.01)
+            .unordered(true)
+            .parted_size(1)
+            .shuffle(false)
+            .seed(seed)
+            .data(BytesMut::from_iter(include_bytes!("data/body-short.txt")))
+            .build()
+            .unwrap();
+
+        // total data size: 1,637,064 bytes, data count: 49608, mtu: 1188
+        println!(
+            "total data size: {} bytes, data count: {}, mtu: {}",
+            opts.input_data_size(),
+            opts.input_data_cnt(),
+            opts.input_mtu(),
+        );
+        group.throughput(Throughput::Bytes(opts.input_data_size() as u64));
+        group.bench_function("decode_short_packets_same_data_size", |bencher| {
             bencher.to_async(FuturesExecutor).iter_batched(
                 || codec::micro_bench::MicroBench::new(opts.clone()),
                 |bench| bench.bench_decoded(),
