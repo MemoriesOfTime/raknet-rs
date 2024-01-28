@@ -202,29 +202,40 @@ impl Hash for Flags {
 #[derive(Debug, Clone, Eq, PartialEq, Copy)]
 #[repr(u8)]
 pub enum Reliability {
-    /// Direct UDP
+    /// Same as regular UDP, except that it will also discard duplicate datagrams.  RakNet adds (6
+    /// to 17) + 21 bits of overhead, 16 of which is used to detect duplicate packets and 6 to 17
+    /// of which is used for message length.
     Unreliable = 0b000,
 
-    /// Ordered
+    /// Regular UDP with a sequence counter.  Out of order messages will be discarded.
+    /// Sequenced and ordered messages sent on the same channel will arrive in the order sent.
     UnreliableSequenced = 0b001,
 
-    /// Deduplicated
+    /// The message is sent reliably, but not necessarily in any order.  Same overhead as
+    /// UNRELIABLE.
     Reliable = 0b010,
 
-    /// Ordered + Deduplicated + Resend  (Most used)
+    /// This message is reliable and will arrive in the order you sent it.  Messages will be
+    /// delayed while waiting for out of order messages.  Same overhead as UnreliableSequenced.
+    /// Sequenced and ordered messages sent on the same channel will arrive in the order sent.
     ReliableOrdered = 0b011,
 
-    /// Ordered + Deduplicated
+    /// This message is reliable and will arrive in the sequence you sent it.  Out of order
+    /// messages will be dropped.  Same overhead as UnreliableSequenced. Sequenced and ordered
+    /// messages sent on the same channel will arrive in the order sent.
     ReliableSequenced = 0b100,
 
-    /// Not used
+    /// Same as Unreliable, however the peer will get either ACK or
+    /// NACK based on the result of sending this message when calling.
     UnreliableWithAckReceipt = 0b101,
-    UnreliableSequencedWithAckReceipt = 0b110,
-    ReliableWithAckReceipt = 0b111,
 
-    /// Defined but never be used (cannot be used).
-    ReliableOrderedWithAckReceipt = 0b1_000,
-    ReliableSequencedWithAckReceipt = 0b1_001,
+    /// Same as Reliable, however the peer will get either ACK or
+    /// NACK based on the result of sending this message when calling.
+    ReliableWithAckReceipt = 0b110,
+
+    /// Same as ReliableOrdered, however the peer will get either ACK or
+    /// NACK based on the result of sending this message when calling.
+    ReliableOrderedWithAckReceipt = 0b111,
 }
 
 impl Reliability {
@@ -237,7 +248,6 @@ impl Reliability {
                 | Reliability::ReliableOrdered
                 | Reliability::ReliableWithAckReceipt
                 | Reliability::ReliableOrderedWithAckReceipt
-                | Reliability::ReliableSequencedWithAckReceipt
         )
     }
 
@@ -249,21 +259,15 @@ impl Reliability {
             Reliability::ReliableSequenced
                 | Reliability::ReliableOrdered
                 | Reliability::UnreliableSequenced
-                | Reliability::UnreliableSequencedWithAckReceipt
-                | Reliability::ReliableSequencedWithAckReceipt
                 | Reliability::ReliableOrderedWithAckReceipt
         )
     }
 
-    /// Allow a global sequenced order over ordered channels, Sequenced implies Ordered
     /// TODO: implement sequenced
     pub(crate) fn is_sequenced(&self) -> bool {
         matches!(
             self,
-            Reliability::UnreliableSequenced
-                | Reliability::ReliableSequenced
-                | Reliability::UnreliableSequencedWithAckReceipt
-                | Reliability::ReliableSequencedWithAckReceipt
+            Reliability::UnreliableSequenced | Reliability::ReliableSequenced
         )
     }
 

@@ -64,9 +64,6 @@ where
                 Reliability::Unreliable => Reliability::Reliable,
                 Reliability::UnreliableSequenced => Reliability::ReliableSequenced,
                 Reliability::UnreliableWithAckReceipt => Reliability::ReliableWithAckReceipt,
-                Reliability::UnreliableSequencedWithAckReceipt => {
-                    Reliability::ReliableSequencedWithAckReceipt
-                }
                 _ => reliability,
             };
         }

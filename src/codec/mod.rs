@@ -143,17 +143,15 @@ pub mod micro_bench {
     use rand::{Rng, SeedableRng};
 
     use super::{BytesMut, Config, Decoded, FrameSet, Frames, Stream};
-    use crate::packet::connected::{Flags, Fragment, Frame, Ordered, Uint24le};
+    use crate::packet::connected::{Flags, Fragment, Frame, Ordered, Reliability, Uint24le};
 
     #[derive(derive_builder::Builder, Debug, Clone)]
     pub struct Options {
         config: Config,
         frame_set_cnt: usize,
         frame_per_set: usize,
-        duplicated: bool,
         duplicated_ratio: f32,
         unordered: bool,
-        parted: bool,
         parted_size: usize,
         shuffle: bool,
         seed: u64,
@@ -166,10 +164,8 @@ pub mod micro_bench {
                 config: None,
                 frame_set_cnt: None,
                 frame_per_set: None,
-                duplicated: None,
                 duplicated_ratio: None,
                 unordered: None,
-                parted: None,
                 parted_size: None,
                 shuffle: None,
                 seed: None,
@@ -180,20 +176,18 @@ pub mod micro_bench {
         fn gen_inputs(&self) -> Vec<FrameSet<Frames<BytesMut>>> {
             assert!(self.frame_per_set * self.frame_set_cnt % self.parted_size == 0);
             assert!(self.data.len() > self.parted_size);
+            assert!(self.parted_size >= 1);
             let mut rng = StdRng::seed_from_u64(self.seed);
             let frames: Frames<BytesMut> = std::iter::repeat(self.data.clone())
                 .take(self.frame_per_set * self.frame_set_cnt)
                 .enumerate()
                 .map(|(idx, mut body)| {
+                    let mut reliability = Reliability::Reliable;
                     let mut raw = 0;
-                    let mut reliable_frame_index = None;
+                    let reliable_frame_index = Some(Uint24le(idx as u32));
                     let mut fragment = None;
                     let mut ordered = None;
-                    if self.duplicated {
-                        raw |= 0b010 << 5;
-                        reliable_frame_index = Some(Uint24le(idx as u32));
-                    }
-                    if self.parted {
+                    if self.parted_size > 1 {
                         raw |= 0b0001_0000;
                         let parted_start =
                             (idx % self.parted_size) * (body.len() / self.parted_size);
@@ -211,14 +205,14 @@ pub mod micro_bench {
                         });
                     }
                     if self.unordered {
-                        raw |= 0b001 << 5;
+                        reliability = Reliability::ReliableOrdered;
                         ordered = Some(Ordered {
                             frame_index: Uint24le((idx / self.parted_size) as u32),
                             channel: 0,
                         });
                     }
                     Frame {
-                        flags: Flags::parse(raw),
+                        flags: Flags::parse(((reliability as u8) << 5) | raw),
                         reliable_frame_index,
                         seq_frame_index: None,
                         ordered,
@@ -227,11 +221,12 @@ pub mod micro_bench {
                     }
                 })
                 .flat_map(|frame| {
-                    if rng.gen_ratio((self.duplicated_ratio * 100.0) as u32, 100) {
-                        vec![frame.clone(), frame]
-                    } else {
-                        vec![frame]
+                    if self.duplicated_ratio > 0.
+                        && rng.gen_ratio((self.duplicated_ratio * 100.0) as u32, 100)
+                    {
+                        return vec![frame.clone(), frame];
                     }
+                    vec![frame]
                 })
                 .collect();
             let mut sets = frames
@@ -248,17 +243,16 @@ pub mod micro_bench {
             sets
         }
 
-        pub fn input_data_pack_cnt(&self) -> usize {
+        pub fn input_data_cnt(&self) -> usize {
             self.frame_per_set * self.frame_set_cnt / self.parted_size
         }
 
-        pub fn input_data_pack_size(&self) -> usize {
-            // omit the duplicated part
-            self.data.len() * self.input_data_pack_cnt()
+        pub fn input_data_size(&self) -> usize {
+            self.data.len() * self.input_data_cnt()
         }
 
         pub fn input_mtu(&self) -> usize {
-            self.data.len() / self.parted_size
+            self.frame_per_set * self.data.len() / self.parted_size
         }
     }
 
@@ -337,20 +331,15 @@ pub mod micro_bench {
             .config(Config::default())
             .frame_per_set(8)
             .frame_set_cnt(100)
-            .duplicated(true)
             .duplicated_ratio(0.1)
             .unordered(true)
-            .parted(true)
             .parted_size(4)
             .shuffle(true)
             .seed(114514)
             .data(BytesMut::from_iter(b"1145141919810"))
             .build()
             .unwrap();
-        assert_eq!(
-            opts.input_data_pack_size(),
-            8 * 100 / 4 * "1145141919810".len()
-        );
+        assert_eq!(opts.input_data_size(), 8 * 100 / 4 * "1145141919810".len());
         let bench = MicroBench::new(opts);
         bench.bench_decoded_checked().await;
     }
