@@ -271,9 +271,13 @@ where
             return self.project().frame.poll_ready(cx);
         }
 
-        let _ = self.as_mut().try_empty(cx)?;
+        let upstream = self.as_mut().try_empty(cx)?;
 
         if self.buf.len() >= self.cap {
+            debug_assert!(
+                upstream == Poll::Pending,
+                "OutgoingAck::try_empty returns Ready but buffer still remains!"
+            );
             Poll::Pending
         } else {
             Poll::Ready(Ok(()))

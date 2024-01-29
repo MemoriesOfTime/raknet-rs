@@ -22,6 +22,13 @@ use crate::packet::connected::{Frames, Reliability};
 use crate::packet::{connected, Packet};
 use crate::utils::{Log, Logged};
 
+#[derive(Debug, Clone, derive_builder::Builder)]
+pub struct Config {
+    send_buf_cap: usize,
+    codec: codec::Config,
+    offline: offline::Config,
+}
+
 /// Instantiate here to avoid some strange generic issues.
 type OfflineHandler = offline::OfflineHandler<
     Log<UdpFramed<Codec, Arc<UdpSocket>>, (Packet<Frames<BytesMut>>, SocketAddr), CodecError>,
@@ -35,19 +42,13 @@ pin_project! {
         #[pin]
         offline: OfflineHandler,
         socket: Arc<UdpSocket>,
-        codec_config: codec::Config,
-        send_buf_cap: usize,
+        config: Config,
         router: HashMap<SocketAddr, Sender<connected::Packet<Frames<BytesMut>>>>,
     }
 }
 
 impl Incoming {
-    fn new(
-        socket: UdpSocket,
-        offline_config: offline::Config,
-        codec_config: codec::Config,
-        send_buf_cap: usize,
-    ) -> Self {
+    fn new(socket: UdpSocket, config: Config) -> Self {
         fn err_f(err: CodecError) {
             debug!("[frame] got codec error: {err} when decode frames");
         }
@@ -56,10 +57,9 @@ impl Incoming {
         Self {
             offline: UdpFramed::new(Arc::clone(&socket), Codec)
                 .logged_err(err_f)
-                .handle_offline(offline_config),
+                .handle_offline(config.offline.clone()),
             socket,
-            codec_config,
-            send_buf_cap,
+            config,
             router: HashMap::new(),
         }
     }
@@ -101,14 +101,14 @@ impl Stream for Incoming {
                         incoming_nack_rx,
                         outgoing_ack_rx,
                         outgoing_nack_rx,
-                        *this.send_buf_cap,
+                        this.config.send_buf_cap,
                         peer.mtu,
                     )
-                    .encoded(peer.mtu, *this.codec_config),
+                    .encoded(peer.mtu, this.config.codec),
                 input: router_rx
                     .into_stream()
                     .handle_incoming_ack(incoming_ack_tx, incoming_nack_tx)
-                    .decoded(*this.codec_config, outgoing_ack_tx, outgoing_nack_tx)
+                    .decoded(this.config.codec, outgoing_ack_tx, outgoing_nack_tx)
                     .handshaking(),
                 default_reliability: Reliability::ReliableOrdered,
                 default_order_channel: 0,

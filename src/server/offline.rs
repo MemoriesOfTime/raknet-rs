@@ -36,8 +36,8 @@ where
     }
 }
 
-#[derive(Debug, Clone)]
-pub(super) struct Config {
+#[derive(Debug, Clone, derive_builder::Builder)]
+pub struct Config {
     sever_guid: u64,
     advertisement: Bytes,
     min_mtu: u16,
