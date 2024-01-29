@@ -1,3 +1,5 @@
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
@@ -93,5 +95,32 @@ where
 
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.project().source.poll_close(cx)
+    }
+}
+
+pub(crate) struct SortedIterMut<'a, T>
+where
+    T: Ord,
+{
+    pq: &'a mut BinaryHeap<T>,
+}
+
+impl<'a, T> SortedIterMut<'a, T>
+where
+    T: Ord,
+{
+    pub(crate) fn new(pq: &'a mut BinaryHeap<T>) -> Self {
+        Self { pq }
+    }
+}
+
+impl<T> Iterator for SortedIterMut<'_, Reverse<T>>
+where
+    T: Ord,
+{
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.pq.pop().map(|v| v.0)
     }
 }

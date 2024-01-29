@@ -1,5 +1,5 @@
 use std::cmp::Reverse;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BinaryHeap, HashMap, VecDeque};
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
@@ -7,11 +7,11 @@ use bytes::Bytes;
 use flume::{Receiver, Sender};
 use futures::{Sink, Stream, StreamExt};
 use pin_project_lite::pin_project;
-use priority_queue::PriorityQueue;
 
 use crate::errors::CodecError;
 use crate::packet::connected::{self, AckOrNack, Frame, FrameSet, Frames, Record, Uint24le};
 use crate::packet::{Packet, FRAME_SET_HEADER_SIZE};
+use crate::utils::SortedIterMut;
 
 pin_project! {
     pub(super) struct IncomingAck<F> {
@@ -85,8 +85,8 @@ pin_project! {
         buf: VecDeque<Frame<Bytes>>,
         cap: usize,
         mtu: u16,
-        ack_queue: PriorityQueue<u32, Reverse<u32>>,
-        nack_queue: PriorityQueue<u32, Reverse<u32>>,
+        ack_queue: BinaryHeap<Reverse<u32>>,
+        nack_queue: BinaryHeap<Reverse<u32>>,
         resending: HashMap<u32, Frames<Bytes>>,
     }
 }
@@ -126,40 +126,10 @@ where
             buf: VecDeque::with_capacity(cap),
             cap,
             mtu,
-            ack_queue: PriorityQueue::new(),
-            nack_queue: PriorityQueue::new(),
+            ack_queue: BinaryHeap::new(),
+            nack_queue: BinaryHeap::new(),
             resending: HashMap::new(),
         }
-    }
-}
-
-struct SortedIterMut<'a, I, P>
-where
-    I: std::hash::Hash + Eq,
-    P: Ord,
-{
-    pq: &'a mut PriorityQueue<I, P>,
-}
-
-impl<'a, I, P> SortedIterMut<'a, I, P>
-where
-    I: std::hash::Hash + Eq,
-    P: Ord,
-{
-    fn new(pq: &'a mut PriorityQueue<I, P>) -> Self {
-        Self { pq }
-    }
-}
-
-impl<I, P> Iterator for SortedIterMut<'_, I, P>
-where
-    I: std::hash::Hash + Eq,
-    P: Ord,
-{
-    type Item = I;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.pq.pop().map(|v| v.0)
     }
 }
 
@@ -202,10 +172,10 @@ where
             }
         }
         for ack in this.outgoing_ack_rx.try_iter() {
-            this.ack_queue.push(ack, Reverse(ack));
+            this.ack_queue.push(Reverse(ack));
         }
         for nack in this.outgoing_nack_rx.try_iter() {
-            this.nack_queue.push(nack, Reverse(nack));
+            this.nack_queue.push(Reverse(nack));
         }
     }
 
