@@ -28,6 +28,6 @@ pub enum CodecError {
 pub enum Error {
     #[error(transparent)]
     Codec(#[from] CodecError),
-    #[error("connection closed, reason {0}")]
-    ConnectionClosed(&'static str),
+    #[error("connection closed")]
+    ConnectionClosed,
 }

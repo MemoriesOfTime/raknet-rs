@@ -395,7 +395,7 @@ pub(crate) enum FrameBody {
         server_timestamp: i64,
     },
     ConnectionRequest {
-        client_guid: u64,
+        sever_guid: u64,
         request_timestamp: i64,
         use_encryption: bool,
     },
@@ -434,7 +434,7 @@ impl std::fmt::Debug for FrameBody {
                 .field("server_timestamp", server_timestamp)
                 .finish(),
             Self::ConnectionRequest {
-                client_guid,
+                sever_guid: client_guid,
                 request_timestamp,
                 use_encryption,
             } => f
@@ -516,7 +516,7 @@ impl FrameBody {
             PackType::ConnectionRequest => Ok(read_buf!(buf, 18, {
                 buf.advance(1); // 1
                 Self::ConnectionRequest {
-                    client_guid: buf.get_u64(),        // 8
+                    sever_guid: buf.get_u64(),         // 8
                     request_timestamp: buf.get_i64(),  // 8
                     use_encryption: buf.get_u8() != 0, // 1
                 }
@@ -561,7 +561,7 @@ impl FrameBody {
                 buf.put_i64(server_timestamp);
             }
             FrameBody::ConnectionRequest {
-                client_guid,
+                sever_guid: client_guid,
                 request_timestamp,
                 use_encryption,
             } => {

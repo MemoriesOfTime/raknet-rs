@@ -5,7 +5,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use bytes::{Bytes, BytesMut};
-use futures::{ready, FutureExt, Sink, SinkExt, Stream};
+use futures::{ready, Sink, Stream};
 use pin_project_lite::pin_project;
 use tracing::{debug, error, warn};
 
@@ -31,31 +31,30 @@ where
             ),
             config,
             connected: HashMap::new(),
-            sending: None,
+            state: OfflineState::Listening,
         }
     }
 }
 
 #[derive(Debug, Clone, derive_builder::Builder)]
 pub struct Config {
-    sever_guid: u64,
-    advertisement: Bytes,
-    min_mtu: u16,
-    max_mtu: u16,
+    pub sever_guid: u64,
+    pub advertisement: Bytes,
+    pub min_mtu: u16,
+    pub max_mtu: u16,
     // Supported raknet versions, sorted
-    support_version: Vec<u8>,
-    max_pending: usize,
+    pub support_version: Vec<u8>,
+    pub max_pending: usize,
 }
 
-type SendSelfRef<F> = futures::sink::Send<
-    'static,
-    Pin<&'static mut F>,
-    (Packet<Vec<connected::Frame<Bytes>>>, SocketAddr),
->;
+enum OfflineState {
+    Listening,
+    SendingPrepare(Option<(Packet<Frames<Bytes>>, SocketAddr)>),
+    SendingFlush,
+}
 
 pin_project! {
     /// OfflineHandler takes the codec frame and perform offline handshake.
-    #[project(!Unpin)] // OfflineHandler is !Unpin even F is Unpin
     pub(super) struct OfflineHandler<F: 'static> {
         #[pin]
         frame: F,
@@ -63,8 +62,7 @@ pin_project! {
         // Half-connected queue
         pending: lru::LruCache<SocketAddr, u8>,
         connected: HashMap<SocketAddr, Peer>,
-        // refer to self.frame, send notification to client
-        sending: Option<SendSelfRef<F>>,
+        state: OfflineState
     }
 }
 
@@ -113,13 +111,30 @@ where
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
         loop {
-            if let Some(sending) = this.sending {
-                if let Err(err) = ready!(sending.poll_unpin(cx)) {
-                    error!("send error: {err}");
+            match this.state {
+                OfflineState::Listening => {}
+                OfflineState::SendingPrepare(pack) => {
+                    if let Err(err) = ready!(this.frame.as_mut().poll_ready(cx)) {
+                        error!("send error: {err}");
+                        *this.state = OfflineState::Listening;
+                        continue;
+                    }
+                    if let Err(err) = this.frame.as_mut().start_send(pack.take().unwrap()) {
+                        error!("send error: {err}");
+                        *this.state = OfflineState::Listening;
+                        continue;
+                    }
+                    *this.state = OfflineState::SendingFlush;
+                    continue;
+                }
+                OfflineState::SendingFlush => {
+                    if let Err(err) = ready!(this.frame.as_mut().poll_flush(cx)) {
+                        error!("send error: {err}");
+                    }
+                    *this.state = OfflineState::Listening;
                 }
             }
-            // there is no sending or sending is finished, reset the sending
-            *this.sending = None;
+
             let Some((packet, addr)) = ready!(this.frame.as_mut().poll_next(cx)) else {
                 return Poll::Ready(None);
             };
@@ -131,15 +146,10 @@ where
                     }
                     debug!("ignore connected packet from unconnected client {addr}");
                     // TODO: Send DETECT_LOST_CONNECTION ?
-                    let send = this
-                        .frame
-                        .send((Self::make_connection_request_failed(this.config), addr));
-                    // Breaking limit from borrow checker
-                    // Safety:
-                    // Self-reference struct has the 'static lifetime reference to itself
-                    // We never allow &mut T access unpinned field in `OfflineHandler` and
-                    // `OfflineHandler` itself.
-                    *this.sending = unsafe { std::mem::transmute(Some(send)) };
+                    *this.state = OfflineState::SendingPrepare(Some((
+                        Self::make_connection_request_failed(this.config),
+                        addr,
+                    )));
                     continue;
                 }
             };
@@ -163,10 +173,10 @@ where
                         .binary_search(&protocol_version)
                         .is_err()
                     {
-                        let send = this
-                            .frame
-                            .send((Self::make_incompatible_version(this.config), addr));
-                        *this.sending = unsafe { std::mem::transmute(Some(send)) };
+                        *this.state = OfflineState::SendingPrepare(Some((
+                            Self::make_incompatible_version(this.config),
+                            addr,
+                        )));
                         continue;
                     }
                     if this.pending.put(addr, protocol_version).is_some() {
@@ -184,10 +194,10 @@ where
                 unconnected::Packet::OpenConnectionRequest2 { mtu, .. } => {
                     if this.pending.pop(&addr).is_none() {
                         debug!("received open connection request 2 from {addr} without open connection request 1");
-                        let send = this
-                            .frame
-                            .send((Self::make_incompatible_version(this.config), addr));
-                        *this.sending = unsafe { std::mem::transmute(Some(send)) };
+                        *this.state = OfflineState::SendingPrepare(Some((
+                            Self::make_incompatible_version(this.config),
+                            addr,
+                        )));
                         continue;
                     };
                     // client should adjust the mtu
@@ -195,10 +205,10 @@ where
                         || mtu > this.config.max_mtu
                         || this.connected.contains_key(&addr)
                     {
-                        let send = this
-                            .frame
-                            .send((Self::make_already_connected(this.config), addr));
-                        *this.sending = unsafe { std::mem::transmute(Some(send)) };
+                        *this.state = OfflineState::SendingPrepare(Some((
+                            Self::make_already_connected(this.config),
+                            addr,
+                        )));
                         continue;
                     }
                     this.connected.insert(addr, Peer { addr, mtu });
@@ -218,8 +228,7 @@ where
                     continue;
                 }
             };
-            let send = this.frame.send((Packet::Unconnected(resp), addr));
-            *this.sending = unsafe { std::mem::transmute(Some(send)) };
+            *this.state = OfflineState::SendingPrepare(Some((Packet::Unconnected(resp), addr)));
         }
     }
 }

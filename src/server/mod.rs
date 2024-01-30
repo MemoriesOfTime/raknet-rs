@@ -4,7 +4,6 @@ use futures::{Sink, Stream};
 use crate::packet::connected::Reliability;
 
 mod ack;
-mod handshake;
 mod incoming;
 mod offline;
 
