@@ -5,6 +5,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use bytes::{BufMut, Bytes, BytesMut};
+use flume::Sender;
 use futures::{ready, Stream, StreamExt};
 use lru::LruCache;
 use pin_project_lite::pin_project;
@@ -28,23 +29,41 @@ pin_project! {
         // users sending a large number of parted IDs.
         parts: LruCache<u16, PriorityQueue<Frame<BytesMut>, Reverse<u32>>>,
         buffer: VecDeque<FrameSet<Frame<Bytes>>>,
+        seq_num_read_index: u32,
+        outgoing_ack_tx: Sender<u32>,
+        outgoing_nack_tx: Sender<u32>,
     }
 }
 
 pub(crate) trait DeFragmented: Sized {
-    fn defragmented(self, limit_size: u32, limit_parted: usize) -> DeFragment<Self>;
+    fn defragmented(
+        self,
+        limit_size: u32,
+        limit_parted: usize,
+        outgoing_ack_tx: Sender<u32>,
+        outgoing_nack_tx: Sender<u32>,
+    ) -> DeFragment<Self>;
 }
 
 impl<F> DeFragmented for F
 where
     F: Stream<Item = Result<FrameSet<Frames<BytesMut>>, CodecError>>,
 {
-    fn defragmented(self, limit_size: u32, limit_parted: usize) -> DeFragment<Self> {
+    fn defragmented(
+        self,
+        limit_size: u32,
+        limit_parted: usize,
+        outgoing_ack_tx: Sender<u32>,
+        outgoing_nack_tx: Sender<u32>,
+    ) -> DeFragment<Self> {
         DeFragment {
             frame: self,
             limit_size,
             parts: LruCache::new(NonZeroUsize::new(limit_parted).expect("limit_parted > 0")),
             buffer: VecDeque::with_capacity(DEFAULT_DEFRAGMENT_BUF_SIZE),
+            seq_num_read_index: 0,
+            outgoing_ack_tx,
+            outgoing_nack_tx,
         }
     }
 }
@@ -77,12 +96,20 @@ where
                 {
                     // promise that parted_index is always less than parted_size
                     if parted_index >= parted_size {
+                        // perhaps network bit-flips
+                        this.outgoing_nack_tx
+                            .send(frame_set.seq_num.0)
+                            .expect("outgoing_nack_rx never drops");
                         return Poll::Ready(Some(Err(CodecError::PartedFrame(format!(
                             "parted_index {} >= parted_size {}",
                             parted_index, parted_size
                         )))));
                     }
                     if *this.limit_size != 0 && parted_size > *this.limit_size {
+                        // we discarded this packet and prevented the peer from resending it.
+                        this.outgoing_ack_tx
+                            .send(frame_set.seq_num.0)
+                            .expect("outgoing_ack_rx never drops");
                         return Poll::Ready(Some(Err(CodecError::PartedFrame(format!(
                             "parted_size {} exceed limit_size {}",
                             parted_size, *this.limit_size
@@ -127,6 +154,20 @@ where
                     seq_num: frame_set.seq_num,
                     set: frame.freeze(),
                 });
+            }
+
+            let seq_index = frame_set.seq_num.0;
+            this.outgoing_ack_tx
+                .send(seq_index)
+                .expect("outgoing_ack_rx never drops");
+            let pre_read_index = *this.seq_num_read_index;
+            if pre_read_index <= seq_index {
+                *this.seq_num_read_index = seq_index + 1;
+                for nack in pre_read_index..seq_index {
+                    this.outgoing_nack_tx
+                        .send(nack)
+                        .expect("outgoing_nack_rx never drops");
+                }
             }
         }
     }
@@ -205,11 +246,16 @@ mod test {
         };
 
         tokio::pin!(frame);
+        let (outgoing_ack_tx, _outgoing_ack_rx) = flume::unbounded();
+        let (outgoing_nack_tx, _outgoing_nack_rx) = flume::unbounded();
         let mut frag = DeFragment {
             frame: frame.map(Ok),
             limit_size: 0,
             parts: LruCache::new(NonZeroUsize::new(512).expect("limit_parted > 0")),
             buffer: VecDeque::new(),
+            seq_num_read_index: 0,
+            outgoing_ack_tx,
+            outgoing_nack_tx,
         };
 
         let set = frag.next().await.unwrap().unwrap();
@@ -217,7 +263,7 @@ mod test {
         // frames should be merged
         assert_eq!(String::from_utf8(set.set.body.to_vec()).unwrap(), "happy");
         // wiped
-        assert!(!set.set.flags.parted());
+        assert!(!set.set.flags.parted);
         assert!(set.set.fragment.is_none());
 
         // could only be polled once
@@ -235,11 +281,16 @@ mod test {
         };
 
         tokio::pin!(frame);
+        let (outgoing_ack_tx, _outgoing_ack_rx) = flume::unbounded();
+        let (outgoing_nack_tx, _outgoing_nack_rx) = flume::unbounded();
         let mut frag = DeFragment {
             frame: frame.map(Ok),
             limit_size: 20,
             parts: LruCache::new(NonZeroUsize::new(512).expect("limit_parted > 0")),
             buffer: VecDeque::new(),
+            seq_num_read_index: 0,
+            outgoing_ack_tx,
+            outgoing_nack_tx,
         };
 
         assert!(matches!(
@@ -272,11 +323,16 @@ mod test {
         };
 
         tokio::pin!(frame);
+        let (outgoing_ack_tx, _outgoing_ack_rx) = flume::unbounded();
+        let (outgoing_nack_tx, _outgoing_nack_rx) = flume::unbounded();
         let mut frag = DeFragment {
             frame: frame.map(Ok),
             limit_size: 0,
             parts: LruCache::new(NonZeroUsize::new(2).expect("limit_parted > 0")),
             buffer: VecDeque::new(),
+            seq_num_read_index: 0,
+            outgoing_ack_tx,
+            outgoing_nack_tx,
         };
 
         assert!(frag.next().await.is_none());
@@ -303,11 +359,16 @@ mod test {
         };
 
         tokio::pin!(frame);
+        let (outgoing_ack_tx, _outgoing_ack_rx) = flume::unbounded();
+        let (outgoing_nack_tx, _outgoing_nack_rx) = flume::unbounded();
         let mut frag = DeFragment {
             frame: frame.map(Ok),
             limit_size: 0,
             parts: LruCache::new(NonZeroUsize::new(2).expect("limit_parted > 0")),
             buffer: VecDeque::new(),
+            seq_num_read_index: 0,
+            outgoing_ack_tx,
+            outgoing_nack_tx,
         };
 
         {
@@ -345,11 +406,16 @@ mod test {
         };
 
         tokio::pin!(frame);
+        let (outgoing_ack_tx, _outgoing_ack_rx) = flume::unbounded();
+        let (outgoing_nack_tx, _outgoing_nack_rx) = flume::unbounded();
         let mut frag = DeFragment {
             frame: frame.map(Ok),
             limit_size: 0,
             parts: LruCache::new(NonZeroUsize::new(1).expect("limit_parted > 0")),
             buffer: VecDeque::new(),
+            seq_num_read_index: 0,
+            outgoing_ack_tx,
+            outgoing_nack_tx,
         };
 
         let set = frag.next().await.unwrap().unwrap();

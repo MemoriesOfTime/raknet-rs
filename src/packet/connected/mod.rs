@@ -45,29 +45,9 @@ impl<B: Buf> Packet<Frames<B>> {
         match self {
             Packet::FrameSet(frame) => {
                 let mut flag = VALID_FLAG | NEEDS_B_AND_AS_FLAG;
-                if frame.set[0].flags.parted() {
+                if frame.set[0].flags.parted {
                     flag |= CONTINUOUS_SEND_FLAG;
                 }
-                buf.put_u8(flag);
-                frame.write(buf);
-            }
-            Packet::Ack(ack) => {
-                buf.put_u8(ACK_FLAG);
-                ack.write(buf);
-            }
-            Packet::Nack(ack) => {
-                buf.put_u8(NACK_FLAG);
-                ack.write(buf);
-            }
-        }
-    }
-}
-
-impl<B: Buf> Packet<Frame<B>> {
-    pub(super) fn write(self, buf: &mut BytesMut) {
-        match self {
-            Packet::FrameSet(frame) => {
-                let flag = VALID_FLAG | NEEDS_B_AND_AS_FLAG;
                 buf.put_u8(flag);
                 frame.write(buf);
             }

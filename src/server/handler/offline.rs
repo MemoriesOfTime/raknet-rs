@@ -115,12 +115,12 @@ where
                 OfflineState::Listening => {}
                 OfflineState::SendingPrepare(pack) => {
                     if let Err(err) = ready!(this.frame.as_mut().poll_ready(cx)) {
-                        error!("send error: {err}");
+                        error!("[offline] send error: {err}");
                         *this.state = OfflineState::Listening;
                         continue;
                     }
                     if let Err(err) = this.frame.as_mut().start_send(pack.take().unwrap()) {
-                        error!("send error: {err}");
+                        error!("[offline] send error: {err}");
                         *this.state = OfflineState::Listening;
                         continue;
                     }
@@ -129,7 +129,7 @@ where
                 }
                 OfflineState::SendingFlush => {
                     if let Err(err) = ready!(this.frame.as_mut().poll_flush(cx)) {
-                        error!("send error: {err}");
+                        error!("[offline] send error: {err}");
                     }
                     *this.state = OfflineState::Listening;
                 }
@@ -146,7 +146,7 @@ where
                         return Poll::Ready(Some((pack, peer.clone())));
                     }
                     debug!(
-                        "ignore connected packet {:?} from unconnected client {addr}",
+                        "[offline] ignore connected packet {:?} from unconnected client {addr}",
                         pack.pack_type()
                     );
                     // TODO: Send DETECT_LOST_CONNECTION ?
@@ -184,7 +184,9 @@ where
                         continue;
                     }
                     if this.pending.put(addr, protocol_version).is_some() {
-                        debug!("received duplicate open connection request 1 from {addr}");
+                        debug!(
+                            "[offline] received duplicate open connection request 1 from {addr}"
+                        );
                     }
                     // max_mtu >= final_mtu >= min_mtu
                     let final_mtu = mtu.clamp(this.config.min_mtu, this.config.max_mtu);
@@ -197,7 +199,7 @@ where
                 }
                 unconnected::Packet::OpenConnectionRequest2 { mtu, .. } => {
                     if this.pending.pop(&addr).is_none() {
-                        debug!("received open connection request 2 from {addr} without open connection request 1");
+                        debug!("[offline] received open connection request 2 from {addr} without open connection request 1");
                         *this.state = OfflineState::SendingPrepare(Some((
                             Self::make_incompatible_version(this.config),
                             addr,

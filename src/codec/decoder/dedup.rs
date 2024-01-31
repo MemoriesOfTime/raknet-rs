@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+use flume::Sender;
 use futures::{ready, Stream, StreamExt};
 use pin_project_lite::pin_project;
 
@@ -177,23 +178,25 @@ pin_project! {
         frame: F,
         // Limit the maximum reliable_frame_index gap for a connection. 0 means no limit.
         max_gap: usize,
-        window: DuplicateWindow
+        window: DuplicateWindow,
+        outgoing_ack_tx: Sender<u32>,
     }
 }
 
 pub(crate) trait Deduplicated: Sized {
-    fn deduplicated(self, max_gap: usize) -> Dedup<Self>;
+    fn deduplicated(self, max_gap: usize, outgoing_ack_tx: Sender<u32>) -> Dedup<Self>;
 }
 
 impl<F, B> Deduplicated for F
 where
     F: Stream<Item = Result<FrameSet<Frames<B>>, CodecError>>,
 {
-    fn deduplicated(self, max_gap: usize) -> Dedup<Self> {
+    fn deduplicated(self, max_gap: usize, outgoing_ack_tx: Sender<u32>) -> Dedup<Self> {
         Dedup {
             frame: self,
             max_gap,
             window: DuplicateWindow::default(),
+            outgoing_ack_tx,
         }
     }
 }
@@ -224,6 +227,11 @@ where
             });
             if !frame_set.set.is_empty() {
                 return Poll::Ready(Some(Ok(frame_set)));
+            } else {
+                // all duplicated, send ack back
+                this.outgoing_ack_tx
+                    .send(frame_set.seq_num.0)
+                    .expect("outgoing_ack_rx never drops");
             }
         }
     }
@@ -323,10 +331,12 @@ mod test {
             }
         };
         tokio::pin!(frame);
+        let (outgoing_ack_tx, _rx) = flume::unbounded();
         let mut dedup = Dedup {
             frame: frame.map(Ok),
             max_gap: 100,
             window: DuplicateWindow::default(),
+            outgoing_ack_tx,
         };
 
         assert_eq!(dedup.next().await.unwrap().unwrap(), frame_set(0..64));
@@ -350,10 +360,12 @@ mod test {
             }
         };
         tokio::pin!(frame);
+        let (outgoing_ack_tx, _rx) = flume::unbounded();
         let mut dedup = Dedup {
             frame: frame.map(Ok),
             max_gap: 100,
             window: DuplicateWindow::default(),
+            outgoing_ack_tx,
         };
         assert_eq!(dedup.next().await.unwrap().unwrap(), frame_set([0]));
         assert_eq!(dedup.next().await.unwrap().unwrap(), frame_set([101]));
@@ -373,10 +385,12 @@ mod test {
             }
         };
         tokio::pin!(frame);
+        let (outgoing_ack_tx, _rx) = flume::unbounded();
         let mut dedup = Dedup {
             frame: frame.map(Ok),
             max_gap: 100,
             window: DuplicateWindow::default(),
+            outgoing_ack_tx,
         };
         assert_eq!(
             dedup.next().await.unwrap().unwrap(),
@@ -407,10 +421,12 @@ mod test {
             }
         };
         tokio::pin!(frame);
+        let (outgoing_ack_tx, _rx) = flume::unbounded();
         let mut dedup = Dedup {
             frame: frame.map(Ok),
             max_gap: scale,
             window: DuplicateWindow::default(),
+            outgoing_ack_tx,
         };
         assert_eq!(
             dedup.next().await.unwrap().unwrap(),

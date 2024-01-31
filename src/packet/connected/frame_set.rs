@@ -42,13 +42,6 @@ impl<B: Buf> FrameSet<Frames<B>> {
     }
 }
 
-impl<B: Buf> FrameSet<Frame<B>> {
-    pub(super) fn write(self, buf: &mut BytesMut) {
-        self.seq_num.write(buf);
-        self.set.write(buf);
-    }
-}
-
 #[derive(Eq, PartialEq, Clone)]
 pub(crate) struct Frame<B> {
     pub(crate) flags: Flags,
@@ -133,7 +126,7 @@ impl Frame<BytesMut> {
         if reliability.is_sequenced_or_ordered() {
             ordered = read_buf!(buf, 4, Some(Ordered::read(buf)));
         }
-        if flags.parted() {
+        if flags.parted {
             fragment = read_buf!(buf, 10, Some(Fragment::read(buf)));
         }
         let body = read_buf!(buf, length, buf.split_to(length));
@@ -189,8 +182,8 @@ impl<B: Buf> Frame<B> {
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub(crate) struct Flags {
     raw: u8,
-    reliability: Reliability,
-    parted: bool,
+    pub(crate) reliability: Reliability,
+    pub(crate) parted: bool,
     needs_bas: bool,
 }
 
@@ -323,20 +316,6 @@ impl Flags {
             parted: raw & PARTED_FLAG != 0,
             needs_bas: raw & NEEDS_B_AND_AS_FLAG != 0,
         }
-    }
-
-    /// Get the reliability of this flags
-    pub(crate) fn reliability(&self) -> Reliability {
-        self.reliability
-    }
-
-    /// Return if it is parted
-    pub(crate) fn parted(&self) -> bool {
-        self.parted
-    }
-
-    pub(crate) fn needs_bas(&self) -> bool {
-        self.needs_bas
     }
 }
 

@@ -1,9 +1,9 @@
 use bytes::Bytes;
 use futures::{Sink, Stream};
 
+use crate::errors::Error;
 use crate::packet::connected::Reliability;
 
-mod ack;
 mod handler;
 mod incoming;
 
@@ -59,4 +59,8 @@ pub trait IOpts {
 }
 
 // Provide the basic operation for each connection, produced by [`Incoming`]
-type IO = impl Stream<Item = Bytes> + Sink<Bytes> + Sink<Message> + IOpts + Send;
+type IO = impl Stream<Item = Bytes>
+    + Sink<Bytes, Error = Error>
+    + Sink<Message, Error = Error>
+    + IOpts
+    + Send;

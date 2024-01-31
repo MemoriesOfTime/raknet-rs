@@ -5,7 +5,7 @@ use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
 use bytes::{Buf, BufMut, BytesMut};
 
-use self::connected::{Frame, Frames};
+use self::connected::Frames;
 use crate::errors::CodecError;
 
 #[macro_export]
@@ -35,6 +35,7 @@ pub(crate) const FRAME_SET_HEADER_SIZE: usize = 4;
 /// (like `Game`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
+#[allow(dead_code)] // may used in future
 pub(crate) enum PackType {
     ConnectedPing = 0x00,
     UnconnectedPing1 = 0x01,
@@ -93,14 +94,6 @@ impl PackType {
         }
     }
 
-    /// Check if it is unconnected ping
-    pub(crate) fn is_unconnected_ping(&self) -> bool {
-        matches!(
-            self,
-            PackType::UnconnectedPing1 | PackType::UnconnectedPing2
-        )
-    }
-
     /// Check if it is a frame set packet
     pub(crate) fn is_frame_set(&self) -> bool {
         matches!(self, PackType::FrameSet)
@@ -138,30 +131,7 @@ pub(crate) enum Packet<S> {
     Connected(connected::Packet<S>),
 }
 
-impl<S> Packet<S> {
-    /// Get the packet type
-    pub(crate) fn pack_type(&self) -> PackType {
-        match self {
-            Packet::Unconnected(pack) => pack.pack_type(),
-            Packet::Connected(pack) => pack.pack_type(),
-        }
-    }
-}
-
 impl<B: Buf> Packet<Frames<B>> {
-    pub(crate) fn write(self, buf: &mut BytesMut) {
-        match self {
-            Packet::Unconnected(packet) => {
-                packet.write(buf);
-            }
-            Packet::Connected(packet) => {
-                packet.write(buf);
-            }
-        }
-    }
-}
-
-impl<B: Buf> Packet<Frame<B>> {
     pub(crate) fn write(self, buf: &mut BytesMut) {
         match self {
             Packet::Unconnected(packet) => {

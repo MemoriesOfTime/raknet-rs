@@ -90,12 +90,12 @@ impl Drop for AddrDropGuard {
     fn drop(&mut self) {
         if self.drop_notifier.try_send(self.client_addr).is_err() {
             error!(
-                "cannot send IO for {} drop notification to drop_notifier",
+                "[online] cannot send IO for {} drop notification to drop_notifier",
                 self.client_addr
             );
             return;
         }
-        debug!("connection from {} is dropped", self.client_addr);
+        debug!("[online] connection from {} is dropped", self.client_addr);
     }
 }
 
@@ -120,6 +120,7 @@ where
 {
     type Item = Bytes;
 
+    #[allow(clippy::cognitive_complexity)] // not bad
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
         loop {
@@ -166,21 +167,18 @@ where
                             }
                         }
                         _ => {
-                            debug!(
-                                "ignore packet {body:?} from {} on HandshakePhase1",
-                                **this.client_addr
-                            );
+                            debug!("[online] ignore packet {body:?} on HandshakePhase1",);
                         }
                     };
                 }
                 State::SendAccept(pack) => {
                     if let Err(err) = ready!(this.write.as_mut().poll_ready(cx)) {
-                        debug!("SendAccept poll_ready error: {err}, fallback to HandshakePhase1");
+                        debug!("[online] SendAccept poll_ready error: {err}, fallback to HandshakePhase1");
                         *this.state = State::HandshakePhase1;
                         continue;
                     }
                     if let Err(err) = this.write.as_mut().start_send(pack.take().unwrap()) {
-                        debug!("SendAccept start_send error: {err}, fallback to HandshakePhase1");
+                        debug!("[online] SendAccept start_send error: {err}, fallback to HandshakePhase1");
                         *this.state = State::HandshakePhase1;
                         continue;
                     }
@@ -189,7 +187,7 @@ where
                 State::SendAcceptFlush => {
                     if let Err(err) = ready!(this.write.as_mut().poll_flush(cx)) {
                         debug!(
-                            "SendAcceptFlush poll_flush error: {err}, fallback to HandshakePhase1"
+                            "[online] SendAcceptFlush poll_flush error: {err}, fallback to HandshakePhase1"
                         );
                         *this.state = State::HandshakePhase1;
                         continue;
@@ -198,12 +196,12 @@ where
                 }
                 State::SendFailed(pack) => {
                     if let Err(err) = ready!(this.raw_write.as_mut().poll_ready(cx)) {
-                        debug!("SendFailed poll_ready error: {err}, fallback to HandshakePhase1");
+                        debug!("[online] SendFailed poll_ready error: {err}, fallback to HandshakePhase1");
                         *this.state = State::HandshakePhase1;
                         continue;
                     }
                     if let Err(err) = this.raw_write.as_mut().start_send(pack.take().unwrap()) {
-                        debug!("SendFailed start_send error: {err}, fallback to HandshakePhase1");
+                        debug!("[online] SendFailed start_send error: {err}, fallback to HandshakePhase1");
                         *this.state = State::HandshakePhase1;
                         continue;
                     }
@@ -211,7 +209,7 @@ where
                 }
                 State::SendFailedFlush => {
                     if let Err(err) = ready!(this.raw_write.as_mut().poll_flush(cx)) {
-                        debug!("SendFailedFlush poll_flush error: {err}");
+                        debug!("[online] SendFailedFlush poll_flush error: {err}");
                     }
                     *this.state = State::HandshakePhase1;
                 }
@@ -222,14 +220,11 @@ where
                     };
                     match body {
                         FrameBody::NewIncomingConnection { .. } => {
-                            debug!("connections from {} finished handshake", **this.client_addr);
+                            debug!("[online] connections finished handshake");
                             *this.state = State::Connected;
                         }
                         _ => {
-                            debug!(
-                                "ignore packet {body:?} from {} on HandshakePhase2",
-                                **this.client_addr
-                            );
+                            debug!("[online] ignore packet {body:?} on HandshakePhase2");
                         }
                     };
                 }
@@ -250,21 +245,18 @@ where
                         }
                         FrameBody::User(data) => return Poll::Ready(Some(data)),
                         _ => {
-                            debug!(
-                                "ignore packet {body:?} from {} on Connected",
-                                **this.client_addr
-                            );
+                            debug!("[online] ignore packet {body:?} on Connected",);
                         }
                     }
                 }
                 State::SendPong(pack) => {
                     if let Err(err) = ready!(this.write.as_mut().poll_ready(cx)) {
-                        debug!("SendPong poll_ready error: {err}");
+                        debug!("[online] SendPong poll_ready error: {err}");
                         *this.state = State::Connected;
                         continue;
                     }
                     if let Err(err) = this.write.as_mut().start_send(pack.take().unwrap()) {
-                        debug!("SendPong start_send error: {err}");
+                        debug!("[online] SendPong start_send error: {err}");
                         *this.state = State::Connected;
                         continue;
                     }
@@ -272,7 +264,7 @@ where
                 }
                 State::SendPongFlush => {
                     if let Err(err) = ready!(this.write.as_mut().poll_flush(cx)) {
-                        debug!("SendPongFlush poll_flush error: {err}");
+                        debug!("[online] SendPongFlush poll_flush error: {err}");
                     }
                     *this.state = State::Connected;
                 }

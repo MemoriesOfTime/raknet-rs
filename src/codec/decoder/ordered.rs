@@ -108,7 +108,7 @@ where
                     .expect("channel < max_channels");
 
                 if frame_index.0 < ordering.read {
-                    debug!("ignore old ordered frame index {frame_index}");
+                    debug!("[decoder] ignore old ordered frame index {frame_index}");
                     continue;
                 }
 

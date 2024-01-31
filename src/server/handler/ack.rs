@@ -7,6 +7,7 @@ use bytes::Bytes;
 use flume::{Receiver, Sender};
 use futures::{Sink, Stream, StreamExt};
 use pin_project_lite::pin_project;
+use tracing::debug;
 
 use crate::errors::CodecError;
 use crate::packet::connected::{self, AckOrNack, Frame, FrameSet, Frames, Record, Uint24le};
@@ -14,7 +15,7 @@ use crate::packet::{Packet, FRAME_SET_HEADER_SIZE};
 use crate::utils::SortedIterMut;
 
 pin_project! {
-    pub(super) struct IncomingAck<F> {
+    pub(crate) struct IncomingAck<F> {
         #[pin]
         frame: F,
         ack_tx: Sender<AckOrNack>,
@@ -22,7 +23,7 @@ pin_project! {
     }
 }
 
-pub(super) trait HandleIncomingAck: Sized {
+pub(crate) trait HandleIncomingAck: Sized {
     fn handle_incoming_ack(
         self,
         ack_tx: Sender<AckOrNack>,
@@ -74,7 +75,7 @@ where
 }
 
 pin_project! {
-    pub(super) struct OutgoingAck<F> {
+    pub(crate) struct OutgoingAck<F> {
         #[pin]
         frame: F,
         incoming_ack_rx: Receiver<AckOrNack>,
@@ -91,7 +92,7 @@ pin_project! {
     }
 }
 
-pub(super) trait HandleOutgoingAck: Sized {
+pub(crate) trait HandleOutgoingAck: Sized {
     fn handle_outgoing_ack(
         self,
         incoming_ack_rx: Receiver<AckOrNack>,
@@ -141,6 +142,7 @@ where
         let this = self.project();
         for ack in this.incoming_ack_rx.try_iter() {
             for record in ack.records {
+                debug!("[ack] ack record: {record:?}");
                 match record {
                     Record::Range(start, end) => {
                         for i in start.0..end.0 {
@@ -155,6 +157,7 @@ where
         }
         for nack in this.incoming_nack_rx.try_iter() {
             for record in nack.records {
+                debug!("[nack] nack record: {record:?}");
                 match record {
                     Record::Range(start, end) => {
                         for i in start.0..end.0 {

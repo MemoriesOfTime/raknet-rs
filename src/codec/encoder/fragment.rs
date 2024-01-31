@@ -303,8 +303,8 @@ mod test {
 
         assert_eq!(dst.frame.buf.len(), 7);
         // adjusted
-        assert_eq!(dst.frame.buf[4].flags.reliability(), Reliability::Reliable);
-        assert_eq!(dst.frame.buf[5].flags.reliability(), Reliability::Reliable);
+        assert_eq!(dst.frame.buf[4].flags.reliability, Reliability::Reliable);
+        assert_eq!(dst.frame.buf[5].flags.reliability, Reliability::Reliable);
 
         // closed
         assert_eq!(

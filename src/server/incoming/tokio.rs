@@ -10,14 +10,15 @@ use futures::{Sink, SinkExt, Stream};
 use pin_project_lite::pin_project;
 use tokio::net::UdpSocket as TokioUdpSocket;
 use tokio_util::udp::UdpFramed;
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, info};
+use tracing_futures::Instrument;
 
 use super::{Config, MakeIncoming};
 use crate::codec::{Codec, Decoded, Encoded};
 use crate::errors::{CodecError, Error};
 use crate::packet::connected::{self, Frames, Reliability};
 use crate::packet::{unconnected, Packet};
-use crate::server::ack::{HandleIncomingAck, HandleOutgoingAck};
+use crate::server::handler::ack::{HandleIncomingAck, HandleOutgoingAck};
 use crate::server::handler::offline;
 use crate::server::handler::offline::HandleOffline;
 use crate::server::handler::online::HandleOnline;
@@ -87,13 +88,13 @@ impl Stream for Incoming {
             };
             if let Some(router_tx) = this.router.get_mut(&peer.addr) {
                 if router_tx.send(pack).is_err() {
-                    error!("connection was dropped before closed");
+                    error!("[incoming] connection was dropped before closed");
                     this.router.remove(&peer.addr);
                     this.offline.as_mut().disconnect(&peer.addr);
                 }
                 continue;
             }
-            info!("new incoming from {}", peer.addr);
+            info!("[incoming] new incoming from {}", peer.addr);
 
             let (router_tx, router_rx) = flume::unbounded();
             router_tx.send(pack).unwrap();
@@ -132,7 +133,8 @@ impl Stream for Incoming {
                     peer.addr,
                     this.config.offline.sever_guid,
                     this.drop_notifier.clone(),
-                );
+                )
+                .instrument(tracing::debug_span!("io", peer = format!("{}", peer.addr)));
 
             return Poll::Ready(Some(IOImpl {
                 io,

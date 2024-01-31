@@ -78,8 +78,13 @@ where
         }
 
         self.map(Ok)
-            .deduplicated(config.max_dedup_gap)
-            .defragmented(config.max_parted_size, config.max_parted_count)
+            .deduplicated(config.max_dedup_gap, outgoing_ack_tx.clone())
+            .defragmented(
+                config.max_parted_size,
+                config.max_parted_count,
+                outgoing_ack_tx,
+                outgoing_nack_tx,
+            )
             .ordered(config.max_channels)
             .frame_decoded()
             .logged_all(ok_f, err_f)
