@@ -14,7 +14,7 @@ use crate::packet::connected::Frames;
 use crate::packet::{connected, unconnected, Packet};
 use crate::Peer;
 
-pub(super) trait HandleOffline: Sized {
+pub(crate) trait HandleOffline: Sized {
     fn handle_offline(self, config: Config) -> OfflineHandler<Self>;
 }
 
@@ -55,7 +55,7 @@ enum OfflineState {
 
 pin_project! {
     /// OfflineHandler takes the codec frame and perform offline handshake.
-    pub(super) struct OfflineHandler<F: 'static> {
+    pub(crate) struct OfflineHandler<F> {
         #[pin]
         frame: F,
         config: Config,
@@ -67,7 +67,7 @@ pin_project! {
 }
 
 impl<F> OfflineHandler<F> {
-    pub(super) fn disconnect(self: Pin<&mut Self>, addr: &SocketAddr) {
+    pub(crate) fn disconnect(self: Pin<&mut Self>, addr: &SocketAddr) {
         let this = self.project();
         this.pending.pop(addr);
         this.connected.remove(addr);
@@ -138,13 +138,17 @@ where
             let Some((packet, addr)) = ready!(this.frame.as_mut().poll_next(cx)) else {
                 return Poll::Ready(None);
             };
+
             let pack = match packet {
                 Packet::Unconnected(pack) => pack,
                 Packet::Connected(pack) => {
                     if let Some(peer) = this.connected.get(&addr) {
                         return Poll::Ready(Some((pack, peer.clone())));
                     }
-                    debug!("ignore connected packet from unconnected client {addr}");
+                    debug!(
+                        "ignore connected packet {:?} from unconnected client {addr}",
+                        pack.pack_type()
+                    );
                     // TODO: Send DETECT_LOST_CONNECTION ?
                     *this.state = OfflineState::SendingPrepare(Some((
                         Self::make_connection_request_failed(this.config),
@@ -237,10 +241,10 @@ where
 mod test {
     use std::collections::VecDeque;
 
+    use connected::{FrameSet, Uint24le};
     use futures::StreamExt;
 
     use super::*;
-    use crate::server::offline::test::connected::{FrameSet, Uint24le};
 
     struct TestCase {
         source: VecDeque<Packet<Frames<BytesMut>>>,

@@ -92,7 +92,10 @@ impl Packet {
             send_timestamp: buf.get_i64(),   // 8
             server_guid: buf.get_u64(),      // 8
             magic: buf.get_checked_magic()?, // 16
-            data: buf.split().freeze(),      // ?
+            data: {
+                let len = buf.get_u16();
+                buf.split_off(len as usize).freeze()
+            }, // > 2
         })
     }
 
@@ -169,6 +172,7 @@ impl Packet {
                 buf.put_i64(send_timestamp);
                 buf.put_u64(server_guid);
                 buf.put_magic();
+                buf.put_u16(data.len() as u16);
                 buf.put(data);
             }
             Packet::OpenConnectionRequest1 {

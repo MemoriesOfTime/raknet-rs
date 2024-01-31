@@ -4,8 +4,8 @@ use futures::{Sink, Stream};
 use crate::packet::connected::Reliability;
 
 mod ack;
+mod handler;
 mod incoming;
-mod offline;
 
 /// Raknet message
 #[derive(Debug, Clone)]
@@ -59,4 +59,4 @@ pub trait IOpts {
 }
 
 // Provide the basic operation for each connection, produced by [`Incoming`]
-type IO = impl Stream<Item = Bytes> + Sink<Bytes> + Sink<Message> + IOpts;
+type IO = impl Stream<Item = Bytes> + Sink<Bytes> + Sink<Message> + IOpts + Send;

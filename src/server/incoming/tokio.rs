@@ -6,21 +6,22 @@ use std::task::{ready, Context, Poll};
 
 use bytes::{Bytes, BytesMut};
 use flume::{Receiver, Sender};
-use futures::{SinkExt, Stream};
+use futures::{Sink, SinkExt, Stream};
 use pin_project_lite::pin_project;
 use tokio::net::UdpSocket as TokioUdpSocket;
 use tokio_util::udp::UdpFramed;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, trace};
 
 use super::{Config, MakeIncoming};
 use crate::codec::{Codec, Decoded, Encoded};
-use crate::errors::CodecError;
+use crate::errors::{CodecError, Error};
 use crate::packet::connected::{self, Frames, Reliability};
 use crate::packet::{unconnected, Packet};
 use crate::server::ack::{HandleIncomingAck, HandleOutgoingAck};
-use crate::server::incoming::io::{AddrDropGuard, HandShakeState, IOImpl, IOState};
-use crate::server::offline::HandleOffline;
-use crate::server::{offline, IO};
+use crate::server::handler::offline;
+use crate::server::handler::offline::HandleOffline;
+use crate::server::handler::online::HandleOnline;
+use crate::server::{IOpts, Message, IO};
 use crate::utils::{Log, Logged};
 
 /// Avoid stupid error: `type parameter {OfflineHandler} is part of concrete type but not used in
@@ -95,6 +96,7 @@ impl Stream for Incoming {
             info!("new incoming from {}", peer.addr);
 
             let (router_tx, router_rx) = flume::unbounded();
+            router_tx.send(pack).unwrap();
             this.router.insert(peer.addr, router_tx);
 
             let (incoming_ack_tx, incoming_ack_rx) = flume::unbounded();
@@ -103,38 +105,126 @@ impl Stream for Incoming {
             let (outgoing_ack_tx, outgoing_ack_rx) = flume::unbounded();
             let (outgoing_nack_tx, outgoing_nack_rx) = flume::unbounded();
 
-            let io = IOImpl {
-                state: IOState::HandShaking(HandShakeState::Phase1),
+            let write = UdpFramed::new(Arc::clone(this.socket), Codec)
+                .with(move |u: Packet<Frames<Bytes>>| async move { Ok((u, peer.addr)) })
+                .handle_outgoing_ack(
+                    incoming_ack_rx,
+                    incoming_nack_rx,
+                    outgoing_ack_rx,
+                    outgoing_nack_rx,
+                    this.config.send_buf_cap,
+                    peer.mtu,
+                )
+                .frame_encoded(peer.mtu, this.config.codec);
+            let raw_write = UdpFramed::new(Arc::clone(this.socket), Codec).with(
+                move |u: unconnected::Packet| async move {
+                    Ok::<_, CodecError>((Packet::<Frames<Bytes>>::Unconnected(u), peer.addr))
+                },
+            );
+
+            let io = router_rx
+                .into_stream()
+                .handle_incoming_ack(incoming_ack_tx, incoming_nack_tx)
+                .decoded(this.config.codec, outgoing_ack_tx, outgoing_nack_tx)
+                .handle_online(
+                    write,
+                    raw_write,
+                    peer.addr,
+                    this.config.offline.sever_guid,
+                    this.drop_notifier.clone(),
+                );
+
+            return Poll::Ready(Some(IOImpl {
+                io,
                 default_reliability: Reliability::ReliableOrdered,
                 default_order_channel: 0,
-                client_addr: AddrDropGuard {
-                    client_addr: peer.addr,
-                    drop_notifier: this.drop_notifier.clone(),
-                },
-                server_guid: this.config.offline.sever_guid,
-                raw_write: UdpFramed::new(Arc::clone(this.socket), Codec).with(
-                    move |u: unconnected::Packet| async move {
-                        Ok::<_, CodecError>((Packet::<Frames<Bytes>>::Unconnected(u), peer.addr))
-                    },
-                ), // TODO implement address selector
-                write: UdpFramed::new(Arc::clone(this.socket), Codec)
-                    .with(move |u: Packet<Frames<Bytes>>| async move { Ok((u, peer.addr)) })
-                    .handle_outgoing_ack(
-                        incoming_ack_rx,
-                        incoming_nack_rx,
-                        outgoing_ack_rx,
-                        outgoing_nack_rx,
-                        this.config.send_buf_cap,
-                        peer.mtu,
-                    )
-                    .frame_encoded(peer.mtu, this.config.codec),
-                read: router_rx
-                    .into_stream()
-                    .handle_incoming_ack(incoming_ack_tx, incoming_nack_tx)
-                    .decoded(this.config.codec, outgoing_ack_tx, outgoing_nack_tx),
-            };
-
-            return Poll::Ready(Some(io));
+            }));
         }
+    }
+}
+
+pin_project! {
+    /// The detailed implementation of [`IO`]connections
+    struct IOImpl<IO> {
+        #[pin]
+        io: IO,
+        default_reliability: Reliability,
+        default_order_channel: u8,
+    }
+}
+
+impl<IO> Stream for IOImpl<IO>
+where
+    IO: Stream<Item = Bytes>,
+{
+    type Item = Bytes;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.project().io.poll_next(cx)
+    }
+}
+
+impl<IO> IOpts for IOImpl<IO> {
+    fn set_default_reliability(&mut self, reliability: Reliability) {
+        self.default_reliability = reliability;
+    }
+
+    fn get_default_reliability(&self) -> Reliability {
+        self.default_reliability
+    }
+
+    fn set_default_order_channel(&mut self, order_channel: u8) {
+        self.default_order_channel = order_channel;
+    }
+
+    fn get_default_order_channel(&self) -> u8 {
+        self.default_order_channel
+    }
+}
+
+impl<IO> Sink<Bytes> for IOImpl<IO>
+where
+    IO: Sink<Message, Error = Error>,
+{
+    type Error = Error;
+
+    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Sink::<Message>::poll_ready(self, cx)
+    }
+
+    fn start_send(self: Pin<&mut Self>, item: Bytes) -> Result<(), Self::Error> {
+        let msg = Message::new(self.default_reliability, self.default_order_channel, item);
+        Sink::<Message>::start_send(self, msg)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Sink::<Message>::poll_flush(self, cx)
+    }
+
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Sink::<Message>::poll_close(self, cx)
+    }
+}
+
+impl<IO> Sink<Message> for IOImpl<IO>
+where
+    IO: Sink<Message, Error = Error>,
+{
+    type Error = Error;
+
+    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.project().io.poll_ready(cx)
+    }
+
+    fn start_send(self: Pin<&mut Self>, item: Message) -> Result<(), Self::Error> {
+        self.project().io.start_send(item)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.project().io.poll_flush(cx)
+    }
+
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.project().io.poll_close(cx)
     }
 }

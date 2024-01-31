@@ -179,6 +179,12 @@ impl Packet<Frames<BytesMut>> {
         if buf.is_empty() {
             return Ok(None);
         }
+        // read more
+        if buf.chunk()[0] == 0 {
+            buf.clear();
+            return Ok(None);
+        }
+
         let pack_type: PackType = read_buf!(buf, 1, buf.get_u8().try_into()?);
         if pack_type.is_frame_set() {
             return Ok(Some(Self::Connected(connected::Packet::read_frame_set(
@@ -196,7 +202,7 @@ impl Packet<Frames<BytesMut>> {
                 read_buf!(buf, 32, unconnected::Packet::read_unconnected_ping(buf))
             }
             PackType::UnconnectedPong => {
-                read_buf!(buf, 32, unconnected::Packet::read_unconnected_pong(buf))
+                read_buf!(buf, 34, unconnected::Packet::read_unconnected_pong(buf))
             }
             PackType::OpenConnectionRequest1 => {
                 read_buf!(

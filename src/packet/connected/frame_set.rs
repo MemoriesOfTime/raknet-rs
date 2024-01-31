@@ -59,7 +59,7 @@ pub(crate) struct Frame<B> {
     pub(crate) body: B,
 }
 
-impl<B> std::fmt::Debug for Frame<B> {
+impl<B: Buf> std::fmt::Debug for Frame<B> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Frame")
             .field("flags", &self.flags)
@@ -67,6 +67,7 @@ impl<B> std::fmt::Debug for Frame<B> {
             .field("seq_frame_index", &self.seq_frame_index)
             .field("ordered", &self.ordered)
             .field("fragment", &self.fragment)
+            .field("pack_type", &PackType::from_u8(self.body.chunk()[0]))
             .finish()
     }
 }
@@ -395,7 +396,7 @@ pub(crate) enum FrameBody {
         server_timestamp: i64,
     },
     ConnectionRequest {
-        sever_guid: u64,
+        client_guid: u64,
         request_timestamp: i64,
         use_encryption: bool,
     },
@@ -434,7 +435,7 @@ impl std::fmt::Debug for FrameBody {
                 .field("server_timestamp", server_timestamp)
                 .finish(),
             Self::ConnectionRequest {
-                sever_guid: client_guid,
+                client_guid,
                 request_timestamp,
                 use_encryption,
             } => f
@@ -497,7 +498,9 @@ impl FrameBody {
         }
 
         // checked in FrameSet, length is always greater than 0
-        let id = PackType::from_u8(buf.chunk()[0])?;
+        let Ok(id) = PackType::from_u8(buf.chunk()[0]) else {
+            return Ok(Self::User(buf));
+        };
 
         match id {
             PackType::ConnectedPing => Ok(Self::ConnectedPing {
@@ -516,7 +519,7 @@ impl FrameBody {
             PackType::ConnectionRequest => Ok(read_buf!(buf, 18, {
                 buf.advance(1); // 1
                 Self::ConnectionRequest {
-                    sever_guid: buf.get_u64(),         // 8
+                    client_guid: buf.get_u64(),        // 8
                     request_timestamp: buf.get_i64(),  // 8
                     use_encryption: buf.get_u8() != 0, // 1
                 }
@@ -561,7 +564,7 @@ impl FrameBody {
                 buf.put_i64(server_timestamp);
             }
             FrameBody::ConnectionRequest {
-                sever_guid: client_guid,
+                client_guid,
                 request_timestamp,
                 use_encryption,
             } => {
@@ -581,10 +584,7 @@ impl FrameBody {
                 buf.put_socket_addr(client_address);
                 buf.put_u16(system_index);
                 for addr in system_addresses {
-                    // check if valid
-                    if addr.port() != 0 {
-                        buf.put_socket_addr(addr);
-                    }
+                    buf.put_socket_addr(addr);
                 }
                 buf.put_i64(request_timestamp);
                 buf.put_i64(accepted_timestamp);
@@ -598,10 +598,7 @@ impl FrameBody {
                 buf.put_u8(PackType::NewIncomingConnection as u8);
                 buf.put_socket_addr(server_address);
                 for addr in system_addresses {
-                    // check if valid
-                    if addr.port() != 0 {
-                        buf.put_socket_addr(addr);
-                    }
+                    buf.put_socket_addr(addr);
                 }
                 buf.put_i64(request_timestamp);
                 buf.put_i64(accepted_timestamp);
