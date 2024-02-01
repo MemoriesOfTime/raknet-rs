@@ -4,7 +4,7 @@ use super::handler::offline;
 use super::IO;
 use crate::codec;
 
-/// Incoming implementation from tokio's UDP framework
+/// Incoming implementation by using tokio's UDP framework
 mod tokio;
 
 /// Incoming config
