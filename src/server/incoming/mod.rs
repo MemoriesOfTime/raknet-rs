@@ -50,9 +50,8 @@ mod test {
     //             },
     //         });
     //     loop {
-    //         let io: IO = incoming.next().await.unwrap();
+    //         let mut io: IO = incoming.next().await.unwrap();
     //         tokio::spawn(async move {
-    //             tokio::pin!(io);
     //             loop {
     //                 let msg: Bytes = io.next().await.unwrap();
     //                 println!("msg: {}", String::from_utf8_lossy(&msg));

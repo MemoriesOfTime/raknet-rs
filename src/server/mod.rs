@@ -63,4 +63,5 @@ type IO = impl Stream<Item = Bytes>
     + Sink<Bytes, Error = Error>
     + Sink<Message, Error = Error>
     + IOpts
-    + Send;
+    + Send
+    + Unpin;

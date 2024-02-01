@@ -6,7 +6,7 @@ use std::task::{ready, Context, Poll};
 
 use bytes::{Bytes, BytesMut};
 use flume::{Receiver, Sender};
-use futures::{Sink, SinkExt, Stream};
+use futures::{Sink, Stream};
 use pin_project_lite::pin_project;
 use tokio::net::UdpSocket as TokioUdpSocket;
 use tokio_util::udp::UdpFramed;
@@ -17,13 +17,13 @@ use super::{Config, MakeIncoming};
 use crate::codec::{Codec, Decoded, Encoded};
 use crate::errors::{CodecError, Error};
 use crate::packet::connected::{self, Frames, Reliability};
-use crate::packet::{unconnected, Packet};
+use crate::packet::Packet;
 use crate::server::handler::ack::{HandleIncomingAck, HandleOutgoingAck};
 use crate::server::handler::offline;
 use crate::server::handler::offline::HandleOffline;
 use crate::server::handler::online::HandleOnline;
 use crate::server::{IOpts, Message, IO};
-use crate::utils::{Log, Logged};
+use crate::utils::{Log, Logged, WithAddress};
 
 /// Avoid stupid error: `type parameter {OfflineHandler} is part of concrete type but not used in
 /// parameter list for the impl Trait type alias`
@@ -107,7 +107,7 @@ impl Stream for Incoming {
             let (outgoing_nack_tx, outgoing_nack_rx) = flume::unbounded();
 
             let write = UdpFramed::new(Arc::clone(this.socket), Codec)
-                .with(move |u: Packet<Frames<Bytes>>| async move { Ok((u, peer.addr)) })
+                .with_addr(peer.addr)
                 .handle_outgoing_ack(
                     incoming_ack_rx,
                     incoming_nack_rx,
@@ -117,11 +117,7 @@ impl Stream for Incoming {
                     peer.mtu,
                 )
                 .frame_encoded(peer.mtu, this.config.codec);
-            let raw_write = UdpFramed::new(Arc::clone(this.socket), Codec).with(
-                move |u: unconnected::Packet| async move {
-                    Ok::<_, CodecError>((Packet::<Frames<Bytes>>::Unconnected(u), peer.addr))
-                },
-            );
+            let raw_write = UdpFramed::new(Arc::clone(this.socket), Codec).with_addr(peer.addr);
 
             let io = router_rx
                 .into_stream()
