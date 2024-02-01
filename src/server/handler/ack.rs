@@ -147,11 +147,11 @@ where
                 match record {
                     Record::Range(start, end) => {
                         for i in start.0..end.0 {
-                            this.resending.remove(&i);
+                            this.resending.swap_remove(&i);
                         }
                     }
                     Record::Single(seq_num) => {
-                        this.resending.remove(&seq_num.0);
+                        this.resending.swap_remove(&seq_num.0);
                     }
                 }
             }
@@ -162,13 +162,13 @@ where
                 match record {
                     Record::Range(start, end) => {
                         for i in start.0..end.0 {
-                            if let Some(set) = this.resending.remove(&i) {
+                            if let Some(set) = this.resending.swap_remove(&i) {
                                 this.buf.extend(set);
                             }
                         }
                     }
                     Record::Single(seq_num) => {
-                        if let Some(set) = this.resending.remove(&seq_num.0) {
+                        if let Some(set) = this.resending.swap_remove(&seq_num.0) {
                             this.buf.extend(set);
                         }
                     }

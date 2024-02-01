@@ -11,9 +11,9 @@ fi
 set -euo pipefail
 curl -Os https://uploader.codecov.io/latest/linux/codecov && chmod +x codecov
 
-max_retry=${MAX_RETRY-5}
+max_retry=${MAX_RETRY-20}
 file=${1-"lcov.info"}
-retry_delay=${RETRY_DELAY-7}
+retry_delay=${RETRY_DELAY-30}
 
 counter=0
 
