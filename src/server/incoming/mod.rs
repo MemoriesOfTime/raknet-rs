@@ -22,7 +22,6 @@ pub trait MakeIncoming: Sized {
 
 #[cfg(test)]
 mod test {
-
     use bytes::Bytes;
     use futures::{SinkExt, StreamExt};
     use minitrace::collector::{self, ConsoleReporter, SpanContext};
@@ -32,7 +31,9 @@ mod test {
     use crate::server::handler::offline;
     use crate::server::incoming::{Config, MakeIncoming};
     use crate::server::IO;
+    use crate::utils::{Instrumented, RootSpan};
 
+    #[ignore = "wait until the client is implemented."]
     #[tokio::test]
     async fn test_tokio_incoming_works() {
         minitrace::set_reporter(ConsoleReporter, collector::Config::default());
@@ -68,7 +69,8 @@ mod test {
                     support_version: vec![9, 11, 13],
                     max_pending: 512,
                 },
-            });
+            })
+            .enter_on_item::<RootSpan>("incoming");
         loop {
             let mut io: IO = incoming.next().await.unwrap();
             tokio::spawn(async move {

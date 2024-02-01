@@ -8,8 +8,8 @@ use bytes::{Buf, Bytes, BytesMut};
 use derive_builder::Builder;
 use flume::Sender;
 use futures::{Sink, Stream, StreamExt};
-use tokio_util::codec::{Decoder, Encoder};
 use log::{debug, trace};
+use tokio_util::codec::{Decoder, Encoder};
 
 use self::decoder::{DeFragmented, Deduplicated, FrameDecoded, Ordered};
 use self::encoder::{Fragmented, FrameEncoded};
