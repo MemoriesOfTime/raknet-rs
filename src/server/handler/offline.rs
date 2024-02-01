@@ -6,8 +6,8 @@ use std::task::{Context, Poll};
 
 use bytes::{Bytes, BytesMut};
 use futures::{ready, Sink, Stream};
+use log::{debug, error, warn};
 use pin_project_lite::pin_project;
-use tracing::{debug, error, warn};
 
 use crate::errors::CodecError;
 use crate::packet::connected::Frames;
@@ -408,7 +408,6 @@ mod test {
     }
 
     #[tokio::test]
-    #[tracing_test::traced_test]
     async fn test_offline_reject_wrong_connect_flow() {
         let test_cases = [
             (

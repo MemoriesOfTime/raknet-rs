@@ -92,6 +92,10 @@ impl AckOrNack {
             record.write(buf);
         }
     }
+
+    pub(crate) fn total_cnt(&self) -> u32 {
+        self.records.iter().map(|record| record.ack_cnt()).sum()
+    }
 }
 
 const RECORD_RANGE: u8 = 0;

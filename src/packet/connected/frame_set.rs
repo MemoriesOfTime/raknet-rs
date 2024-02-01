@@ -426,26 +426,24 @@ impl std::fmt::Debug for FrameBody {
             Self::ConnectionRequestAccepted {
                 client_address,
                 system_index,
-                system_addresses,
                 request_timestamp,
                 accepted_timestamp,
+                ..
             } => f
                 .debug_struct("ConnectionRequestAccepted")
                 .field("client_address", client_address)
                 .field("system_index", system_index)
-                .field("system_addresses", system_addresses)
                 .field("request_timestamp", request_timestamp)
                 .field("accepted_timestamp", accepted_timestamp)
                 .finish(),
             Self::NewIncomingConnection {
                 server_address,
-                system_addresses,
                 request_timestamp,
                 accepted_timestamp,
+                ..
             } => f
                 .debug_struct("NewIncomingConnection")
                 .field("server_address", server_address)
-                .field("system_addresses", system_addresses)
                 .field("request_timestamp", request_timestamp)
                 .field("accepted_timestamp", accepted_timestamp)
                 .finish(),

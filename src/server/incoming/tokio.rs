@@ -7,11 +7,10 @@ use std::task::{ready, Context, Poll};
 use bytes::{Bytes, BytesMut};
 use flume::{Receiver, Sender};
 use futures::{Sink, Stream};
+use log::{debug, error, info};
 use pin_project_lite::pin_project;
 use tokio::net::UdpSocket as TokioUdpSocket;
 use tokio_util::udp::UdpFramed;
-use tracing::{debug, error, info};
-use tracing_futures::Instrument;
 
 use super::{Config, MakeIncoming};
 use crate::codec::{Codec, Decoded, Encoded};
@@ -23,7 +22,7 @@ use crate::server::handler::offline;
 use crate::server::handler::offline::HandleOffline;
 use crate::server::handler::online::HandleOnline;
 use crate::server::{IOpts, Message, IO};
-use crate::utils::{Log, Logged, WithAddress};
+use crate::utils::{Instrumented, Log, Logged, RootSpan, WithAddress};
 
 /// Avoid stupid error: `type parameter {OfflineHandler} is part of concrete type but not used in
 /// parameter list for the impl Trait type alias`
@@ -130,7 +129,7 @@ impl Stream for Incoming {
                     this.config.offline.sever_guid,
                     this.drop_notifier.clone(),
                 )
-                .instrument(tracing::debug_span!("io", peer = format!("{}", peer.addr)));
+                .enter_on_item::<RootSpan>(format!("io(peer={},mtu={})", peer.addr, peer.mtu));
 
             return Poll::Ready(Some(IOImpl {
                 io,

@@ -5,8 +5,8 @@ use std::task::{Context, Poll};
 
 use bytes::Buf;
 use futures::{ready, Stream, StreamExt};
+use log::debug;
 use pin_project_lite::pin_project;
-use tracing::debug;
 
 use crate::errors::CodecError;
 use crate::packet::connected::{self, Frame, FrameSet};

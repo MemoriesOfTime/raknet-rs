@@ -7,8 +7,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use bytes::Bytes;
 use flume::Sender;
 use futures::{Sink, Stream};
+use log::{debug, error};
 use pin_project_lite::pin_project;
-use tracing::{debug, error};
 
 use crate::errors::{CodecError, Error};
 use crate::packet::connected::FrameBody;

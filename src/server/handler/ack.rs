@@ -1,13 +1,14 @@
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap, VecDeque};
+use std::collections::{BinaryHeap, VecDeque};
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
 use bytes::Bytes;
 use flume::{Receiver, Sender};
 use futures::{Sink, Stream, StreamExt};
+use indexmap::IndexMap;
+use log::trace;
 use pin_project_lite::pin_project;
-use tracing::debug;
 
 use crate::errors::CodecError;
 use crate::packet::connected::{self, AckOrNack, Frame, FrameSet, Frames, Record, Uint24le};
@@ -88,7 +89,7 @@ pin_project! {
         mtu: u16,
         ack_queue: BinaryHeap<Reverse<u32>>,
         nack_queue: BinaryHeap<Reverse<u32>>,
-        resending: HashMap<u32, Frames<Bytes>>,
+        resending: IndexMap<u32, Frames<Bytes>>,
     }
 }
 
@@ -129,7 +130,7 @@ where
             mtu,
             ack_queue: BinaryHeap::new(),
             nack_queue: BinaryHeap::new(),
-            resending: HashMap::new(),
+            resending: IndexMap::new(),
         }
     }
 }
@@ -141,8 +142,8 @@ where
     fn try_recv(self: Pin<&mut Self>) {
         let this = self.project();
         for ack in this.incoming_ack_rx.try_iter() {
+            trace!("[ack] receive ack count: {}", ack.total_cnt());
             for record in ack.records {
-                debug!("[ack] ack record: {record:?}");
                 match record {
                     Record::Range(start, end) => {
                         for i in start.0..end.0 {
@@ -156,8 +157,8 @@ where
             }
         }
         for nack in this.incoming_nack_rx.try_iter() {
+            trace!("[nack] receive nack count: {}", nack.total_cnt());
             for record in nack.records {
-                debug!("[nack] nack record: {record:?}");
                 match record {
                     Record::Range(start, end) => {
                         for i in start.0..end.0 {
@@ -204,6 +205,7 @@ where
             }
             if let Some(ack) = AckOrNack::extend_from(SortedIterMut::new(this.ack_queue), *this.mtu)
             {
+                trace!("[ack] send ack count {}", ack.total_cnt());
                 this.frame
                     .as_mut()
                     .start_send(Packet::Connected(connected::Packet::Ack(ack)))?;
@@ -218,6 +220,7 @@ where
             if let Some(nack) =
                 AckOrNack::extend_from(SortedIterMut::new(this.nack_queue), *this.mtu)
             {
+                trace!("[nack] send nack count {}", nack.total_cnt());
                 this.frame
                     .as_mut()
                     .start_send(Packet::Connected(connected::Packet::Nack(nack)))?;

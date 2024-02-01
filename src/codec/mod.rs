@@ -9,7 +9,7 @@ use derive_builder::Builder;
 use flume::Sender;
 use futures::{Sink, Stream, StreamExt};
 use tokio_util::codec::{Decoder, Encoder};
-use tracing::{debug, trace};
+use log::{debug, trace};
 
 use self::decoder::{DeFragmented, Deduplicated, FrameDecoded, Ordered};
 use self::encoder::{Fragmented, FrameEncoded};
@@ -286,7 +286,6 @@ pub mod micro_bench {
 
             let config = self.config;
             let data = self.data.clone();
-            let mut cnt = 0;
             let (outgoing_ack_tx, _outgoing_ack_rx) = flume::unbounded();
             let (outgoing_nack_tx, _outgoing_nack_rx) = flume::unbounded();
 
@@ -295,12 +294,10 @@ pub mod micro_bench {
                 .decoded(config, outgoing_ack_tx, outgoing_nack_tx);
             #[futures_async_stream::for_await]
             for res in stream {
-                cnt += 1;
                 let body = match res {
                     crate::packet::connected::FrameBody::User(body) => body,
                     _ => unreachable!("unexpected decoded result"),
                 };
-                tracing::debug!("receive body: {body:?}, cnt: {cnt}");
                 assert_eq!(body.chunk(), data.chunk());
             }
         }
@@ -330,7 +327,6 @@ pub mod micro_bench {
 
     #[cfg(test)]
     #[tokio::test]
-    #[tracing_test::traced_test]
     async fn test_bench() {
         let opts = Options::builder()
             .config(Config::default())
