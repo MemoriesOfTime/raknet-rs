@@ -11,5 +11,6 @@ log::info "Run basic checking."
 cargo audit
 cargo fmt --all -- --check
 cargo sort --check
+cargo machete
 
 $DIR/run-unit-test.sh

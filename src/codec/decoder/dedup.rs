@@ -240,12 +240,12 @@ where
 #[cfg(test)]
 mod test {
 
+    use std::collections::BTreeSet;
     use std::ops::Sub;
 
     use bytes::Bytes;
     use futures::StreamExt;
     use futures_async_stream::stream;
-    use indexmap::IndexSet;
 
     use super::*;
     use crate::errors::CodecError;
@@ -409,8 +409,8 @@ mod test {
             .take(scale)
             .collect::<Vec<_>>();
 
-        let idx1_set: IndexSet<u32> = idx1.clone().into_iter().collect();
-        let idx2_set: IndexSet<u32> = idx2.clone().into_iter().collect();
+        let idx1_set: BTreeSet<u32> = idx1.clone().into_iter().collect();
+        let idx2_set: BTreeSet<u32> = idx2.clone().into_iter().collect();
         let diff = idx2_set.sub(&idx1_set);
 
         let frame = {

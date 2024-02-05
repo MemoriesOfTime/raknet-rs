@@ -21,7 +21,7 @@ jobs:
       - name: Install Dependencies
         run: |
           rustup component add rustfmt llvm-tools-preview clippy
-          cargo binstall -y --no-symlinks cargo-llvm-cov cargo-nextest cargo-sort cargo-audit
+          cargo binstall -y --no-symlinks cargo-llvm-cov cargo-nextest cargo-sort cargo-audit cargo-machete
           wget https://github.com/mozilla/sccache/releases/download/v0.7.5/sccache-v0.7.5-x86_64-unknown-linux-musl.tar.gz
           mkdir sccache-install && tar -xzf sccache-v0.7.5-x86_64-unknown-linux-musl.tar.gz -C sccache-install --strip-components=1
           mv sccache-install/sccache /usr/local/bin && rm -rf sccache-install/

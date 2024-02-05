@@ -1,13 +1,15 @@
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, VecDeque};
+use std::collections::{BTreeMap, BinaryHeap, VecDeque};
+use std::ops::Add;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
+use std::time::Duration;
 
 use bytes::Bytes;
 use flume::{Receiver, Sender};
 use futures::{Sink, Stream, StreamExt};
-use indexmap::IndexMap;
 use log::trace;
+use minstant::Instant;
 use pin_project_lite::pin_project;
 
 use crate::errors::CodecError;
@@ -89,7 +91,8 @@ pin_project! {
         mtu: u16,
         ack_queue: BinaryHeap<Reverse<u32>>,
         nack_queue: BinaryHeap<Reverse<u32>>,
-        resending: IndexMap<u32, Frames<Bytes>>,
+        // ordered by seq_num
+        resending: BTreeMap<u32, (Frames<Bytes>, Instant)>,
     }
 }
 
@@ -118,6 +121,7 @@ where
         cap: usize,
         mtu: u16,
     ) -> OutgoingAck<Self> {
+        assert!(cap > 0, "cap must larger than 0");
         OutgoingAck {
             frame: self,
             incoming_ack_rx,
@@ -130,10 +134,12 @@ where
             mtu,
             ack_queue: BinaryHeap::new(),
             nack_queue: BinaryHeap::new(),
-            resending: IndexMap::new(),
+            resending: BTreeMap::new(),
         }
     }
 }
+
+const RTO: Duration = Duration::from_millis(100);
 
 impl<F> OutgoingAck<F>
 where
@@ -147,11 +153,11 @@ where
                 match record {
                     Record::Range(start, end) => {
                         for i in start.0..end.0 {
-                            this.resending.swap_remove(&i);
+                            this.resending.remove(&i);
                         }
                     }
                     Record::Single(seq_num) => {
-                        this.resending.swap_remove(&seq_num.0);
+                        this.resending.remove(&seq_num.0);
                     }
                 }
             }
@@ -162,13 +168,13 @@ where
                 match record {
                     Record::Range(start, end) => {
                         for i in start.0..end.0 {
-                            if let Some(set) = this.resending.swap_remove(&i) {
+                            if let Some((set, _)) = this.resending.remove(&i) {
                                 this.buf.extend(set);
                             }
                         }
                     }
                     Record::Single(seq_num) => {
-                        if let Some(set) = this.resending.swap_remove(&seq_num.0) {
+                        if let Some((set, _)) = this.resending.remove(&seq_num.0) {
                             this.buf.extend(set);
                         }
                     }
@@ -183,11 +189,25 @@ where
         }
     }
 
+    fn try_send_stales(self: Pin<&mut Self>) {
+        let this = self.project();
+
+        let now = Instant::now();
+        while let Some(entry) = this.resending.first_entry() {
+            // ordered by seq_num, the large seq_num has the large next_send
+            if now < entry.get().1 {
+                break;
+            }
+            trace!("[resend] resend stale frame set {}", entry.key());
+            let (set, _) = entry.remove();
+            this.buf.extend(set);
+        }
+    }
+
     fn try_empty(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), CodecError>> {
         // try to empty *_ack_rx and *_nack_rx buffer
         self.as_mut().try_recv();
-
-        // TODO: get the stale packets in `resending` and push them into `buf` to resend
+        self.as_mut().try_send_stales();
 
         let mut this = self.project();
 
@@ -257,7 +277,10 @@ where
                     )))?;
                 sent = true;
                 // keep for resending
-                this.resending.insert(frame_set.seq_num.0, frame_set.set);
+                this.resending.insert(
+                    frame_set.seq_num.0,
+                    (frame_set.set, Instant::now().add(RTO)),
+                );
                 *this.seq_num_write_index += 1;
             }
         }
@@ -273,10 +296,6 @@ where
     type Error = CodecError;
 
     fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        if self.cap == 0 {
-            return self.project().frame.poll_ready(cx);
-        }
-
         let upstream = self.as_mut().try_empty(cx)?;
 
         if self.buf.len() >= self.cap {
@@ -292,20 +311,6 @@ where
 
     fn start_send(self: Pin<&mut Self>, frames: Frames<Bytes>) -> Result<(), Self::Error> {
         let this = self.project();
-        if *this.cap == 0 {
-            let frame_set = FrameSet {
-                seq_num: Uint24le(*this.seq_num_write_index),
-                set: frames,
-            };
-            this.frame
-                .start_send(Packet::Connected(connected::Packet::FrameSet(
-                    frame_set.clone(),
-                )))?;
-            // keep for resending
-            this.resending.insert(frame_set.seq_num.0, frame_set.set);
-            *this.seq_num_write_index += 1;
-            return Ok(());
-        }
         this.buf.extend(frames);
         Ok(())
     }
@@ -339,20 +344,6 @@ where
 
     fn start_send(self: Pin<&mut Self>, frame: Frame<Bytes>) -> Result<(), Self::Error> {
         let this = self.project();
-        if *this.cap == 0 {
-            let frame_set = FrameSet {
-                seq_num: Uint24le(*this.seq_num_write_index),
-                set: vec![frame],
-            };
-            this.frame
-                .start_send(Packet::Connected(connected::Packet::FrameSet(
-                    frame_set.clone(),
-                )))?;
-            // keep for resending
-            this.resending.insert(frame_set.seq_num.0, frame_set.set);
-            *this.seq_num_write_index += 1;
-            return Ok(());
-        }
         this.buf.push_back(frame); // optimizing for non-split frame
         Ok(())
     }
