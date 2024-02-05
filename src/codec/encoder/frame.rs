@@ -7,7 +7,7 @@ use pin_project_lite::pin_project;
 
 use crate::errors::CodecError;
 use crate::packet::connected::{FrameBody, Reliability};
-use crate::server::Message;
+use crate::Message;
 
 pin_project! {
     pub(crate) struct FrameEncoder<F> {

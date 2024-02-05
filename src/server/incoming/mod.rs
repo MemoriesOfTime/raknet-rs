@@ -1,8 +1,7 @@
 use futures::Stream;
 
 use super::handler::offline;
-use super::IO;
-use crate::codec;
+use crate::{codec, IO};
 
 /// Incoming implementation by using tokio's UDP framework
 mod tokio;
@@ -17,7 +16,7 @@ pub struct Config {
 }
 
 pub trait MakeIncoming: Sized {
-    fn make_incoming(self, config: Config) -> impl Stream<Item = IO>;
+    fn make_incoming(self, config: Config) -> impl Stream<Item = impl IO>;
 }
 
 #[cfg(test)]
@@ -30,7 +29,6 @@ mod test {
 
     use crate::server::handler::offline;
     use crate::server::incoming::{Config, MakeIncoming};
-    use crate::server::IO;
     use crate::utils::{Instrumented, RootSpan};
 
     #[ignore = "wait until the client is implemented."]
@@ -72,7 +70,7 @@ mod test {
             })
             .enter_on_item::<RootSpan>("incoming");
         loop {
-            let mut io: IO = incoming.next().await.unwrap();
+            let mut io = incoming.next().await.unwrap();
             tokio::spawn(async move {
                 loop {
                     let msg: Bytes = io.next().await.unwrap();

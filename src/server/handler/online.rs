@@ -13,7 +13,7 @@ use pin_project_lite::pin_project;
 use crate::errors::{CodecError, Error};
 use crate::packet::connected::FrameBody;
 use crate::packet::unconnected;
-use crate::server::Message;
+use crate::Message;
 
 pub(crate) trait HandleOnline: Sized {
     fn handle_online<O, RO>(

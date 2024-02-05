@@ -54,17 +54,85 @@ mod packet;
 /// Utils
 mod utils;
 
+/// Common handlers
+mod common;
+
 /// Runtime
 pub mod rt;
 
 /// Raknet server
 pub mod server;
 
+/// Raknet client
+pub mod client;
+
 /// Service
 pub mod service;
 
+use std::net::SocketAddr;
+
+use bytes::Bytes;
+use futures::{Sink, Stream};
+use packet::connected::Reliability;
+
 #[derive(Debug, Clone)]
 struct Peer {
-    addr: std::net::SocketAddr,
+    addr: SocketAddr,
     mtu: u16,
+}
+
+/// Raknet message
+#[derive(Debug, Clone)]
+pub struct Message {
+    reliability: Reliability,
+    order_channel: u8,
+    data: Bytes,
+}
+
+impl Message {
+    pub fn new(reliability: Reliability, order_channel: u8, data: Bytes) -> Self {
+        Self {
+            reliability,
+            order_channel,
+            data,
+        }
+    }
+
+    pub fn set_reliability(&mut self, reliability: Reliability) {
+        self.reliability = reliability;
+    }
+
+    pub fn set_order_channel(&mut self, channel: u8) {
+        self.order_channel = channel;
+    }
+
+    pub fn get_reliability(&self) -> Reliability {
+        self.reliability
+    }
+
+    pub fn get_order_channel(&self) -> u8 {
+        self.order_channel
+    }
+
+    pub fn get_data(&self) -> &Bytes {
+        &self.data
+    }
+
+    pub fn into_data(self) -> Bytes {
+        self.data
+    }
+}
+
+// Provide the basic operation for each connection, produced by [`Incoming`]
+pub trait IO:
+    Stream<Item = Bytes>
+    + Sink<Bytes, Error = crate::errors::Error>
+    + Sink<Message, Error = crate::errors::Error>
+    + Send
+{
+    fn set_default_reliability(&mut self, reliability: Reliability);
+    fn get_default_reliability(&self) -> Reliability;
+
+    fn set_default_order_channel(&mut self, order_channel: u8);
+    fn get_default_order_channel(&self) -> u8;
 }

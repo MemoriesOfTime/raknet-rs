@@ -16,8 +16,8 @@ use self::encoder::{Fragmented, FrameEncoded};
 use crate::errors::CodecError;
 use crate::packet::connected::{Frame, FrameBody, FrameSet, Frames};
 use crate::packet::Packet;
-use crate::server::Message;
 use crate::utils::Logged;
+use crate::Message;
 
 /// Codec config
 #[derive(Clone, Copy, Debug, Builder)]

@@ -14,15 +14,15 @@ use tokio_util::udp::UdpFramed;
 
 use super::{Config, MakeIncoming};
 use crate::codec::{Codec, Decoded, Encoded};
+use crate::common::ack::{HandleIncomingAck, HandleOutgoingAck};
 use crate::errors::{CodecError, Error};
 use crate::packet::connected::{self, Frames, Reliability};
 use crate::packet::Packet;
-use crate::server::handler::ack::{HandleIncomingAck, HandleOutgoingAck};
 use crate::server::handler::offline;
 use crate::server::handler::offline::HandleOffline;
 use crate::server::handler::online::HandleOnline;
-use crate::server::{IOpts, Message, IO};
 use crate::utils::{Instrumented, Log, Logged, RootSpan, WithAddress};
+use crate::Message;
 
 /// Avoid stupid error: `type parameter {OfflineHandler} is part of concrete type but not used in
 /// parameter list for the impl Trait type alias`
@@ -53,7 +53,7 @@ impl Incoming {
 }
 
 impl MakeIncoming for TokioUdpSocket {
-    fn make_incoming(self, config: Config) -> impl Stream<Item = IO> {
+    fn make_incoming(self, config: Config) -> impl Stream<Item = impl crate::IO> {
         fn err_f(err: CodecError) {
             debug!("[frame] got codec error: {err} when decode frames");
         }
@@ -75,7 +75,7 @@ impl MakeIncoming for TokioUdpSocket {
 }
 
 impl Stream for Incoming {
-    type Item = IO;
+    type Item = impl crate::IO;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.as_mut().clear_dropped_addr();
@@ -161,24 +161,6 @@ where
     }
 }
 
-impl<IO> IOpts for IOImpl<IO> {
-    fn set_default_reliability(&mut self, reliability: Reliability) {
-        self.default_reliability = reliability;
-    }
-
-    fn get_default_reliability(&self) -> Reliability {
-        self.default_reliability
-    }
-
-    fn set_default_order_channel(&mut self, order_channel: u8) {
-        self.default_order_channel = order_channel;
-    }
-
-    fn get_default_order_channel(&self) -> u8 {
-        self.default_order_channel
-    }
-}
-
 impl<IO> Sink<Bytes> for IOImpl<IO>
 where
     IO: Sink<Message, Error = Error>,
@@ -223,5 +205,26 @@ where
 
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.project().io.poll_close(cx)
+    }
+}
+
+impl<IO> crate::IO for IOImpl<IO>
+where
+    IO: Sink<Message, Error = Error> + Stream<Item = Bytes> + Send,
+{
+    fn set_default_reliability(&mut self, reliability: Reliability) {
+        self.default_reliability = reliability;
+    }
+
+    fn get_default_reliability(&self) -> Reliability {
+        self.default_reliability
+    }
+
+    fn set_default_order_channel(&mut self, order_channel: u8) {
+        self.default_order_channel = order_channel;
+    }
+
+    fn get_default_order_channel(&self) -> u8 {
+        self.default_order_channel
     }
 }

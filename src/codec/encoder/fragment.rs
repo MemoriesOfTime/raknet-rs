@@ -9,7 +9,7 @@ use pin_project_lite::pin_project;
 use crate::errors::CodecError;
 use crate::packet::connected::{self, Flags, Frame, Frames, Ordered, Reliability, Uint24le};
 use crate::packet::{PackType, FRAME_SET_HEADER_SIZE};
-use crate::server::Message;
+use crate::Message;
 
 pin_project! {
     pub(crate) struct Fragment<F> {
