@@ -123,7 +123,7 @@ impl Message {
     }
 }
 
-// Provide the basic operation for each connection, produced by [`Incoming`]
+// Provide the basic operation for each connection
 pub trait IO:
     Stream<Item = Bytes>
     + Sink<Bytes, Error = crate::errors::Error>

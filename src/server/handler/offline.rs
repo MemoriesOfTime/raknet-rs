@@ -38,13 +38,13 @@ where
 
 #[derive(Debug, Clone, derive_builder::Builder)]
 pub struct Config {
-    pub sever_guid: u64,
-    pub advertisement: Bytes,
-    pub min_mtu: u16,
-    pub max_mtu: u16,
+    pub(crate) sever_guid: u64,
+    advertisement: Bytes,
+    min_mtu: u16,
+    max_mtu: u16,
     // Supported raknet versions, sorted
-    pub support_version: Vec<u8>,
-    pub max_pending: usize,
+    support_version: Vec<u8>,
+    max_pending: usize,
 }
 
 enum OfflineState {

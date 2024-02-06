@@ -53,7 +53,7 @@ impl Incoming {
 }
 
 impl MakeIncoming for TokioUdpSocket {
-    fn make_incoming(self, config: Config) -> impl Stream<Item = impl crate::IO> {
+    fn make_incoming(self, config: Config) -> impl Stream<Item = super::IO> {
         fn err_f(err: CodecError) {
             debug!("[frame] got codec error: {err} when decode frames");
         }
@@ -75,7 +75,7 @@ impl MakeIncoming for TokioUdpSocket {
 }
 
 impl Stream for Incoming {
-    type Item = impl crate::IO;
+    type Item = super::IO;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.as_mut().clear_dropped_addr();
