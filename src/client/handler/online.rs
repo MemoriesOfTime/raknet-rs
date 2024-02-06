@@ -182,6 +182,7 @@ where
 
 impl<I, O> Sink<Message> for OnlineHandler<I, O>
 where
+    I: Stream<Item = FrameBody>,
     O: Sink<Message, Error = CodecError>,
 {
     type Error = Error;
@@ -190,6 +191,10 @@ where
         let this = self.project();
         if matches!(*this.state, State::Closed) {
             return Poll::Ready(Err(Error::ConnectionClosed));
+        }
+        if !matches!(*this.state, State::Connected | State::SendPing) {
+            // FIXME: it may drop the first packet when connected
+            return this.read.poll_next(cx).map(|_| Ok(()));
         }
         ready!(this.write.poll_ready(cx))?;
         Poll::Ready(Ok(()))

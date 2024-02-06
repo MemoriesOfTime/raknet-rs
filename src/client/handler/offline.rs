@@ -10,11 +10,11 @@ use pin_project_lite::pin_project;
 use crate::errors::CodecError;
 use crate::packet::connected::{self, Frames};
 use crate::packet::{unconnected, Packet};
-use crate::Peer;
 
-pub(crate) struct Config {
-    mtu: u16,
-    client_guid: u64,
+#[derive(Debug, Clone, Copy, derive_builder::Builder)]
+pub struct Config {
+    pub(crate) mtu: u16,
+    pub(crate) client_guid: u64,
     protocol_version: u8,
 }
 
@@ -37,7 +37,6 @@ where
                     mtu: config.mtu,
                 },
             )),
-            mtu: config.mtu,
             server_addr,
             config,
         }
@@ -49,7 +48,6 @@ pin_project! {
         #[pin]
         frame: F,
         state: State,
-        mtu: u16,
         server_addr: SocketAddr,
         config: Config,
     }
@@ -68,7 +66,7 @@ where
     F: Stream<Item = (Packet<Frames<BytesMut>>, SocketAddr)>
         + Sink<(Packet<Frames<Bytes>>, SocketAddr), Error = CodecError>,
 {
-    type Item = (connected::Packet<Frames<BytesMut>>, Peer);
+    type Item = connected::Packet<Frames<BytesMut>>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
@@ -110,15 +108,12 @@ where
                         Packet::Unconnected(unconnected::Packet::OpenConnectionReply1 {
                             mtu,
                             ..
-                        }) => {
-                            *this.mtu = mtu;
-                            Packet::Unconnected(unconnected::Packet::OpenConnectionRequest2 {
-                                magic: (),
-                                server_address: *this.server_addr,
-                                mtu,
-                                client_guid: this.config.client_guid,
-                            })
-                        }
+                        }) => Packet::Unconnected(unconnected::Packet::OpenConnectionRequest2 {
+                            magic: (),
+                            server_address: *this.server_addr,
+                            mtu,
+                            client_guid: this.config.client_guid,
+                        }),
                         _ => continue,
                     };
                     *this.state = State::SendOpenConnectionRequest2(next);
@@ -157,11 +152,8 @@ where
                     }
                     match pack {
                         Packet::Unconnected(unconnected::Packet::OpenConnectionReply2 {
-                            mtu,
                             ..
-                        }) => {
-                            *this.mtu = mtu;
-                        }
+                        }) => {}
                         _ => continue,
                     };
                     *this.state = State::Connected;
@@ -174,15 +166,7 @@ where
                         continue;
                     }
                     match pack {
-                        Packet::Connected(pack) => {
-                            return Poll::Ready(Some((
-                                pack,
-                                Peer {
-                                    addr,
-                                    mtu: *this.mtu,
-                                },
-                            )))
-                        }
+                        Packet::Connected(pack) => return Poll::Ready(Some(pack)),
                         _ => continue,
                     };
                 }

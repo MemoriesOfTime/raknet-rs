@@ -4,9 +4,9 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 
-use bytes::{Bytes, BytesMut};
+use bytes::BytesMut;
 use flume::{Receiver, Sender};
-use futures::{Sink, Stream};
+use futures::Stream;
 use log::{debug, error, info};
 use pin_project_lite::pin_project;
 use tokio::net::UdpSocket as TokioUdpSocket;
@@ -15,14 +15,13 @@ use tokio_util::udp::UdpFramed;
 use super::{Config, MakeIncoming};
 use crate::codec::{Codec, Decoded, Encoded};
 use crate::common::ack::{HandleIncomingAck, HandleOutgoingAck};
-use crate::errors::{CodecError, Error};
-use crate::packet::connected::{self, Frames, Reliability};
+use crate::errors::CodecError;
+use crate::packet::connected::{self, Frames};
 use crate::packet::Packet;
 use crate::server::handler::offline;
 use crate::server::handler::offline::HandleOffline;
 use crate::server::handler::online::HandleOnline;
-use crate::utils::{Instrumented, Log, Logged, RootSpan, WithAddress};
-use crate::Message;
+use crate::utils::{IOImpl, Instrumented, Log, Logged, RootSpan, WithAddress};
 
 /// Avoid stupid error: `type parameter {OfflineHandler} is part of concrete type but not used in
 /// parameter list for the impl Trait type alias`
@@ -131,100 +130,7 @@ impl Stream for Incoming {
                 )
                 .enter_on_item::<RootSpan>(format!("io(peer={},mtu={})", peer.addr, peer.mtu));
 
-            return Poll::Ready(Some(IOImpl {
-                io,
-                default_reliability: Reliability::ReliableOrdered,
-                default_order_channel: 0,
-            }));
+            return Poll::Ready(Some(IOImpl::new(io)));
         }
-    }
-}
-
-pin_project! {
-    /// The detailed implementation of [`IO`]connections
-    struct IOImpl<IO> {
-        #[pin]
-        io: IO,
-        default_reliability: Reliability,
-        default_order_channel: u8,
-    }
-}
-
-impl<IO> Stream for IOImpl<IO>
-where
-    IO: Stream<Item = Bytes>,
-{
-    type Item = Bytes;
-
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.project().io.poll_next(cx)
-    }
-}
-
-impl<IO> Sink<Bytes> for IOImpl<IO>
-where
-    IO: Sink<Message, Error = Error>,
-{
-    type Error = Error;
-
-    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Sink::<Message>::poll_ready(self, cx)
-    }
-
-    fn start_send(self: Pin<&mut Self>, item: Bytes) -> Result<(), Self::Error> {
-        let msg = Message::new(self.default_reliability, self.default_order_channel, item);
-        Sink::<Message>::start_send(self, msg)
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Sink::<Message>::poll_flush(self, cx)
-    }
-
-    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Sink::<Message>::poll_close(self, cx)
-    }
-}
-
-impl<IO> Sink<Message> for IOImpl<IO>
-where
-    IO: Sink<Message, Error = Error>,
-{
-    type Error = Error;
-
-    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.project().io.poll_ready(cx)
-    }
-
-    fn start_send(self: Pin<&mut Self>, item: Message) -> Result<(), Self::Error> {
-        self.project().io.start_send(item)
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.project().io.poll_flush(cx)
-    }
-
-    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.project().io.poll_close(cx)
-    }
-}
-
-impl<IO> crate::IO for IOImpl<IO>
-where
-    IO: Sink<Message, Error = Error> + Stream<Item = Bytes> + Send,
-{
-    fn set_default_reliability(&mut self, reliability: Reliability) {
-        self.default_reliability = reliability;
-    }
-
-    fn get_default_reliability(&self) -> Reliability {
-        self.default_reliability
-    }
-
-    fn set_default_order_channel(&mut self, order_channel: u8) {
-        self.default_order_channel = order_channel;
-    }
-
-    fn get_default_order_channel(&self) -> u8 {
-        self.default_order_channel
     }
 }

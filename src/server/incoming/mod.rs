@@ -3,12 +3,12 @@ use futures::Stream;
 use super::handler::offline;
 use crate::codec;
 
+/// Incoming implementation by using tokio's UDP framework
+mod tokio;
+
 /// The IO accepted from incoming
 /// Currently, rust-analyzer cannot recognize and provide code actions for this type. [2024-02-07]
 pub type IO = impl crate::IO;
-
-/// Incoming implementation by using tokio's UDP framework
-mod tokio;
 
 /// Incoming config
 #[derive(Debug, Clone, derive_builder::Builder)]
