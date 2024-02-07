@@ -26,6 +26,7 @@ tokio-util = { version = "0.7.9", features = ["codec", "net", "io-util"] }
 [dev-dependencies]
 criterion = { version = "0.5", features = ["async_futures"] }
 env_logger = "0.11.1"
+indexmap = "2"
 minitrace = { version = "0.6", features = ["enable"] }
 rand = "0.8"
 
