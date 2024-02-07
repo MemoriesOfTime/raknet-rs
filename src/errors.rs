@@ -26,6 +26,8 @@ pub enum CodecError {
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
+    #[error("io error {0}")]
+    IO(#[from] std::io::Error),
     #[error(transparent)]
     Codec(#[from] CodecError),
     #[error("connection closed")]

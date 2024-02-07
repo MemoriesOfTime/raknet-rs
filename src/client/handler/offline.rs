@@ -3,11 +3,11 @@ use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
 use bytes::{Bytes, BytesMut};
-use futures::{Sink, Stream};
+use futures::{Future, Sink, SinkExt, Stream, StreamExt};
 use log::debug;
 use pin_project_lite::pin_project;
 
-use crate::errors::CodecError;
+use crate::errors::{CodecError, Error};
 use crate::packet::connected::{self, Frames};
 use crate::packet::{unconnected, Packet};
 
@@ -29,7 +29,7 @@ where
 {
     fn handle_offline(self, server_addr: SocketAddr, config: Config) -> OfflineHandler<Self> {
         OfflineHandler {
-            frame: self,
+            frame: Some(self),
             state: State::SendOpenConnectionRequest1(Packet::Unconnected(
                 unconnected::Packet::OpenConnectionRequest1 {
                     magic: (),
@@ -45,8 +45,7 @@ where
 
 pin_project! {
     pub(crate) struct OfflineHandler<F> {
-        #[pin]
-        frame: F,
+        frame: Option<F>,
         state: State,
         server_addr: SocketAddr,
         config: Config,
@@ -58,38 +57,35 @@ enum State {
     WaitOpenConnectionReply1,
     SendOpenConnectionRequest2(Packet<Frames<Bytes>>),
     WaitOpenConnectionReply2,
-    Connected,
 }
 
-impl<F> Stream for OfflineHandler<F>
+impl<F> Future for OfflineHandler<F>
 where
     F: Stream<Item = (Packet<Frames<BytesMut>>, SocketAddr)>
-        + Sink<(Packet<Frames<Bytes>>, SocketAddr), Error = CodecError>,
+        + Sink<(Packet<Frames<Bytes>>, SocketAddr), Error = CodecError>
+        + Unpin,
 {
-    type Item = connected::Packet<Frames<BytesMut>>;
+    type Output = Result<impl Stream<Item = connected::Packet<Frames<BytesMut>>>, Error>;
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let mut this = self.project();
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+        let frame = this.frame.as_mut().unwrap();
         loop {
             match this.state {
                 State::SendOpenConnectionRequest1(pack) => {
-                    if let Err(err) = ready!(this.frame.as_mut().poll_ready(cx)) {
+                    if let Err(err) = ready!(frame.poll_ready_unpin(cx)) {
                         debug!(
                             "[offline] SendingOpenConnectionRequest1 poll_ready error: {err}, retrying"
                         );
                         continue;
                     }
-                    if let Err(err) = this
-                        .frame
-                        .as_mut()
-                        .start_send((pack.clone(), *this.server_addr))
-                    {
+                    if let Err(err) = frame.start_send_unpin((pack.clone(), *this.server_addr)) {
                         debug!(
                             "[offline] SendingOpenConnectionRequest1 start_send error: {err}, retrying"
                         );
                         continue;
                     }
-                    if let Err(err) = ready!(this.frame.as_mut().poll_flush(cx)) {
+                    if let Err(err) = ready!(frame.poll_flush_unpin(cx)) {
                         debug!(
                             "[offline] SendingOpenConnectionRequest1 poll_flush error: {err}, retrying"
                         );
@@ -98,8 +94,8 @@ where
                     *this.state = State::WaitOpenConnectionReply1;
                 }
                 State::WaitOpenConnectionReply1 => {
-                    let Some((pack, addr)) = ready!(this.frame.as_mut().poll_next(cx)) else {
-                        return Poll::Ready(None);
+                    let Some((pack, addr)) = ready!(frame.poll_next_unpin(cx)) else {
+                        return Poll::Ready(Err(Error::ConnectionClosed));
                     };
                     if addr != *this.server_addr {
                         continue;
@@ -119,23 +115,19 @@ where
                     *this.state = State::SendOpenConnectionRequest2(next);
                 }
                 State::SendOpenConnectionRequest2(pack) => {
-                    if let Err(err) = ready!(this.frame.as_mut().poll_ready(cx)) {
+                    if let Err(err) = ready!(frame.poll_ready_unpin(cx)) {
                         debug!(
                             "[offline] SendOpenConnectionRequest2 poll_ready error: {err}, retrying"
                         );
                         continue;
                     }
-                    if let Err(err) = this
-                        .frame
-                        .as_mut()
-                        .start_send((pack.clone(), *this.server_addr))
-                    {
+                    if let Err(err) = frame.start_send_unpin((pack.clone(), *this.server_addr)) {
                         debug!(
                             "[offline] SendOpenConnectionRequest2 start_send error: {err}, retrying"
                         );
                         continue;
                     }
-                    if let Err(err) = ready!(this.frame.as_mut().poll_flush(cx)) {
+                    if let Err(err) = ready!(frame.poll_flush_unpin(cx)) {
                         debug!(
                             "[offline] SendOpenConnectionRequest2 poll_flush error: {err}, retrying"
                         );
@@ -144,8 +136,8 @@ where
                     *this.state = State::WaitOpenConnectionReply2;
                 }
                 State::WaitOpenConnectionReply2 => {
-                    let Some((pack, addr)) = ready!(this.frame.as_mut().poll_next(cx)) else {
-                        return Poll::Ready(None);
+                    let Some((pack, addr)) = ready!(frame.poll_next_unpin(cx)) else {
+                        return Poll::Ready(Err(Error::ConnectionClosed));
                     };
                     if addr != *this.server_addr {
                         continue;
@@ -156,21 +148,42 @@ where
                         }) => {}
                         _ => continue,
                     };
-                    *this.state = State::Connected;
-                }
-                State::Connected => {
-                    let Some((pack, addr)) = ready!(this.frame.as_mut().poll_next(cx)) else {
-                        return Poll::Ready(None);
-                    };
-                    if addr != *this.server_addr {
-                        continue;
-                    }
-                    match pack {
-                        Packet::Connected(pack) => return Poll::Ready(Some(pack)),
-                        _ => continue,
-                    };
+                    return Poll::Ready(Ok(FilterConnected {
+                        frame: this.frame.take().unwrap(),
+                        server_addr: *this.server_addr,
+                    }));
                 }
             }
+        }
+    }
+}
+
+pin_project! {
+    struct FilterConnected<F> {
+        frame: F,
+        server_addr: SocketAddr,
+    }
+}
+
+impl<F> Stream for FilterConnected<F>
+where
+    F: Stream<Item = (Packet<Frames<BytesMut>>, SocketAddr)> + Unpin,
+{
+    type Item = connected::Packet<Frames<BytesMut>>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.project();
+        loop {
+            let Some((pack, addr)) = ready!(this.frame.poll_next_unpin(cx)) else {
+                return Poll::Ready(None);
+            };
+            if addr != *this.server_addr {
+                continue;
+            }
+            match pack {
+                Packet::Connected(pack) => return Poll::Ready(Some(pack)),
+                _ => continue,
+            };
         }
     }
 }

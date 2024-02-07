@@ -22,6 +22,7 @@ use crate::server::handler::offline;
 use crate::server::handler::offline::HandleOffline;
 use crate::server::handler::online::HandleOnline;
 use crate::utils::{IOImpl, Instrumented, Log, Logged, RootSpan, WithAddress};
+use crate::IO;
 
 /// Avoid stupid error: `type parameter {OfflineHandler} is part of concrete type but not used in
 /// parameter list for the impl Trait type alias`
@@ -52,7 +53,7 @@ impl Incoming {
 }
 
 impl MakeIncoming for TokioUdpSocket {
-    fn make_incoming(self, config: Config) -> impl Stream<Item = super::IO> {
+    fn make_incoming(self, config: Config) -> impl Stream<Item = impl IO> {
         fn err_f(err: CodecError) {
             debug!("[frame] got codec error: {err} when decode frames");
         }
@@ -74,7 +75,7 @@ impl MakeIncoming for TokioUdpSocket {
 }
 
 impl Stream for Incoming {
-    type Item = super::IO;
+    type Item = impl IO;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.as_mut().clear_dropped_addr();

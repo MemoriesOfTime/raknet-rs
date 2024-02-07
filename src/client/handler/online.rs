@@ -4,7 +4,7 @@ use std::task::{ready, Context, Poll};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
-use futures::{Sink, Stream};
+use futures::{Future, Sink, SinkExt, Stream, StreamExt};
 use log::debug;
 use pin_project_lite::pin_project;
 
@@ -37,8 +37,8 @@ where
         O: Sink<FrameBody, Error = CodecError>,
     {
         OnlineHandler {
-            read: self,
-            write,
+            read: Some(self),
+            write: Some(write),
             state: State::SendConnectionRequest(Some(FrameBody::ConnectionRequest {
                 client_guid,
                 request_timestamp: timestamp(),
@@ -51,10 +51,8 @@ where
 
 pin_project! {
     pub(crate) struct OnlineHandler<I, O> {
-        #[pin]
-        read: I,
-        #[pin]
-        write: O,
+        read: Option<I>,
+        write: Option<O>,
         state: State,
         addr: SocketAddr,
     }
@@ -64,42 +62,39 @@ enum State {
     SendConnectionRequest(Option<FrameBody>),
     WaitConnectionRequestReply(Option<FrameBody>),
     SendNewIncomingConnection(FrameBody),
-    Connected,
-    SendPing,
-    Closed,
 }
 
-impl<I, O> Stream for OnlineHandler<I, O>
+impl<I, O> Future for OnlineHandler<I, O>
 where
-    I: Stream<Item = FrameBody>,
-    O: Sink<FrameBody, Error = CodecError>,
+    I: Stream<Item = FrameBody> + Unpin,
+    O: Sink<FrameBody, Error = CodecError> + Sink<Message, Error = CodecError> + Unpin,
 {
-    type Item = Bytes;
+    type Output = Result<impl Stream<Item = Bytes> + Sink<Message, Error = Error>, Error>;
 
-    #[allow(clippy::cognitive_complexity)]
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let mut this = self.project();
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+        let write = this.write.as_mut().unwrap();
+        let read = this.read.as_mut().unwrap();
         loop {
             match this.state {
                 State::SendConnectionRequest(pack) => {
-                    if let Err(err) = ready!(this.write.as_mut().poll_ready(cx)) {
+                    if let Err(err) = ready!(SinkExt::<FrameBody>::poll_ready_unpin(write, cx)) {
                         debug!("[online] SendConnectionRequest poll_ready error: {err}, retrying");
                         continue;
                     }
-                    if let Err(err) = this.write.as_mut().start_send(pack.clone().unwrap()) {
+                    if let Err(err) = write.start_send_unpin(pack.clone().unwrap()) {
                         debug!("[online] SendConnectionRequest start_send error: {err}, retrying");
                         continue;
                     }
-                    if let Err(err) = ready!(this.write.as_mut().poll_flush(cx)) {
+                    if let Err(err) = ready!(SinkExt::<FrameBody>::poll_flush_unpin(write, cx)) {
                         debug!("[online] SendConnectionRequest poll_flush error: {err}, retrying");
                         continue;
                     }
                     *this.state = State::WaitConnectionRequestReply(pack.take());
                 }
                 State::WaitConnectionRequestReply(pack) => {
-                    let Some(body) = ready!(this.read.as_mut().poll_next(cx)) else {
-                        *this.state = State::Closed;
-                        continue;
+                    let Some(body) = ready!(read.poll_next_unpin(cx)) else {
+                        return Poll::Ready(Err(Error::ConnectionClosed));
                     };
                     match body {
                         FrameBody::ConnectionRequestAccepted {
@@ -123,97 +118,126 @@ where
                     }
                 }
                 State::SendNewIncomingConnection(pack) => {
-                    if let Err(err) = ready!(this.write.as_mut().poll_ready(cx)) {
+                    if let Err(err) = ready!(SinkExt::<FrameBody>::poll_ready_unpin(write, cx)) {
                         debug!(
                             "[online] SendNewIncomingConnection poll_ready error: {err}, retrying"
                         );
                         continue;
                     }
-                    if let Err(err) = this.write.as_mut().start_send(pack.clone()) {
+                    if let Err(err) = write.start_send_unpin(pack.clone()) {
                         debug!(
                             "[online] SendNewIncomingConnection start_send error: {err}, retrying"
                         );
                         continue;
                     }
-                    if let Err(err) = ready!(this.write.as_mut().poll_flush(cx)) {
+                    if let Err(err) = ready!(SinkExt::<FrameBody>::poll_flush_unpin(write, cx)) {
                         debug!(
                             "[online] SendNewIncomingConnection poll_flush error: {err}, retrying"
                         );
                         continue;
                     }
-                    *this.state = State::Connected;
+                    return Poll::Ready(Ok(FilterIO {
+                        read: this.read.take().unwrap(),
+                        write: this.write.take().unwrap(),
+                        state: FilterIOState::Serving,
+                    }));
                 }
-                State::Connected => {
-                    let Some(body) = ready!(this.read.as_mut().poll_next(cx)) else {
-                        *this.state = State::Closed;
+            }
+        }
+    }
+}
+
+pin_project! {
+    struct FilterIO<I, O> {
+        read: I,
+        write: O,
+        state: FilterIOState,
+    }
+}
+
+enum FilterIOState {
+    Serving,
+    SendPing,
+    Closed,
+}
+
+impl<I, O> Stream for FilterIO<I, O>
+where
+    I: Stream<Item = FrameBody> + Unpin,
+    O: Sink<FrameBody, Error = CodecError> + Unpin,
+{
+    type Item = Bytes;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.project();
+        loop {
+            match this.state {
+                FilterIOState::Serving => {
+                    let Some(body) = ready!(this.read.poll_next_unpin(cx)) else {
+                        *this.state = FilterIOState::Closed;
                         continue;
                     };
                     match body {
-                        FrameBody::DisconnectNotification => *this.state = State::Closed,
-                        FrameBody::DetectLostConnections => *this.state = State::SendPing,
+                        FrameBody::DisconnectNotification => *this.state = FilterIOState::Closed,
+                        FrameBody::DetectLostConnections => *this.state = FilterIOState::SendPing,
                         FrameBody::User(data) => return Poll::Ready(Some(data)),
                         _ => {
                             debug!("[online] ignore packet {body:?} on Connected",);
                         }
                     }
                 }
-                State::SendPing => {
-                    if let Err(err) = ready!(this.write.as_mut().poll_ready(cx)) {
+                FilterIOState::SendPing => {
+                    if let Err(err) = ready!(this.write.poll_ready_unpin(cx)) {
                         debug!("[online] SendPing poll_ready error: {err}, retrying");
                         continue;
                     }
-                    if let Err(err) = this.write.as_mut().start_send(FrameBody::ConnectedPing {
+                    if let Err(err) = this.write.start_send_unpin(FrameBody::ConnectedPing {
                         client_timestamp: timestamp(),
                     }) {
                         debug!("[online] SendPing start_send error: {err}, retrying");
                         continue;
                     }
-                    if let Err(err) = ready!(this.write.as_mut().poll_flush(cx)) {
+                    if let Err(err) = ready!(this.write.poll_flush_unpin(cx)) {
                         debug!("[online] SendPing poll_flush error: {err}, retrying");
                         continue;
                     }
-                    *this.state = State::Connected;
+                    *this.state = FilterIOState::Serving;
                 }
-                State::Closed => return Poll::Ready(None),
+                FilterIOState::Closed => return Poll::Ready(None),
             }
         }
     }
 }
 
-impl<I, O> Sink<Message> for OnlineHandler<I, O>
+impl<I, O> Sink<Message> for FilterIO<I, O>
 where
-    I: Stream<Item = FrameBody>,
-    O: Sink<Message, Error = CodecError>,
+    O: Sink<Message, Error = CodecError> + Unpin,
 {
     type Error = Error;
 
     fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         let this = self.project();
-        if matches!(*this.state, State::Closed) {
+        if matches!(*this.state, FilterIOState::Closed) {
             return Poll::Ready(Err(Error::ConnectionClosed));
         }
-        if !matches!(*this.state, State::Connected | State::SendPing) {
-            // FIXME: it may drop the first packet when connected
-            return this.read.poll_next(cx).map(|_| Ok(()));
-        }
-        ready!(this.write.poll_ready(cx))?;
+        ready!(this.write.poll_ready_unpin(cx))?;
         Poll::Ready(Ok(()))
     }
 
     fn start_send(self: Pin<&mut Self>, item: Message) -> Result<(), Self::Error> {
-        self.project().write.start_send(item)?;
+        self.project().write.start_send_unpin(item)?;
         Ok(())
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        ready!(self.project().write.poll_flush(cx))?;
+        ready!(self.project().write.poll_flush_unpin(cx))?;
         Poll::Ready(Ok(()))
     }
 
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         let this = self.project();
-        ready!(this.write.poll_close(cx))?;
-        *this.state = State::Closed;
+        ready!(this.write.poll_close_unpin(cx))?;
+        *this.state = FilterIOState::Closed;
         Poll::Ready(Ok(()))
     }
 }

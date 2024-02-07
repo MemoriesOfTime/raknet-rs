@@ -1,4 +1,5 @@
-use std::net::SocketAddr;
+use std::io;
+use std::net::ToSocketAddrs;
 use std::sync::Arc;
 
 use log::debug;
@@ -10,11 +11,16 @@ use crate::client::handler::offline::HandleOffline;
 use crate::client::handler::online::HandleOnline;
 use crate::codec::{Codec, Decoded, Encoded};
 use crate::common::ack::{HandleIncomingAck, HandleOutgoingAck};
-use crate::errors::CodecError;
+use crate::errors::{CodecError, Error};
 use crate::utils::{IOImpl, Logged, WithAddress};
+use crate::IO;
 
 impl ConnectTo for TokioUdpSocket {
-    fn connect_to(self, addr: SocketAddr, config: super::Config) -> super::IO {
+    async fn connect_to(
+        self,
+        addrs: impl ToSocketAddrs,
+        config: super::Config,
+    ) -> Result<impl IO, Error> {
         fn err_f(err: CodecError) {
             debug!("[frame] got codec error: {err} when decode frames");
         }
@@ -25,6 +31,18 @@ impl ConnectTo for TokioUdpSocket {
 
         let (outgoing_ack_tx, outgoing_ack_rx) = flume::unbounded();
         let (outgoing_nack_tx, outgoing_nack_rx) = flume::unbounded();
+
+        let mut lookups = addrs.to_socket_addrs()?;
+
+        let addr = loop {
+            if let Some(addr) = lookups.next() {
+                if socket.connect(addr).await.is_ok() {
+                    break addr;
+                }
+                continue;
+            }
+            return Err(io::Error::new(io::ErrorKind::AddrNotAvailable, "invalid address").into());
+        };
 
         let write = UdpFramed::new(Arc::clone(&socket), Codec)
             .with_addr(addr)
@@ -41,10 +59,12 @@ impl ConnectTo for TokioUdpSocket {
         let io = UdpFramed::new(socket, Codec)
             .logged_err(err_f)
             .handle_offline(addr, config.offline)
+            .await?
             .handle_incoming_ack(incoming_ack_tx, incoming_nack_tx)
             .decoded(config.codec, outgoing_ack_tx, outgoing_nack_tx)
-            .handle_online(write, addr, config.offline.client_guid);
+            .handle_online(write, addr, config.offline.client_guid)
+            .await?;
 
-        IOImpl::new(io)
+        Ok(IOImpl::new(io))
     }
 }

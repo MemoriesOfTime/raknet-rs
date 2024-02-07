@@ -10,7 +10,7 @@ mod test {
     use tokio::net::UdpSocket;
 
     use crate::server::handler::offline;
-    use crate::server::incoming::{ConfigBuilder, MakeIncoming, IO};
+    use crate::server::incoming::{ConfigBuilder, MakeIncoming};
     use crate::utils::{Instrumented, RootSpan};
 
     #[ignore = "wait until the client is implemented."]
@@ -58,7 +58,7 @@ mod test {
             )
             .enter_on_item::<RootSpan>("incoming");
         loop {
-            let mut io: IO = incoming.next().await.unwrap();
+            let mut io = incoming.next().await.unwrap();
             tokio::spawn(async move {
                 loop {
                     let msg: Bytes = io.next().await.unwrap();
