@@ -52,17 +52,17 @@ impl ConnectTo for TokioUdpSocket {
                 outgoing_ack_rx,
                 outgoing_nack_rx,
                 config.send_buf_cap,
-                config.offline.mtu,
+                config.mtu,
             )
-            .frame_encoded(config.offline.mtu, config.codec);
+            .frame_encoded(config.mtu, config.codec_config());
 
         let io = UdpFramed::new(socket, Codec)
             .logged_err(err_f)
-            .handle_offline(addr, config.offline)
+            .handle_offline(addr, config.offline_config())
             .await?
             .handle_incoming_ack(incoming_ack_tx, incoming_nack_tx)
-            .decoded(config.codec, outgoing_ack_tx, outgoing_nack_tx)
-            .handle_online(write, addr, config.offline.client_guid)
+            .decoded(config.codec_config(), outgoing_ack_tx, outgoing_nack_tx)
+            .handle_online(write, addr, config.client_guid)
             .await?;
 
         Ok(IOImpl::new(io))

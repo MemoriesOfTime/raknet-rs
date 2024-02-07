@@ -71,7 +71,7 @@ impl Packet<Frames<BytesMut>> {
 
 /// `uint24` little-endian but actually occupies 4 bytes.
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
-pub(crate) struct Uint24le(pub u32);
+pub(crate) struct Uint24le(pub(crate) u32);
 
 impl Uint24le {
     fn read(buf: &mut BytesMut) -> Self {

@@ -21,7 +21,7 @@ use crate::Message;
 
 /// Codec config
 #[derive(Clone, Copy, Debug, Builder)]
-pub struct Config {
+pub(crate) struct Config {
     /// Limit the max size of a parted frames set, 0 means no limit
     /// It will abort the split frame if the parted_size reaches limit.
     /// Enable it to avoid DoS attack.
@@ -152,7 +152,6 @@ pub mod micro_bench {
 
     #[derive(derive_builder::Builder, Debug, Clone)]
     pub struct Options {
-        config: Config,
         frame_set_cnt: usize,
         frame_per_set: usize,
         duplicated_ratio: f32,
@@ -166,7 +165,6 @@ pub mod micro_bench {
     impl Options {
         pub fn builder() -> OptionsBuilder {
             OptionsBuilder {
-                config: None,
                 frame_set_cnt: None,
                 frame_per_set: None,
                 duplicated_ratio: None,
@@ -272,7 +270,7 @@ pub mod micro_bench {
     impl MicroBench {
         pub fn new(option: Options) -> Self {
             Self {
-                config: option.config,
+                config: Config::default(),
                 #[cfg(test)]
                 data: option.data.clone(),
                 frame_sets: option.gen_inputs(),
@@ -329,7 +327,6 @@ pub mod micro_bench {
     #[tokio::test]
     async fn test_bench() {
         let opts = Options::builder()
-            .config(Config::default())
             .frame_per_set(8)
             .frame_set_cnt(100)
             .duplicated_ratio(0.1)

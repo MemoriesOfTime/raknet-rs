@@ -43,7 +43,7 @@
 #![feature(coroutines, proc_macro_hygiene, stmt_expr_attributes, gen_future)]
 
 /// Protocol codec
-pub mod codec;
+mod codec;
 
 /// Errors
 mod errors;
@@ -68,6 +68,17 @@ pub mod client;
 
 /// Service
 pub mod service;
+
+/// Unit tests
+#[cfg(test)]
+mod tests;
+
+#[cfg(feature = "micro-bench")]
+pub mod micro_bench {
+    pub mod codec {
+        pub use crate::codec::micro_bench::*;
+    }
+}
 
 use std::net::SocketAddr;
 

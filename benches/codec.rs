@@ -1,7 +1,7 @@
 use bytes::BytesMut;
 use criterion::async_executor::FuturesExecutor;
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion, Throughput};
-use raknet_rs::codec;
+use raknet_rs::micro_bench;
 
 pub fn codec_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("codec");
@@ -9,8 +9,7 @@ pub fn codec_benchmark(c: &mut Criterion) {
 
     // large packets, every frame set only contains one frame
     {
-        let opts = codec::micro_bench::Options::builder()
-            .config(codec::Config::default())
+        let opts = micro_bench::codec::Options::builder()
             .frame_per_set(1)
             .frame_set_cnt(14400)
             .duplicated_ratio(0.01)
@@ -32,7 +31,7 @@ pub fn codec_benchmark(c: &mut Criterion) {
         group.throughput(Throughput::Elements(opts.input_data_cnt() as u64));
         group.bench_function("decode_large_packets_same_data_cnt", |bencher| {
             bencher.to_async(FuturesExecutor).iter_batched(
-                || codec::micro_bench::MicroBench::new(opts.clone()),
+                || micro_bench::codec::MicroBench::new(opts.clone()),
                 |bench| bench.bench_decoded(),
                 BatchSize::SmallInput,
             );
@@ -41,8 +40,7 @@ pub fn codec_benchmark(c: &mut Criterion) {
 
     // medium packets, every frame set contains 6 frame
     {
-        let opts = codec::micro_bench::Options::builder()
-            .config(codec::Config::default())
+        let opts = micro_bench::codec::Options::builder()
             .frame_per_set(6)
             .frame_set_cnt(600)
             .duplicated_ratio(0.01)
@@ -64,7 +62,7 @@ pub fn codec_benchmark(c: &mut Criterion) {
         group.throughput(Throughput::Elements(opts.input_data_cnt() as u64));
         group.bench_function("decode_medium_packets_same_data_cnt", |bencher| {
             bencher.to_async(FuturesExecutor).iter_batched(
-                || codec::micro_bench::MicroBench::new(opts.clone()),
+                || micro_bench::codec::MicroBench::new(opts.clone()),
                 |bench| bench.bench_decoded(),
                 BatchSize::SmallInput,
             );
@@ -73,8 +71,7 @@ pub fn codec_benchmark(c: &mut Criterion) {
 
     // short packets, every frame set contains 36 frame
     {
-        let opts = codec::micro_bench::Options::builder()
-            .config(codec::Config::default())
+        let opts = micro_bench::codec::Options::builder()
             .frame_per_set(36)
             .frame_set_cnt(100)
             .duplicated_ratio(0.01)
@@ -96,7 +93,7 @@ pub fn codec_benchmark(c: &mut Criterion) {
         group.throughput(Throughput::Elements(opts.input_data_cnt() as u64));
         group.bench_function("decode_short_packets_same_data_cnt", |bencher| {
             bencher.to_async(FuturesExecutor).iter_batched(
-                || codec::micro_bench::MicroBench::new(opts.clone()),
+                || micro_bench::codec::MicroBench::new(opts.clone()),
                 |bench| bench.bench_decoded(),
                 BatchSize::SmallInput,
             );
@@ -105,8 +102,7 @@ pub fn codec_benchmark(c: &mut Criterion) {
 
     // large packets, every frame set only contains one frame
     {
-        let opts = codec::micro_bench::Options::builder()
-            .config(codec::Config::default())
+        let opts = micro_bench::codec::Options::builder()
             .frame_per_set(1)
             .frame_set_cnt(1440)
             .duplicated_ratio(0.01)
@@ -128,7 +124,7 @@ pub fn codec_benchmark(c: &mut Criterion) {
         group.throughput(Throughput::Bytes(opts.input_data_size() as u64));
         group.bench_function("decode_large_packets_same_data_size", |bencher| {
             bencher.to_async(FuturesExecutor).iter_batched(
-                || codec::micro_bench::MicroBench::new(opts.clone()),
+                || micro_bench::codec::MicroBench::new(opts.clone()),
                 |bench| bench.bench_decoded(),
                 BatchSize::SmallInput,
             );
@@ -137,8 +133,7 @@ pub fn codec_benchmark(c: &mut Criterion) {
 
     // medium packets, every frame set contains 6 frame
     {
-        let opts = codec::micro_bench::Options::builder()
-            .config(codec::Config::default())
+        let opts = micro_bench::codec::Options::builder()
             .frame_per_set(6)
             .frame_set_cnt(1550)
             .duplicated_ratio(0.01)
@@ -160,7 +155,7 @@ pub fn codec_benchmark(c: &mut Criterion) {
         group.throughput(Throughput::Bytes(opts.input_data_size() as u64));
         group.bench_function("decode_medium_packets_same_data_size", |bencher| {
             bencher.to_async(FuturesExecutor).iter_batched(
-                || codec::micro_bench::MicroBench::new(opts.clone()),
+                || micro_bench::codec::MicroBench::new(opts.clone()),
                 |bench| bench.bench_decoded(),
                 BatchSize::SmallInput,
             );
@@ -169,8 +164,7 @@ pub fn codec_benchmark(c: &mut Criterion) {
 
     // short packets, every frame set contains 36 frame
     {
-        let opts = codec::micro_bench::Options::builder()
-            .config(codec::Config::default())
+        let opts = micro_bench::codec::Options::builder()
             .frame_per_set(36)
             .frame_set_cnt(1378)
             .duplicated_ratio(0.01)
@@ -192,7 +186,7 @@ pub fn codec_benchmark(c: &mut Criterion) {
         group.throughput(Throughput::Bytes(opts.input_data_size() as u64));
         group.bench_function("decode_short_packets_same_data_size", |bencher| {
             bencher.to_async(FuturesExecutor).iter_batched(
-                || codec::micro_bench::MicroBench::new(opts.clone()),
+                || micro_bench::codec::MicroBench::new(opts.clone()),
                 |bench| bench.bench_decoded(),
                 BatchSize::SmallInput,
             );

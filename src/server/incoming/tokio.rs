@@ -64,7 +64,7 @@ impl MakeIncoming for TokioUdpSocket {
         Incoming {
             offline: UdpFramed::new(Arc::clone(&socket), Codec)
                 .logged_err(err_f)
-                .handle_offline(config.offline.clone()),
+                .handle_offline(config.offline_config()),
             socket,
             config,
             router: HashMap::new(),
@@ -115,18 +115,22 @@ impl Stream for Incoming {
                     this.config.send_buf_cap,
                     peer.mtu,
                 )
-                .frame_encoded(peer.mtu, this.config.codec);
+                .frame_encoded(peer.mtu, this.config.codec_config());
             let raw_write = UdpFramed::new(Arc::clone(this.socket), Codec).with_addr(peer.addr);
 
             let io = router_rx
                 .into_stream()
                 .handle_incoming_ack(incoming_ack_tx, incoming_nack_tx)
-                .decoded(this.config.codec, outgoing_ack_tx, outgoing_nack_tx)
+                .decoded(
+                    this.config.codec_config(),
+                    outgoing_ack_tx,
+                    outgoing_nack_tx,
+                )
                 .handle_online(
                     write,
                     raw_write,
                     peer.addr,
-                    this.config.offline.sever_guid,
+                    this.config.sever_guid,
                     this.drop_notifier.clone(),
                 )
                 .enter_on_item::<RootSpan>(format!("io(peer={},mtu={})", peer.addr, peer.mtu));

@@ -12,9 +12,9 @@ use crate::packet::connected::{self, Frames};
 use crate::packet::{unconnected, Packet};
 
 #[derive(Debug, Clone, Copy, derive_builder::Builder)]
-pub struct Config {
-    pub(crate) mtu: u16,
-    pub(crate) client_guid: u64,
+pub(crate) struct Config {
+    mtu: u16,
+    client_guid: u64,
     protocol_version: u8,
 }
 

@@ -37,8 +37,8 @@ where
 }
 
 #[derive(Debug, Clone, derive_builder::Builder)]
-pub struct Config {
-    pub(crate) sever_guid: u64,
+pub(crate) struct Config {
+    sever_guid: u64,
     advertisement: Bytes,
     min_mtu: u16,
     max_mtu: u16,
