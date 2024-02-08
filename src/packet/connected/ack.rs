@@ -23,7 +23,8 @@ impl AckOrNack {
             return None;
         };
 
-        let mut records = Vec::new();
+        // TODO: reusable vector factory
+        let mut records = vec![];
         let mut last = first;
         let mut upgrade_flag = true;
         // first byte is pack_type, next 2 bytes are length, the first seq_num takes at least 4

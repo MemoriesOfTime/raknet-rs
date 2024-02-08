@@ -252,13 +252,19 @@ where
                 ready!(this.frame.as_mut().poll_ready(cx))?;
                 sent = false;
             }
+
+            // TODO: reusable vector factory
             let mut frames = vec![];
+            let mut reliable = false;
 
             // TODO: implement sliding window congestion control to select a proper transmission
             // bandwidth
             let mut remain_mtu = *this.mtu as usize - FRAME_SET_HEADER_SIZE;
             while let Some(frame) = this.buf.front() {
                 if remain_mtu > frame.size() {
+                    if frame.flags.reliability.is_reliable() {
+                        reliable = true;
+                    }
                     remain_mtu -= frame.size();
                     frames.push(this.buf.pop_front().unwrap());
                     continue;
@@ -276,11 +282,13 @@ where
                         frame_set.clone(),
                     )))?;
                 sent = true;
-                // keep for resending
-                this.resending.insert(
-                    frame_set.seq_num.0,
-                    (frame_set.set, Instant::now().add(RTO)),
-                );
+                if reliable {
+                    // keep for resending
+                    this.resending.insert(
+                        frame_set.seq_num.0,
+                        (frame_set.set, Instant::now().add(RTO)),
+                    );
+                }
                 *this.seq_num_write_index += 1;
             }
         }

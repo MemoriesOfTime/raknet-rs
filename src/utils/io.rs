@@ -10,7 +10,7 @@ use crate::packet::connected::Reliability;
 use crate::Message;
 
 pin_project! {
-    /// The detailed implementation of [`IO`]connections
+    /// The detailed implementation of [`crate::IO`]
     pub(crate) struct IOImpl<IO> {
         #[pin]
         io: IO,

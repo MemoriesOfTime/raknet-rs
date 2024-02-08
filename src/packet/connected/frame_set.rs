@@ -19,7 +19,8 @@ pub(crate) struct FrameSet<S> {
 impl FrameSet<Frames<BytesMut>> {
     pub(super) fn read(buf: &mut BytesMut) -> Result<Self, CodecError> {
         let seq_num = read_buf!(buf, 3, Uint24le::read(buf));
-        let mut frames = Vec::new();
+        // TODO: reusable vector factory
+        let mut frames = vec![];
         while buf.has_remaining() {
             frames.push(Frame::read(buf)?);
         }
