@@ -4,18 +4,20 @@ mod decoder;
 /// Frame encoder
 mod encoder;
 
-use bytes::{Buf, Bytes, BytesMut};
+/// Tokio codec helper
+#[cfg(feature = "tokio-udp")]
+pub(crate) mod tokio;
+
+use bytes::{Bytes, BytesMut};
 use derive_builder::Builder;
 use flume::Sender;
 use futures::{Sink, Stream, StreamExt};
 use log::{debug, trace};
-use tokio_util::codec::{Decoder, Encoder};
 
 use self::decoder::{DeFragmented, Deduplicated, FrameDecoded, Ordered};
 use self::encoder::{Fragmented, FrameEncoded};
 use crate::errors::CodecError;
 use crate::packet::connected::{Frame, FrameBody, FrameSet, Frames};
-use crate::packet::Packet;
 use crate::utils::Logged;
 use crate::Message;
 
@@ -115,28 +117,6 @@ where
         config: Config,
     ) -> impl Sink<Message, Error = CodecError> + Sink<FrameBody, Error = CodecError> {
         self.fragmented(mtu, config.max_channels).frame_encoded()
-    }
-}
-
-/// The raknet codec
-pub(crate) struct Codec;
-
-impl<B: Buf> Encoder<Packet<Frames<B>>> for Codec {
-    type Error = CodecError;
-
-    fn encode(&mut self, item: Packet<Frames<B>>, dst: &mut BytesMut) -> Result<(), Self::Error> {
-        item.write(dst);
-        Ok(())
-    }
-}
-
-impl Decoder for Codec {
-    type Error = CodecError;
-    // we might want to update the package during codec
-    type Item = Packet<Frames<BytesMut>>;
-
-    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        Packet::read(src)
     }
 }
 

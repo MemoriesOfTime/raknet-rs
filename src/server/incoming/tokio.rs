@@ -13,7 +13,8 @@ use tokio::net::UdpSocket as TokioUdpSocket;
 use tokio_util::udp::UdpFramed;
 
 use super::{Config, MakeIncoming};
-use crate::codec::{Codec, Decoded, Encoded};
+use crate::codec::tokio::Codec;
+use crate::codec::{Decoded, Encoded};
 use crate::common::ack::{HandleIncomingAck, HandleOutgoingAck};
 use crate::errors::CodecError;
 use crate::packet::connected::{self, Frames};

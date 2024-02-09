@@ -5,6 +5,7 @@ use super::handler::offline;
 use crate::{codec, IO};
 
 /// Incoming implementation by using tokio's UDP framework
+#[cfg(feature = "tokio-udp")]
 mod tokio;
 
 /// Incoming config

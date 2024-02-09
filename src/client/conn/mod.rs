@@ -5,6 +5,7 @@ use crate::errors::Error;
 use crate::{codec, IO};
 
 /// Connection implementation by using tokio's UDP framework
+#[cfg(feature = "tokio-udp")]
 mod tokio;
 
 #[derive(Debug, Clone, Copy, derive_builder::Builder)]
