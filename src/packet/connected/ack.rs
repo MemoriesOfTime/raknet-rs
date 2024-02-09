@@ -2,7 +2,7 @@ use bytes::{Buf, BufMut, BytesMut};
 
 use super::Uint24le;
 use crate::errors::CodecError;
-use crate::read_buf;
+use crate::packet::read_buf;
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct AckOrNack {

@@ -8,7 +8,6 @@ use bytes::{Buf, BufMut, BytesMut};
 use self::connected::Frames;
 use crate::errors::CodecError;
 
-#[macro_export]
 macro_rules! read_buf {
     ($buf:expr, $len:expr, $exp:expr) => {{
         if $buf.remaining() < $len {
@@ -17,6 +16,8 @@ macro_rules! read_buf {
         $exp
     }};
 }
+
+pub(in crate::packet) use read_buf;
 
 const VALID_FLAG: u8 = 0b1000_0000;
 const ACK_FLAG: u8 = 0b1100_0000;
@@ -32,7 +33,6 @@ pub(crate) const FRAME_SET_HEADER_SIZE: usize = 4;
 /// Packet Types. These packets play important role in raknet protocol.
 /// Some of them appear at the first byte of a UDP data packet (like `UnconnectedPing1`), while
 /// others are encapsulated in a `FrameSet` data packet and appear as the first byte of the body
-/// (like `Game`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 #[allow(dead_code)] // may used in future

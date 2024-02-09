@@ -3,8 +3,7 @@ use std::net::SocketAddr;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 use crate::errors::CodecError;
-use crate::packet::{MagicRead, MagicWrite, PackType, SocketAddrRead, SocketAddrWrite};
-use crate::read_buf;
+use crate::packet::{read_buf, MagicRead, MagicWrite, PackType, SocketAddrRead, SocketAddrWrite};
 
 /// Request sent before establishing a connection
 #[derive(Debug, PartialEq, Clone)]

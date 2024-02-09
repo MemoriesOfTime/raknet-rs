@@ -5,8 +5,9 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 use super::Uint24le;
 use crate::errors::CodecError;
-use crate::packet::{PackType, SocketAddrRead, SocketAddrWrite, NEEDS_B_AND_AS_FLAG, PARTED_FLAG};
-use crate::read_buf;
+use crate::packet::{
+    read_buf, PackType, SocketAddrRead, SocketAddrWrite, NEEDS_B_AND_AS_FLAG, PARTED_FLAG,
+};
 
 pub(crate) type Frames<B> = Vec<Frame<B>>;
 
