@@ -57,9 +57,6 @@ mod utils;
 /// Common handlers
 mod common;
 
-/// Runtime
-pub mod rt;
-
 /// Raknet server
 pub mod server;
 

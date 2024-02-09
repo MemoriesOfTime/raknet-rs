@@ -1,3 +1,7 @@
+//! Micro benches
+
+use std::time::Duration;
+
 use bytes::BytesMut;
 use criterion::async_executor::FuturesExecutor;
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion, Throughput};
@@ -6,6 +10,8 @@ use raknet_rs::micro_bench;
 pub fn codec_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("codec");
     let seed = 114514;
+
+    group.warm_up_time(Duration::from_secs(10));
 
     // large packets, every frame set only contains one frame
     {
