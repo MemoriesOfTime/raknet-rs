@@ -23,7 +23,6 @@ impl AckOrNack {
             return None;
         };
 
-        // TODO: reusable vector factory
         let mut records = vec![];
         let mut last = first;
         let mut upgrade_flag = true;

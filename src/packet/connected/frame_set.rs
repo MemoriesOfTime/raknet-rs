@@ -20,7 +20,6 @@ pub(crate) struct FrameSet<S> {
 impl FrameSet<Frames<BytesMut>> {
     pub(super) fn read(buf: &mut BytesMut) -> Result<Self, CodecError> {
         let seq_num = read_buf!(buf, 3, Uint24le::read(buf));
-        // TODO: reusable vector factory
         let mut frames = vec![];
         while buf.has_remaining() {
             frames.push(Frame::read(buf)?);
@@ -321,7 +320,7 @@ impl Flags {
     }
 }
 
-#[derive(Debug, Eq, PartialEq, Hash, Clone)]
+#[derive(Debug, Eq, PartialEq, Hash, Clone, Copy)]
 pub(crate) struct Fragment {
     pub(crate) parted_size: u32,
     pub(crate) parted_id: u16,
@@ -344,7 +343,7 @@ impl Fragment {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) struct Ordered {
     pub(crate) frame_index: Uint24le,
     pub(crate) channel: u8,

@@ -253,7 +253,6 @@ where
                 sent = false;
             }
 
-            // TODO: reusable vector factory
             let mut frames = vec![];
             let mut reliable = false;
 

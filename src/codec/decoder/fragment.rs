@@ -92,7 +92,7 @@ where
                     parted_size,
                     parted_id,
                     parted_index,
-                }) = frame.fragment.clone()
+                }) = frame.fragment
                 {
                     // promise that parted_index is always less than parted_size
                     if parted_index >= parted_size {

@@ -93,7 +93,7 @@ where
             if let Some(connected::Ordered {
                 frame_index,
                 channel,
-            }) = frame_set.set.ordered.clone()
+            }) = frame_set.set.ordered
             {
                 let channel = usize::from(channel);
                 if channel >= *this.max_channels {
