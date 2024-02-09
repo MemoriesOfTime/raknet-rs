@@ -39,6 +39,8 @@ env_logger = "0.11"
 indexmap = "2"
 minitrace = { version = "0.6", features = ["enable"] }
 rand = "0.8"
+reqwest = "0.11"
+tokio = { version = "1", features = ["full"] }
 
 [features]
 default = ["tokio-udp"]

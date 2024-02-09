@@ -7,8 +7,57 @@
 
 Yet another project rewritten in Rust.
 
-Features:
+## Features
 
-- Async
-- Zero cost codec
-- Easy to use
+- `Stream`/`Sink`/`Future` based async API.
+- Support `Unreliable`, `Reliable` and `ReliableOrdered` packets.
+- Support multiple order channels.
+- Support `ACK`/`NACK` mechanism.
+- Easy to use.
+
+## Getting Started
+
+See [examples](examples/) for usage.
+
+### Server
+
+```rust
+use bytes::Bytes;
+use futures::{SinkExt, StreamExt};
+use raknet_rs::client::{self, ConnectTo};
+use raknet_rs::server::{self, MakeIncoming};
+
+let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await?;
+let config = server::ConfigBuilder::default()
+    .send_buf_cap(1024)
+    .sever_guid(114514)
+    .advertisement(Bytes::from_static(b"Hello, I am server"))
+    ...
+    .build()
+    .unwrap();
+let mut incoming = socket.make_incoming(config);
+let mut io = incoming.next().await.unwrap();
+let data: Bytes = io.next().await.unwrap();
+io.send(data).await.unwrap();
+```
+
+### Client
+
+```rust
+use bytes::Bytes;
+use futures::{SinkExt, StreamExt};
+use raknet_rs::client::{self, ConnectTo};
+use raknet_rs::server::{self, MakeIncoming};
+
+let socket = tokio::net::UdpSocket::bind("0.0.0.0:0").await?;
+let config = client::ConfigBuilder::default()
+    .send_buf_cap(1024)
+    .client_guid(1919810)
+    ...
+    .build()
+    .unwrap();
+let mut conn = socket.connect_to(<addr>, config).await?;
+conn.send(Bytes::from_static(b"Hello, Anyone there?"))
+    .await?;
+let res: Bytes = conn.next().await.unwrap();
+```
