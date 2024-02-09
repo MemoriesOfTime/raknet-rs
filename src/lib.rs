@@ -66,9 +66,6 @@ pub mod server;
 /// Raknet client
 pub mod client;
 
-/// Service
-pub mod service;
-
 /// Unit tests
 #[cfg(test)]
 mod tests;

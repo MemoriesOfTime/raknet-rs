@@ -24,7 +24,6 @@ See [examples](examples/) for usage.
 ```rust
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
-use raknet_rs::client::{self, ConnectTo};
 use raknet_rs::server::{self, MakeIncoming};
 
 let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await?;
@@ -47,7 +46,6 @@ io.send(data).await.unwrap();
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
 use raknet_rs::client::{self, ConnectTo};
-use raknet_rs::server::{self, MakeIncoming};
 
 let socket = tokio::net::UdpSocket::bind("0.0.0.0:0").await?;
 let config = client::ConfigBuilder::default()
