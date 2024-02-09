@@ -5,6 +5,12 @@ edition = "2021"
 license = "Apache-2.0"
 authors = ["iGxnon"]
 resolver = "2"
+description = "Raknet protocol implementation by rust"
+homepage = "https://github.com/MemoriesOfTime/raknet-rs"
+repository = "https://github.com/MemoriesOfTime/raknet-rs"
+readme = "README.md"
+categories = ["network-programming"]
+keywords = ["raknet", "network", "udp"]
 
 [dependencies]
 bytes = "1.4.0"
