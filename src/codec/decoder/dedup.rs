@@ -227,12 +227,11 @@ where
             });
             if !frame_set.set.is_empty() {
                 return Poll::Ready(Some(Ok(frame_set)));
-            } else {
-                // all duplicated, send ack back
-                this.outgoing_ack_tx
-                    .send(frame_set.seq_num.0)
-                    .expect("outgoing_ack_rx never drops");
             }
+            // all duplicated, send ack back
+            this.outgoing_ack_tx
+                .send(frame_set.seq_num.0)
+                .expect("outgoing_ack_rx never drops");
         }
     }
 }

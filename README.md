@@ -13,13 +13,21 @@ Yet another project rewritten in Rust.
 - Support `Unreliable`, `Reliable` and `ReliableOrdered` packets.
 - Support multiple order channels.
 - Support `ACK`/`NACK` mechanism.
-- Easy to use.
+- Low level API but easy to use.
+
+## Roadmap
+
+- Add sliding window congestion control
 
 ## Getting Started
 
 See [examples](examples/) for usage.
 
 ### Server
+
+IO is a hidden type that implements the traits `Stream` and `Sink`.
+Never stop polling `incoming` because it also serves as the router to every IOs.
+Apply `Sink::poll_flush` to IO will trigger to flush all pending packets, `ACK`/`NACK`, and stale packets.
 
 ```rust
 use bytes::Bytes;
@@ -41,6 +49,8 @@ io.send(data).await.unwrap();
 ```
 
 ### Client
+
+> The current version of the client only has the most basic handshake implementation, and it is not recommended to use it directly.
 
 ```rust
 use bytes::Bytes;

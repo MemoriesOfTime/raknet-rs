@@ -139,7 +139,8 @@ where
     }
 }
 
-const RTO: Duration = Duration::from_millis(100);
+// TODO: use adaptive RTO
+const RTO: Duration = Duration::from_millis(77);
 
 impl<F> OutgoingAck<F>
 where

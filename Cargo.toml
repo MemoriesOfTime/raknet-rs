@@ -1,6 +1,6 @@
 [package]
 name = "raknet-rs"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "Apache-2.0"
 authors = ["iGxnon"]
@@ -50,10 +50,10 @@ tokio-udp = ["dep:tokio-util", "dep:tokio"]
 [[bench]]
 name = "micro"
 harness = false
-
-[[bench]]
-name = "bulk"
-harness = false
+# Not available currently
+# [[bench]]
+# name = "bulk"
+# harness = false
 
 [profile.bench]
 opt-level = 3
