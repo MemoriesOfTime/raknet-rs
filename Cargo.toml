@@ -50,6 +50,7 @@ tokio-udp = ["dep:tokio-util", "dep:tokio"]
 [[bench]]
 name = "micro"
 harness = false
+required-features = ["micro-bench"]
 # Not available currently
 # [[bench]]
 # name = "bulk"
