@@ -16,7 +16,7 @@ Yet another project rewritten in Rust.
   - Support multiple order channels.
   - Support `ACK`/`NACK` mechanism.
 - Full tracing powered by [minitrace-rust](https://github.com/tikv/minitrace-rust).
-  - You can track a packet's span during deduplication, fragmentation, ... layers.
+  - You can track a packet's span during deduplication, fragmentation, ...
 
 ## Roadmap
 
