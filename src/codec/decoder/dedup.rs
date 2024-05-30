@@ -4,6 +4,7 @@ use std::task::{Context, Poll};
 
 use flume::Sender;
 use futures::{ready, Stream, StreamExt};
+use minitrace::local::LocalSpan;
 use pin_project_lite::pin_project;
 
 use crate::errors::CodecError;
@@ -213,6 +214,13 @@ where
             let Some(mut frame_set) = ready!(this.frame.poll_next_unpin(cx)?) else {
                 return Poll::Ready(None);
             };
+            let _span =
+                LocalSpan::enter_with_local_parent("codec.deduplication").with_properties(|| {
+                    [
+                        ("frame_set_size", frame_set.set.len().to_string()),
+                        ("frame_seq_num", frame_set.seq_num.to_string()),
+                    ]
+                });
             if *this.max_gap != 0 && this.window.received_status.len() > *this.max_gap {
                 return Poll::Ready(Some(Err(CodecError::DedupExceed(
                     *this.max_gap,

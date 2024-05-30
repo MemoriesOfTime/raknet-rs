@@ -9,8 +9,36 @@ use crate::errors::Error;
 use crate::packet::connected::Reliability;
 use crate::Message;
 
+/// The basic operation for each connection
+pub trait IO:
+    Stream<Item = Bytes>
+    + Sink<Bytes, Error = crate::errors::Error>
+    + Sink<Message, Error = crate::errors::Error>
+    + Send
+{
+    fn set_default_reliability(&mut self, reliability: Reliability);
+    fn get_default_reliability(&self) -> Reliability;
+
+    fn set_default_order_channel(&mut self, order_channel: u8);
+    fn get_default_order_channel(&self) -> u8;
+}
+
+/// TODO: experimental feature for single thread runtime/machine (without Send)
+#[cfg(feature = "rt-single")]
+pub trait LocalIO:
+    Stream<Item = Bytes>
+    + Sink<Bytes, Error = crate::errors::Error>
+    + Sink<Message, Error = crate::errors::Error>
+{
+    fn set_default_reliability(&mut self, reliability: Reliability);
+    fn get_default_reliability(&self) -> Reliability;
+
+    fn set_default_order_channel(&mut self, order_channel: u8);
+    fn get_default_order_channel(&self) -> u8;
+}
+
 pin_project! {
-    /// The detailed implementation of [`crate::IO`]
+    /// The detailed implementation of [`crate::io::IO`]
     pub(crate) struct IOImpl<IO> {
         #[pin]
         io: IO,
@@ -90,7 +118,7 @@ where
     }
 }
 
-impl<IO> crate::IO for IOImpl<IO>
+impl<IO> crate::io::IO for IOImpl<IO>
 where
     IO: Sink<Message, Error = Error> + Stream<Item = Bytes> + Send,
 {

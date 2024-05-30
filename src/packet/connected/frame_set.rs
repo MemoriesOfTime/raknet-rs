@@ -233,6 +233,23 @@ pub enum Reliability {
     ReliableOrderedWithAckReceipt = 0b111,
 }
 
+impl std::fmt::Display for Reliability {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Reliability::Unreliable => write!(f, "Unreliable"),
+            Reliability::UnreliableSequenced => write!(f, "UnreliableSequenced"),
+            Reliability::Reliable => write!(f, "Reliable"),
+            Reliability::ReliableOrdered => write!(f, "ReliableOrdered"),
+            Reliability::ReliableSequenced => write!(f, "ReliableSequenced"),
+            Reliability::UnreliableWithAckReceipt => write!(f, "UnreliableWithAckReceipt"),
+            Reliability::ReliableWithAckReceipt => write!(f, "ReliableWithAckReceipt"),
+            Reliability::ReliableOrderedWithAckReceipt => {
+                write!(f, "ReliableOrderedWithAckReceipt")
+            }
+        }
+    }
+}
+
 impl Reliability {
     /// Reliable ensures that the packet is not duplicated.
     pub(crate) fn is_reliable(&self) -> bool {
@@ -452,6 +469,12 @@ impl std::fmt::Debug for FrameBody {
             Self::DetectLostConnections => write!(f, "DetectLostConnections"),
             Self::User(data) => write!(f, "User(data_size:{})", data.remaining()),
         }
+    }
+}
+
+impl std::fmt::Display for FrameBody {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(self, f)
     }
 }
 

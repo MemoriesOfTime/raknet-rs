@@ -94,8 +94,6 @@ where
 }
 
 pub(crate) trait Encoded {
-    fn encoded(self, mtu: u16, config: Config) -> impl Sink<Message, Error = CodecError>;
-
     fn frame_encoded(
         self,
         mtu: u16,
@@ -107,10 +105,6 @@ impl<F> Encoded for F
 where
     F: Sink<Frames<Bytes>, Error = CodecError> + Sink<Frame<Bytes>, Error = CodecError>,
 {
-    fn encoded(self, mtu: u16, config: Config) -> impl Sink<Message, Error = CodecError> {
-        self.fragmented(mtu, config.max_channels)
-    }
-
     fn frame_encoded(
         self,
         mtu: u16,

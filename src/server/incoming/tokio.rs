@@ -8,6 +8,7 @@ use bytes::BytesMut;
 use flume::{Receiver, Sender};
 use futures::Stream;
 use log::{debug, error, info};
+use minitrace::Span;
 use pin_project_lite::pin_project;
 use tokio::net::UdpSocket as TokioUdpSocket;
 use tokio_util::udp::UdpFramed;
@@ -17,13 +18,13 @@ use crate::codec::tokio::Codec;
 use crate::codec::{Decoded, Encoded};
 use crate::common::ack::{HandleIncomingAck, HandleOutgoingAck};
 use crate::errors::CodecError;
+use crate::io::{IOImpl, IO};
 use crate::packet::connected::{self, Frames};
 use crate::packet::Packet;
 use crate::server::handler::offline;
 use crate::server::handler::offline::HandleOffline;
 use crate::server::handler::online::HandleOnline;
-use crate::utils::{IOImpl, Instrumented, Log, Logged, RootSpan, WithAddress};
-use crate::IO;
+use crate::utils::{Log, Logged, SinkExt, WithAddress};
 
 /// Avoid stupid error: `type parameter {OfflineHandler} is part of concrete type but not used in
 /// parameter list for the impl Trait type alias`
@@ -134,7 +135,7 @@ impl Stream for Incoming {
                     this.config.sever_guid,
                     this.drop_notifier.clone(),
                 )
-                .enter_on_item::<RootSpan>(format!("io(peer={},mtu={})", peer.addr, peer.mtu));
+                .enter_on_item::<Span>(format!("io(peer={},mtu={})", peer.addr, peer.mtu));
 
             return Poll::Ready(Some(IOImpl::new(io)));
         }

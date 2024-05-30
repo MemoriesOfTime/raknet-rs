@@ -2,7 +2,8 @@ use bytes::Bytes;
 use futures::Stream;
 
 use super::handler::offline;
-use crate::{codec, IO};
+use crate::codec;
+use crate::io::IO;
 
 /// Incoming implementation by using tokio's UDP framework
 #[cfg(feature = "tokio-udp")]

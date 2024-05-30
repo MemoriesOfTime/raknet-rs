@@ -36,11 +36,9 @@
     clippy::wildcard_imports
 )]
 #![feature(impl_trait_in_assoc_type)]
-#![feature(type_alias_impl_trait)]
 #![feature(ip_bits)]
-#![feature(exclusive_range_pattern)]
 #![feature(type_changing_struct_update)]
-#![feature(coroutines, proc_macro_hygiene, stmt_expr_attributes, gen_future)]
+#![feature(coroutines, proc_macro_hygiene, stmt_expr_attributes)]
 
 /// Protocol codec
 mod codec;
@@ -63,9 +61,8 @@ pub mod server;
 /// Raknet client
 pub mod client;
 
-/// Unit tests
-#[cfg(test)]
-mod tests;
+/// The basic operation API
+pub mod io;
 
 #[cfg(feature = "micro-bench")]
 pub mod micro_bench {
@@ -74,10 +71,13 @@ pub mod micro_bench {
     }
 }
 
+/// Unit tests
+#[cfg(test)]
+mod tests;
+
 use std::net::SocketAddr;
 
 use bytes::Bytes;
-use futures::{Sink, Stream};
 use packet::connected::Reliability;
 
 #[derive(Debug, Clone)]
@@ -126,18 +126,4 @@ impl Message {
     pub fn into_data(self) -> Bytes {
         self.data
     }
-}
-
-// Provide the basic operation for each connection
-pub trait IO:
-    Stream<Item = Bytes>
-    + Sink<Bytes, Error = crate::errors::Error>
-    + Sink<Message, Error = crate::errors::Error>
-    + Send
-{
-    fn set_default_reliability(&mut self, reliability: Reliability);
-    fn get_default_reliability(&self) -> Reliability;
-
-    fn set_default_order_channel(&mut self, order_channel: u8);
-    fn get_default_order_channel(&self) -> u8;
 }

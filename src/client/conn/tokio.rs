@@ -13,8 +13,8 @@ use crate::codec::tokio::Codec;
 use crate::codec::{Decoded, Encoded};
 use crate::common::ack::{HandleIncomingAck, HandleOutgoingAck};
 use crate::errors::{CodecError, Error};
-use crate::utils::{IOImpl, Logged, WithAddress};
-use crate::IO;
+use crate::io::{IOImpl, IO};
+use crate::utils::{Logged, WithAddress};
 
 impl ConnectTo for TokioUdpSocket {
     async fn connect_to(

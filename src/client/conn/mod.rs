@@ -1,8 +1,9 @@
 use std::net::ToSocketAddrs;
 
 use super::handler::offline;
+use crate::codec;
 use crate::errors::Error;
-use crate::{codec, IO};
+use crate::io::IO;
 
 /// Connection implementation by using tokio's UDP framework
 #[cfg(feature = "tokio-udp")]

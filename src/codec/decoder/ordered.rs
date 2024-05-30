@@ -6,6 +6,7 @@ use std::task::{Context, Poll};
 use bytes::Buf;
 use futures::{ready, Stream, StreamExt};
 use log::debug;
+use minitrace::local::LocalSpan;
 use pin_project_lite::pin_project;
 
 use crate::errors::CodecError;
@@ -89,6 +90,9 @@ where
             let Some(frame_set) = ready!(this.frame.poll_next_unpin(cx)?) else {
                 return Poll::Ready(None);
             };
+
+            let _span = LocalSpan::enter_with_local_parent("codec.reorder")
+                .with_properties(|| [("frame_seq_num", frame_set.seq_num.to_string())]);
 
             if let Some(connected::Ordered {
                 frame_index,

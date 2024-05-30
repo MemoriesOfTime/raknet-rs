@@ -8,6 +8,7 @@ use bytes::{BufMut, Bytes, BytesMut};
 use flume::Sender;
 use futures::{ready, Stream, StreamExt};
 use lru::LruCache;
+use minitrace::local::LocalSpan;
 use pin_project_lite::pin_project;
 use priority_queue::PriorityQueue;
 
@@ -86,6 +87,14 @@ where
             let Some(frame_set) = ready!(this.frame.poll_next_unpin(cx)?) else {
                 return Poll::Ready(None);
             };
+
+            let _span =
+                LocalSpan::enter_with_local_parent("codec.defragment").with_properties(|| {
+                    [
+                        ("frame_set_size", frame_set.set.len().to_string()),
+                        ("frame_seq_num", frame_set.seq_num.to_string()),
+                    ]
+                });
 
             for frame in frame_set.set {
                 if let Some(Fragment {

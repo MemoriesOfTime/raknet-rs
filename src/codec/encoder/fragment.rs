@@ -4,6 +4,7 @@ use std::task::{ready, Context, Poll};
 
 use bytes::{Buf, Bytes};
 use futures::Sink;
+use minitrace::local::LocalSpan;
 use pin_project_lite::pin_project;
 
 use crate::errors::CodecError;
@@ -53,6 +54,14 @@ where
 
     fn start_send(self: Pin<&mut Self>, msg: Message) -> Result<(), Self::Error> {
         let this = self.project();
+
+        let _span = LocalSpan::enter_with_local_parent("codec.fragment").with_properties(|| {
+            [
+                ("msg_size", msg.data.len().to_string()),
+                ("msg_reliability", msg.reliability.to_string()),
+                ("msg_ordered_channel", msg.order_channel.to_string()),
+            ]
+        });
 
         let mut reliability = msg.get_reliability();
         let order_channel = msg.get_order_channel();
