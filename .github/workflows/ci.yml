@@ -33,5 +33,36 @@ jobs:
             core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
             core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
 
-      - name: Checking
-        run: ci/scripts/run-ci-test.sh
+      - name: Basic check
+        run: | 
+          cargo audit
+          cargo fmt --all -- --check
+          cargo sort --check
+          cargo machete
+      
+      - name: Sscache clear
+        run: sccache --zero-stats > /dev/null
+      
+      - name: Run test with codecov
+        run: cargo llvm-cov --no-report nextest --all-features
+      
+      - name: Run example with codecov
+        run: |
+          cargo llvm-cov --no-report run --example proxy
+
+      - name: Run bench with codecov
+        run: |
+          cargo llvm-cov --no-report --bench micro --features="micro-bench"
+      
+      - name: Generate codecov report
+        run: |
+          cargo llvm-cov report --lcov --output-path lcov.info
+
+      - name: Sscache state
+        run: sccache --show-stats
+
+      - uses: codecov/codecov-action@v4
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        with:
+          verbose: true

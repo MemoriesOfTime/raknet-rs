@@ -25,14 +25,14 @@ use crate::Message;
 #[derive(Clone, Copy, Debug, Builder)]
 pub(crate) struct Config {
     /// Limit the max size of a parted frames set, 0 means no limit
-    /// It will abort the split frame if the parted_size reaches limit.
-    /// Enable it to avoid DoS attack.
-    /// The maximum number of inflight parted frames is max_parted_size * max_parted_count
+    /// It will abort the split frame if the `parted_size` reaches limit.
+    /// Enable it to avoid `DoS` attack.
+    /// The maximum number of inflight parted frames is `max_parted_size` * `max_parted_count`nt
     max_parted_size: u32,
     /// Limit the max count of **all** parted frames sets from an address.
     /// It might cause client resending frames if the limit is reached.
-    /// Enable it to avoid DoS attack.
-    /// The maximum number of inflight parted frames is max_parted_size * max_parted_count
+    /// Enable it to avoid `DoS` attack.
+    /// The maximum number of inflight parted frames is `max_parted_size` * `max_parted_count`nt
     max_parted_count: usize,
     /// Maximum ordered channel, the value should be less than 256
     max_channels: usize,

@@ -19,9 +19,7 @@ impl AckOrNack {
         // pack_type(1) + length(2) + single record(4) = 7
         debug_assert!(mtu >= 7, "7 is the least size of mtu");
 
-        let Some(mut first) = sorted_seq_nums.next() else {
-            return None;
-        };
+        let mut first = sorted_seq_nums.next()?;
 
         let mut records = vec![];
         let mut last = first;

@@ -10,18 +10,26 @@ Yet another project rewritten in Rust.
 ## Features
 
 - `Stream`/`Sink`/`Future` based async API.
-- Support `Unreliable`, `Reliable` and `ReliableOrdered` packets.
-- Support multiple order channels.
-- Support `ACK`/`NACK` mechanism.
-- Low level API but easy to use.
+  - Low level API but easy to use.
+- RakNet features:
+  - Support `Unreliable`, `Reliable` and `ReliableOrdered` packets.
+  - Support multiple order channels.
+  - Support `ACK`/`NACK` mechanism.
+- Full tracing powered by [minitrace-rust](https://github.com/tikv/minitrace-rust).
+  - You can track a packet's span during deduplication, fragmentation, ... layers.
 
 ## Roadmap
 
+> Ordered by priority
+
 - Add sliding window congestion control
+- Documentation
+- More fuzz testing
+- Bulk benchmark
 
 ## Getting Started
 
-See [examples](examples/) for usage.
+See [examples](examples/) for basic usage.
 
 ### Server
 

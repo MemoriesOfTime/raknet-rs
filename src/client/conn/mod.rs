@@ -19,22 +19,19 @@ pub struct Config {
     protocol_version: u8,
 
     /// Limit the max size of a parted frames set, 0 means no limit
-    /// It will abort the split frame if the parted_size reaches limit.
-    /// Enable it to avoid DoS attack.
-    /// The maximum number of inflight parted frames is max_parted_size * max_parted_count
+    /// It will abort the split frame if the `parted_size` reaches limit.
+    /// The maximum number of inflight parted frames is `max_parted_size` * `max_parted_count`
     #[builder(default = "256")]
     max_parted_size: u32,
     /// Limit the max count of **all** parted frames sets from an address.
     /// It might cause client resending frames if the limit is reached.
-    /// Enable it to avoid DoS attack.
-    /// The maximum number of inflight parted frames is max_parted_size * max_parted_count
+    /// The maximum number of inflight parted frames is `max_parted_size` * `max_parted_count`
     #[builder(default = "256")]
     max_parted_count: usize,
     /// Maximum ordered channel, the value should be less than 256
     #[builder(default = "1")]
     max_channels: usize,
     // Limit the maximum deduplication gap for a connection, 0 means no limit.
-    // Enable it to avoid D-DoS attack based on deduplication.
     #[builder(default = "1024")]
     max_dedup_gap: usize,
 }

@@ -197,9 +197,9 @@ impl Hash for Flags {
 #[derive(Debug, Clone, Eq, PartialEq, Copy)]
 #[repr(u8)]
 pub enum Reliability {
-    /// Same as regular UDP, except that it will also discard duplicate datagrams.  RakNet adds (6
-    /// to 17) + 21 bits of overhead, 16 of which is used to detect duplicate packets and 6 to 17
-    /// of which is used for message length.
+    /// Same as regular UDP, except that it will also discard duplicate datagrams. `RakNet` adds
+    /// (6 to 17) + 21 bits of overhead, 16 of which is used to detect duplicate packets and 6
+    /// to 17 of which is used for message length.
     Unreliable = 0b000,
 
     /// Regular UDP with a sequence counter.  Out of order messages will be discarded.
@@ -211,12 +211,12 @@ pub enum Reliability {
     Reliable = 0b010,
 
     /// This message is reliable and will arrive in the order you sent it.  Messages will be
-    /// delayed while waiting for out of order messages.  Same overhead as UnreliableSequenced.
+    /// delayed while waiting for out of order messages.  Same overhead as `UnreliableSequenced`.
     /// Sequenced and ordered messages sent on the same channel will arrive in the order sent.
     ReliableOrdered = 0b011,
 
     /// This message is reliable and will arrive in the sequence you sent it.  Out of order
-    /// messages will be dropped.  Same overhead as UnreliableSequenced. Sequenced and ordered
+    /// messages will be dropped.  Same overhead as `UnreliableSequenced`. Sequenced and ordered
     /// messages sent on the same channel will arrive in the order sent.
     ReliableSequenced = 0b100,
 
@@ -228,7 +228,7 @@ pub enum Reliability {
     /// NACK based on the result of sending this message when calling.
     ReliableWithAckReceipt = 0b110,
 
-    /// Same as ReliableOrdered, however the peer will get either ACK or
+    /// Same as `ReliableOrdered`, however the peer will get either ACK or
     /// NACK based on the result of sending this message when calling.
     ReliableOrderedWithAckReceipt = 0b111,
 }
@@ -330,7 +330,7 @@ impl Flags {
         // It is checked before transmute
         Self {
             raw,
-            reliability: unsafe { std::mem::transmute(r) },
+            reliability: unsafe { std::mem::transmute::<u8, Reliability>(r) },
             parted: raw & PARTED_FLAG != 0,
             needs_bas: raw & NEEDS_B_AND_AS_FLAG != 0,
         }
