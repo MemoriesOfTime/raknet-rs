@@ -40,7 +40,7 @@ jobs:
           cargo sort --check
           cargo machete
       
-      - name: Sscache clear
+      - name: Sccache clear
         run: sccache --zero-stats > /dev/null
       
       - name: Run test with codecov
@@ -58,7 +58,7 @@ jobs:
         run: |
           cargo llvm-cov report --lcov --output-path lcov.info
 
-      - name: Sscache state
+      - name: Sccache state
         run: sccache --show-stats
 
       - uses: codecov/codecov-action@v4

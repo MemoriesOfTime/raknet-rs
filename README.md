@@ -26,6 +26,9 @@ Yet another project rewritten in Rust.
 - Documentation
 - More fuzz testing
 - Bulk benchmark
+- Optimize performance for single thread runtime (IO without Send)
+- Robust client implementation
+- Use stable rust toolchain (~~I like nightly~~)
 
 ## Getting Started
 
@@ -33,7 +36,7 @@ See [examples](examples/) for basic usage.
 
 ### Server
 
-IO is a hidden type that implements the traits `Stream` and `Sink`.
+[IO](src/io.rs) is a hidden type that implements the traits `Stream` and `Sink`.
 Never stop polling `incoming` because it also serves as the router to every IOs.
 Apply `Sink::poll_flush` to IO will trigger to flush all pending packets, `ACK`/`NACK`, and stale packets.
 
