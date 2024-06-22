@@ -16,7 +16,7 @@ use tokio_util::udp::UdpFramed;
 use super::{Config, MakeIncoming};
 use crate::codec::tokio::Codec;
 use crate::codec::{Decoded, Encoded};
-use crate::common::ack::{HandleIncomingAck, HandleOutgoingAck};
+use crate::common::guard::{HandleIncoming, HandleOutgoingAck};
 use crate::errors::CodecError;
 use crate::io::{IOImpl, IO};
 use crate::packet::connected::{self, Frames};
@@ -109,7 +109,7 @@ impl Stream for Incoming {
 
             let write = UdpFramed::new(Arc::clone(this.socket), Codec)
                 .with_addr(peer.addr)
-                .handle_outgoing_ack(
+                .handle_outgoing(
                     incoming_ack_rx,
                     incoming_nack_rx,
                     outgoing_ack_rx,
@@ -122,7 +122,7 @@ impl Stream for Incoming {
 
             let io = router_rx
                 .into_stream()
-                .handle_incoming_ack(incoming_ack_tx, incoming_nack_tx)
+                .handle_incoming(incoming_ack_tx, incoming_nack_tx)
                 .decoded(
                     this.config.codec_config(),
                     outgoing_ack_tx,

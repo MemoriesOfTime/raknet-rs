@@ -18,7 +18,7 @@ use self::decoder::{DeFragmented, Deduplicated, FrameDecoded, Ordered};
 use self::encoder::{Fragmented, FrameEncoded};
 use crate::errors::CodecError;
 use crate::packet::connected::{Frame, FrameBody, FrameSet, Frames};
-use crate::utils::Logged;
+use crate::utils::{u24, Logged};
 use crate::Message;
 
 /// Codec config
@@ -57,8 +57,8 @@ pub(crate) trait Decoded {
     fn decoded(
         self,
         config: Config,
-        outgoing_ack_tx: Sender<u32>,
-        outgoing_nack_tx: Sender<u32>,
+        outgoing_ack_tx: Sender<u24>,
+        outgoing_nack_tx: Sender<u24>,
     ) -> impl Stream<Item = FrameBody>;
 }
 
@@ -69,8 +69,8 @@ where
     fn decoded(
         self,
         config: Config,
-        outgoing_ack_tx: Sender<u32>,
-        outgoing_nack_tx: Sender<u32>,
+        outgoing_ack_tx: Sender<u24>,
+        outgoing_nack_tx: Sender<u24>,
     ) -> impl Stream<Item = FrameBody> {
         fn ok_f(pack: &FrameBody) {
             trace!("[decoder] received packet: {:?}", pack);
@@ -122,7 +122,7 @@ pub mod micro_bench {
     use rand::{Rng, SeedableRng};
 
     use super::{BytesMut, Config, Decoded, FrameSet, Frames, Stream};
-    use crate::packet::connected::{Flags, Fragment, Frame, Ordered, Reliability, Uint24le};
+    use crate::packet::connected::{Flags, Fragment, Frame, Ordered, Reliability};
 
     #[derive(derive_builder::Builder, Debug, Clone)]
     pub struct Options {
@@ -161,7 +161,7 @@ pub mod micro_bench {
                 .map(|(idx, mut body)| {
                     let mut reliability = Reliability::Reliable;
                     let mut raw = 0;
-                    let reliable_frame_index = Some(Uint24le(idx as u32));
+                    let reliable_frame_index = Some(idx.into());
                     let mut fragment = None;
                     let mut ordered = None;
                     if self.parted_size > 1 {
@@ -184,7 +184,7 @@ pub mod micro_bench {
                     if self.unordered {
                         reliability = Reliability::ReliableOrdered;
                         ordered = Some(Ordered {
-                            frame_index: Uint24le((idx / self.parted_size) as u32),
+                            frame_index: (idx / self.parted_size).into(),
                             channel: 0,
                         });
                     }
@@ -210,7 +210,7 @@ pub mod micro_bench {
                 .chunks(self.frame_per_set)
                 .enumerate()
                 .map(|(idx, chunk)| FrameSet {
-                    seq_num: Uint24le(idx as u32),
+                    seq_num: idx.into(),
                     set: chunk.to_vec(),
                 })
                 .collect::<Vec<_>>();

@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::ops::AddAssign;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -11,19 +10,20 @@ use pin_project_lite::pin_project;
 
 use crate::errors::CodecError;
 use crate::packet::connected::{self, Frame, FrameSet};
+use crate::utils::u24;
 
 const INITIAL_ORDERING_MAP_CAP: usize = 64;
 
 struct Ordering<B> {
-    map: HashMap<u32, FrameSet<Frame<B>>>,
-    read: u32,
+    map: HashMap<u24, FrameSet<Frame<B>>>,
+    read: u24,
 }
 
 impl<B> Default for Ordering<B> {
     fn default() -> Self {
         Self {
             map: HashMap::with_capacity(INITIAL_ORDERING_MAP_CAP),
-            read: 0,
+            read: 0.into(),
         }
     }
 }
@@ -82,7 +82,7 @@ where
                     .expect("channel < max_channels");
                 // check if we could read next
                 if let Some(next) = ordering.map.remove(&ordering.read) {
-                    ordering.read.add_assign(1);
+                    ordering.read += 1;
                     return Poll::Ready(Some(Ok(next)));
                 }
             }
@@ -111,12 +111,12 @@ where
                     .get_mut(channel)
                     .expect("channel < max_channels");
 
-                if frame_index.0 < ordering.read {
+                if frame_index < ordering.read {
                     debug!("[decoder] ignore old ordered frame index {frame_index}");
                     continue;
                 }
 
-                ordering.map.insert(frame_index.0, frame_set);
+                ordering.map.insert(frame_index, frame_set);
 
                 // we cannot read anymore
                 continue;
@@ -135,18 +135,18 @@ mod test {
 
     use super::*;
     use crate::errors::CodecError;
-    use crate::packet::connected::{Flags, Frame, FrameSet, Ordered, Uint24le};
+    use crate::packet::connected::{Flags, Frame, FrameSet, Ordered};
 
     fn frame_sets(idx: impl IntoIterator<Item = (u8, u32)>) -> Vec<FrameSet<Frame<Bytes>>> {
         idx.into_iter()
             .map(|(channel, frame_index)| FrameSet {
-                seq_num: Uint24le(0),
+                seq_num: 0.into(),
                 set: Frame {
                     flags: Flags::parse(0b011_11100),
                     reliable_frame_index: None,
                     seq_frame_index: None,
                     ordered: Some(Ordered {
-                        frame_index: Uint24le(frame_index),
+                        frame_index: frame_index.into(),
                         channel,
                     }),
                     fragment: None,

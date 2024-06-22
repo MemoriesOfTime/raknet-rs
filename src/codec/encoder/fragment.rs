@@ -8,8 +8,9 @@ use minitrace::local::LocalSpan;
 use pin_project_lite::pin_project;
 
 use crate::errors::CodecError;
-use crate::packet::connected::{self, Flags, Frame, Frames, Ordered, Reliability, Uint24le};
+use crate::packet::connected::{self, Flags, Frame, Frames, Ordered, Reliability};
 use crate::packet::{PackType, FRAME_SET_HEADER_SIZE};
+use crate::utils::u24;
 use crate::Message;
 
 pin_project! {
@@ -17,8 +18,8 @@ pin_project! {
         #[pin]
         frame: F,
         mtu: u16,
-        reliable_write_index: u32,
-        order_write_index: Vec<u32>,
+        reliable_write_index: u24,
+        order_write_index: Vec<u24>,
         split_write_index: u16,
     }
 }
@@ -35,8 +36,8 @@ where
         Fragment {
             frame: self,
             mtu,
-            reliable_write_index: 0,
-            order_write_index: std::iter::repeat(0).take(max_channels).collect(),
+            reliable_write_index: 0.into(),
+            order_write_index: std::iter::repeat(0.into()).take(max_channels).collect(),
             split_write_index: 0,
         }
     }
@@ -81,7 +82,7 @@ where
             let mut reliable_frame_index = None;
             let mut ordered = None;
             if reliability.is_reliable() {
-                reliable_frame_index = Some(Uint24le(*this.reliable_write_index));
+                reliable_frame_index = Some(*this.reliable_write_index);
                 *this.reliable_write_index += 1;
             }
             // TODO: sequencing
@@ -98,7 +99,7 @@ where
                     );
                 }
                 ordered = Some(Ordered {
-                    frame_index: Uint24le(this.order_write_index[order_channel as usize]),
+                    frame_index: this.order_write_index[order_channel as usize],
                     channel: order_channel,
                 });
             }
@@ -171,7 +172,7 @@ where
         let mut frame = this.frame.as_mut();
         ready!(Sink::<Frames<Bytes>>::poll_ready(frame.as_mut(), cx))?;
 
-        let reliable_frame_index = Some(Uint24le(*this.reliable_write_index));
+        let reliable_frame_index = Some(*this.reliable_write_index);
         *this.reliable_write_index += 1;
 
         // send `DisconnectNotification`
@@ -306,9 +307,9 @@ mod test {
         // 1
         dst.close().await.unwrap();
 
-        assert_eq!(dst.order_write_index[0], 1);
-        assert_eq!(dst.order_write_index[1], 1);
-        assert_eq!(dst.reliable_write_index, 8);
+        assert_eq!(dst.order_write_index[0].to_u32(), 1);
+        assert_eq!(dst.order_write_index[1].to_u32(), 1);
+        assert_eq!(dst.reliable_write_index.to_u32(), 8);
 
         assert_eq!(dst.frame.buf.len(), 7);
         // adjusted

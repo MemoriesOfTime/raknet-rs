@@ -11,7 +11,7 @@ use crate::client::handler::offline::HandleOffline;
 use crate::client::handler::online::HandleOnline;
 use crate::codec::tokio::Codec;
 use crate::codec::{Decoded, Encoded};
-use crate::common::ack::{HandleIncomingAck, HandleOutgoingAck};
+use crate::common::guard::{HandleIncoming, HandleOutgoingAck};
 use crate::errors::{CodecError, Error};
 use crate::io::{IOImpl, IO};
 use crate::utils::{Logged, WithAddress};
@@ -47,7 +47,7 @@ impl ConnectTo for TokioUdpSocket {
 
         let write = UdpFramed::new(Arc::clone(&socket), Codec)
             .with_addr(addr)
-            .handle_outgoing_ack(
+            .handle_outgoing(
                 incoming_ack_rx,
                 incoming_nack_rx,
                 outgoing_ack_rx,
@@ -61,7 +61,7 @@ impl ConnectTo for TokioUdpSocket {
             .logged_err(err_f)
             .handle_offline(addr, config.offline_config())
             .await?
-            .handle_incoming_ack(incoming_ack_tx, incoming_nack_tx)
+            .handle_incoming(incoming_ack_tx, incoming_nack_tx)
             .decoded(config.codec_config(), outgoing_ack_tx, outgoing_nack_tx)
             .handle_online(write, addr, config.client_guid)
             .await?;

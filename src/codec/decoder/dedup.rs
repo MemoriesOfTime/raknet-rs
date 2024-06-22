@@ -8,7 +8,8 @@ use minitrace::local::LocalSpan;
 use pin_project_lite::pin_project;
 
 use crate::errors::CodecError;
-use crate::packet::connected::{FrameSet, Frames, Uint24le};
+use crate::packet::connected::{FrameSet, Frames};
+use crate::utils::u24;
 
 const USIZE_BITS: usize = std::mem::size_of::<usize>() * 8;
 const DEFAULT_BIT_VEC_QUEUE_CAP: usize = 256 * USIZE_BITS;
@@ -134,7 +135,7 @@ impl BitVecQueue {
 #[derive(Debug, Default)]
 struct DuplicateWindow {
     /// First unreceived sequence number, start at 0
-    first_unreceived: u32,
+    first_unreceived: u24,
     /// Record the received status of sequence numbers start at `first_unreceived`
     /// `true` is received and `false` is unreceived
     received_status: BitVecQueue,
@@ -142,11 +143,11 @@ struct DuplicateWindow {
 
 impl DuplicateWindow {
     /// Check whether a sequence number is duplicated
-    fn duplicate(&mut self, seq_num: Uint24le) -> bool {
-        if seq_num.0 < self.first_unreceived {
+    fn duplicate(&mut self, seq_num: u24) -> bool {
+        if seq_num < self.first_unreceived {
             return true;
         }
-        let gap = (seq_num.0 - self.first_unreceived) as usize;
+        let gap = (seq_num - self.first_unreceived).to_usize();
         if gap < self.received_status.len() {
             // received the sequence number that is recorded in received_status
             // check its status to determine whether it is duplicated
@@ -180,19 +181,19 @@ pin_project! {
         // Limit the maximum reliable_frame_index gap for a connection. 0 means no limit.
         max_gap: usize,
         window: DuplicateWindow,
-        outgoing_ack_tx: Sender<u32>,
+        outgoing_ack_tx: Sender<u24>,
     }
 }
 
 pub(crate) trait Deduplicated: Sized {
-    fn deduplicated(self, max_gap: usize, outgoing_ack_tx: Sender<u32>) -> Dedup<Self>;
+    fn deduplicated(self, max_gap: usize, outgoing_ack_tx: Sender<u24>) -> Dedup<Self>;
 }
 
 impl<F, B> Deduplicated for F
 where
     F: Stream<Item = Result<FrameSet<Frames<B>>, CodecError>>,
 {
-    fn deduplicated(self, max_gap: usize, outgoing_ack_tx: Sender<u32>) -> Dedup<Self> {
+    fn deduplicated(self, max_gap: usize, outgoing_ack_tx: Sender<u24>) -> Dedup<Self> {
         Dedup {
             frame: self,
             max_gap,
@@ -238,7 +239,7 @@ where
             }
             // all duplicated, send ack back
             this.outgoing_ack_tx
-                .send(frame_set.seq_num.0)
+                .send(frame_set.seq_num)
                 .expect("outgoing_ack_rx never drops");
         }
     }
@@ -256,14 +257,14 @@ mod test {
 
     use super::*;
     use crate::errors::CodecError;
-    use crate::packet::connected::{Flags, Frame, FrameSet, Uint24le};
+    use crate::packet::connected::{Flags, Frame, FrameSet};
 
     #[test]
     fn test_duplicate_windows_check_ordered() {
         let mut window = DuplicateWindow::default();
         for i in 0..1024 {
-            assert!(!window.duplicate(Uint24le(i)));
-            assert_eq!(window.first_unreceived, i + 1);
+            assert!(!window.duplicate(i.into()));
+            assert_eq!(window.first_unreceived.to_u32(), i + 1);
             assert!(window.received_status.len() <= 1);
         }
     }
@@ -272,49 +273,49 @@ mod test {
     fn test_duplicate_windows_check_ordered_dup() {
         let mut window = DuplicateWindow::default();
         for i in 0..512 {
-            assert!(!window.duplicate(Uint24le(i)));
-            assert_eq!(window.first_unreceived, i + 1);
+            assert!(!window.duplicate(i.into()));
+            assert_eq!(window.first_unreceived.to_u32(), i + 1);
             assert!(window.received_status.len() <= 1);
         }
         for i in 0..512 {
-            assert!(window.duplicate(Uint24le(i)));
+            assert!(window.duplicate(i.into()));
         }
     }
 
     #[test]
     fn test_duplicate_windows_check_gap_dup() {
         let mut window = DuplicateWindow::default();
-        assert!(!window.duplicate(Uint24le(0)));
-        assert!(!window.duplicate(Uint24le(1)));
-        assert!(!window.duplicate(Uint24le(1000)));
-        assert!(!window.duplicate(Uint24le(1001)));
-        assert!(window.duplicate(Uint24le(1000)));
-        assert!(window.duplicate(Uint24le(1001)));
-        assert!(!window.duplicate(Uint24le(500)));
-        assert!(window.duplicate(Uint24le(500)));
-        assert_eq!(window.first_unreceived, 2);
+        assert!(!window.duplicate(0.into()));
+        assert!(!window.duplicate(1.into()));
+        assert!(!window.duplicate(1000.into()));
+        assert!(!window.duplicate(1001.into()));
+        assert!(window.duplicate(1000.into()));
+        assert!(window.duplicate(1001.into()));
+        assert!(!window.duplicate(500.into()));
+        assert!(window.duplicate(500.into()));
+        assert_eq!(window.first_unreceived.to_u32(), 2);
     }
 
     #[test]
     fn test_duplicate_window_clear_gap_map() {
         let mut window = DuplicateWindow::default();
         for i in (0..256).step_by(2) {
-            assert!(!window.duplicate(Uint24le(i)));
+            assert!(!window.duplicate(i.into()));
         }
         for i in (1..256).step_by(2) {
-            assert!(!window.duplicate(Uint24le(i)));
+            assert!(!window.duplicate(i.into()));
         }
         assert_eq!(window.received_status.len(), 0);
     }
 
     fn frame_set(idx: impl IntoIterator<Item = u32>) -> FrameSet<Frames<Bytes>> {
         FrameSet {
-            seq_num: Uint24le(0),
+            seq_num: 0.into(),
             set: idx
                 .into_iter()
                 .map(|i| Frame {
                     flags: Flags::parse(0b011_11100),
-                    reliable_frame_index: Some(Uint24le(i)),
+                    reliable_frame_index: Some(i.into()),
                     seq_frame_index: None,
                     ordered: None,
                     fragment: None,

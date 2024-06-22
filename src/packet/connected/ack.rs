@@ -1,8 +1,8 @@
 use bytes::{Buf, BufMut, BytesMut};
 
-use super::Uint24le;
 use crate::errors::CodecError;
 use crate::packet::read_buf;
+use crate::utils::{u24, BufExt, BufMutExt};
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct AckOrNack {
@@ -12,7 +12,7 @@ pub(crate) struct AckOrNack {
 impl AckOrNack {
     /// Extend a packet from a sorted sequence numbers iterator based on mtu.
     /// Notice that a uint24le must be unique in the whole iterator
-    pub(crate) fn extend_from<I: Iterator<Item = u32>>(
+    pub(crate) fn extend_from<I: Iterator<Item = u24>>(
         mut sorted_seq_nums: I,
         mut mtu: u16,
     ) -> Option<Self> {
@@ -46,25 +46,25 @@ impl AckOrNack {
             mtu -= 4;
             upgrade_flag = true;
             if first != last {
-                records.push(Record::Range(Uint24le(first), Uint24le(last)));
+                records.push(Record::Range(first, last));
             } else {
-                records.push(Record::Single(Uint24le(first)));
+                records.push(Record::Single(first));
             }
             first = seq_num;
             last = seq_num;
         }
 
         if first != last {
-            records.push(Record::Range(Uint24le(first), Uint24le(last)));
+            records.push(Record::Range(first, last));
         } else {
-            records.push(Record::Single(Uint24le(first)));
+            records.push(Record::Single(first));
         }
 
         Some(Self { records })
     }
 
     pub(super) fn read(buf: &mut BytesMut) -> Result<Self, CodecError> {
-        const MAX_ACKNOWLEDGEMENT_PACKETS: u32 = 8192;
+        const MAX_ACKNOWLEDGEMENT_PACKETS: usize = 8192;
 
         let mut ack_cnt = 0;
         let record_cnt = buf.get_u16();
@@ -91,7 +91,7 @@ impl AckOrNack {
         }
     }
 
-    pub(crate) fn total_cnt(&self) -> u32 {
+    pub(crate) fn total_cnt(&self) -> usize {
         self.records.iter().map(|record| record.ack_cnt()).sum()
     }
 }
@@ -101,8 +101,8 @@ const RECORD_SINGLE: u8 = 1;
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum Record {
-    Range(Uint24le, Uint24le),
-    Single(Uint24le),
+    Range(u24, u24),
+    Single(u24),
 }
 
 impl Record {
@@ -112,9 +112,9 @@ impl Record {
             RECORD_RANGE => read_buf!(
                 buf,
                 6,
-                Ok(Record::Range(Uint24le::read(buf), Uint24le::read(buf)))
+                Ok(Record::Range(buf.get_u24_le(), buf.get_u24_le()))
             ),
-            RECORD_SINGLE => read_buf!(buf, 3, Ok(Record::Single(Uint24le::read(buf)))),
+            RECORD_SINGLE => read_buf!(buf, 3, Ok(Record::Single(buf.get_u24_le()))),
             _ => Err(CodecError::InvalidRecordType(record_type)),
         }
     }
@@ -123,19 +123,19 @@ impl Record {
         match self {
             Record::Range(start, end) => {
                 buf.put_u8(RECORD_RANGE);
-                start.write(buf);
-                end.write(buf);
+                buf.put_u24_le(start);
+                buf.put_u24_le(end);
             }
             Record::Single(idx) => {
                 buf.put_u8(RECORD_SINGLE);
-                idx.write(buf);
+                buf.put_u24_le(idx);
             }
         }
     }
 
-    fn ack_cnt(&self) -> u32 {
+    fn ack_cnt(&self) -> usize {
         match self {
-            Record::Range(start, end) => end.0 - start.0 + 1,
+            Record::Range(start, end) => (end - (start + 1)).into(),
             Record::Single(_) => 1,
         }
     }
@@ -170,7 +170,7 @@ mod test {
             buf.clear();
             // pack type
             buf.put_u8(0);
-            let mut seq_nums = seq_nums.into_iter();
+            let mut seq_nums = seq_nums.into_iter().map(u24::from);
             let ack = AckOrNack::extend_from(&mut seq_nums, mtu).unwrap();
             ack.write(&mut buf);
             assert_eq!(buf.len(), len);

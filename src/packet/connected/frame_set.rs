@@ -3,23 +3,23 @@ use std::net::SocketAddr;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
-use super::Uint24le;
 use crate::errors::CodecError;
 use crate::packet::{
     read_buf, PackType, SocketAddrRead, SocketAddrWrite, NEEDS_B_AND_AS_FLAG, PARTED_FLAG,
 };
+use crate::utils::{u24, BufExt, BufMutExt};
 
 pub(crate) type Frames<B> = Vec<Frame<B>>;
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct FrameSet<S> {
-    pub(crate) seq_num: Uint24le,
+    pub(crate) seq_num: u24,
     pub(crate) set: S,
 }
 
 impl FrameSet<Frames<BytesMut>> {
     pub(super) fn read(buf: &mut BytesMut) -> Result<Self, CodecError> {
-        let seq_num = read_buf!(buf, 3, Uint24le::read(buf));
+        let seq_num = read_buf!(buf, 3, buf.get_u24_le());
         let mut frames = vec![];
         while buf.has_remaining() {
             frames.push(Frame::read(buf)?);
@@ -36,7 +36,7 @@ impl FrameSet<Frames<BytesMut>> {
 
 impl<B: Buf> FrameSet<Frames<B>> {
     pub(super) fn write(self, buf: &mut BytesMut) {
-        self.seq_num.write(buf);
+        buf.put_u24_le(self.seq_num);
         for frame in self.set {
             frame.write(buf);
         }
@@ -46,8 +46,8 @@ impl<B: Buf> FrameSet<Frames<B>> {
 #[derive(Eq, PartialEq, Clone)]
 pub(crate) struct Frame<B> {
     pub(crate) flags: Flags,
-    pub(crate) reliable_frame_index: Option<Uint24le>,
-    pub(crate) seq_frame_index: Option<Uint24le>,
+    pub(crate) reliable_frame_index: Option<u24>,
+    pub(crate) seq_frame_index: Option<u24>,
     pub(crate) ordered: Option<Ordered>,
     pub(crate) fragment: Option<Fragment>,
     pub(crate) body: B,
@@ -119,10 +119,10 @@ impl Frame<BytesMut> {
         let mut fragment = None;
 
         if reliability.is_reliable() {
-            reliable_frame_index = read_buf!(buf, 3, Some(Uint24le::read(buf)));
+            reliable_frame_index = read_buf!(buf, 3, Some(buf.get_u24_le()));
         }
         if reliability.is_sequenced() {
-            seq_frame_index = read_buf!(buf, 3, Some(Uint24le::read(buf)));
+            seq_frame_index = read_buf!(buf, 3, Some(buf.get_u24_le()));
         }
         if reliability.is_sequenced_or_ordered() {
             ordered = read_buf!(buf, 4, Some(Ordered::read(buf)));
@@ -153,10 +153,10 @@ impl<B: Buf> Frame<B> {
         );
         buf.put_u16((self.body.remaining() << 3) as u16);
         if let Some(reliable_frame_index) = self.reliable_frame_index {
-            reliable_frame_index.write(buf);
+            buf.put_u24_le(reliable_frame_index);
         }
         if let Some(seq_frame_index) = self.seq_frame_index {
-            seq_frame_index.write(buf);
+            buf.put_u24_le(seq_frame_index);
         }
         if let Some(ordered) = self.ordered {
             ordered.write(buf);
@@ -362,20 +362,20 @@ impl Fragment {
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) struct Ordered {
-    pub(crate) frame_index: Uint24le,
+    pub(crate) frame_index: u24,
     pub(crate) channel: u8,
 }
 
 impl Ordered {
     fn read(buf: &mut BytesMut) -> Self {
         Self {
-            frame_index: Uint24le::read(buf),
+            frame_index: buf.get_u24_le(),
             channel: buf.get_u8(),
         }
     }
 
     fn write(self, buf: &mut BytesMut) {
-        self.frame_index.write(buf);
+        buf.put_u24_le(self.frame_index);
         buf.put_u8(self.channel);
     }
 }

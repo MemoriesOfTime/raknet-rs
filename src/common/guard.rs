@@ -13,12 +13,12 @@ use minstant::Instant;
 use pin_project_lite::pin_project;
 
 use crate::errors::CodecError;
-use crate::packet::connected::{self, AckOrNack, Frame, FrameSet, Frames, Record, Uint24le};
+use crate::packet::connected::{self, AckOrNack, Frame, FrameSet, Frames, Record};
 use crate::packet::{Packet, FRAME_SET_HEADER_SIZE};
-use crate::utils::SortedIterMut;
+use crate::utils::{u24, SortedIterMut};
 
 pin_project! {
-    pub(crate) struct IncomingAck<F> {
+    pub(crate) struct IncomingGuard<F> {
         #[pin]
         frame: F,
         ack_tx: Sender<AckOrNack>,
@@ -26,24 +26,24 @@ pin_project! {
     }
 }
 
-pub(crate) trait HandleIncomingAck: Sized {
-    fn handle_incoming_ack(
+pub(crate) trait HandleIncoming: Sized {
+    fn handle_incoming(
         self,
         ack_tx: Sender<AckOrNack>,
         nack_tx: Sender<AckOrNack>,
-    ) -> IncomingAck<Self>;
+    ) -> IncomingGuard<Self>;
 }
 
-impl<F, S> HandleIncomingAck for F
+impl<F, S> HandleIncoming for F
 where
     F: Stream<Item = connected::Packet<S>>,
 {
-    fn handle_incoming_ack(
+    fn handle_incoming(
         self,
         ack_tx: Sender<AckOrNack>,
         nack_tx: Sender<AckOrNack>,
-    ) -> IncomingAck<Self> {
-        IncomingAck {
+    ) -> IncomingGuard<Self> {
+        IncomingGuard {
             frame: self,
             ack_tx,
             nack_tx,
@@ -51,7 +51,7 @@ where
     }
 }
 
-impl<F, S> Stream for IncomingAck<F>
+impl<F, S> Stream for IncomingGuard<F>
 where
     F: Stream<Item = connected::Packet<S>>,
 {
@@ -78,58 +78,58 @@ where
 }
 
 pin_project! {
-    pub(crate) struct OutgoingAck<F> {
+    pub(crate) struct OutgoingGuard<F> {
         #[pin]
         frame: F,
         incoming_ack_rx: Receiver<AckOrNack>,
         incoming_nack_rx: Receiver<AckOrNack>,
-        outgoing_ack_rx: Receiver<u32>,
-        outgoing_nack_rx: Receiver<u32>,
-        seq_num_write_index: u32,
+        outgoing_ack_rx: Receiver<u24>,
+        outgoing_nack_rx: Receiver<u24>,
+        seq_num_write_index: u24,
         buf: VecDeque<Frame<Bytes>>,
         cap: usize,
         mtu: u16,
-        ack_queue: BinaryHeap<Reverse<u32>>,
-        nack_queue: BinaryHeap<Reverse<u32>>,
+        ack_queue: BinaryHeap<Reverse<u24>>,
+        nack_queue: BinaryHeap<Reverse<u24>>,
         // ordered by seq_num
         // TODO: use rbtree?
-        resending: BTreeMap<u32, (Frames<Bytes>, Instant)>,
+        resending: BTreeMap<u24, (Frames<Bytes>, Instant)>,
     }
 }
 
 pub(crate) trait HandleOutgoingAck: Sized {
-    fn handle_outgoing_ack(
+    fn handle_outgoing(
         self,
         incoming_ack_rx: Receiver<AckOrNack>,
         incoming_nack_rx: Receiver<AckOrNack>,
-        outgoing_ack_rx: Receiver<u32>,
-        outgoing_nack_rx: Receiver<u32>,
+        outgoing_ack_rx: Receiver<u24>,
+        outgoing_nack_rx: Receiver<u24>,
         cap: usize,
         mtu: u16,
-    ) -> OutgoingAck<Self>;
+    ) -> OutgoingGuard<Self>;
 }
 
 impl<F> HandleOutgoingAck for F
 where
     F: Sink<Packet<Frames<Bytes>>, Error = CodecError>,
 {
-    fn handle_outgoing_ack(
+    fn handle_outgoing(
         self,
         incoming_ack_rx: Receiver<AckOrNack>,
         incoming_nack_rx: Receiver<AckOrNack>,
-        outgoing_ack_rx: Receiver<u32>,
-        outgoing_nack_rx: Receiver<u32>,
+        outgoing_ack_rx: Receiver<u24>,
+        outgoing_nack_rx: Receiver<u24>,
         cap: usize,
         mtu: u16,
-    ) -> OutgoingAck<Self> {
+    ) -> OutgoingGuard<Self> {
         assert!(cap > 0, "cap must larger than 0");
-        OutgoingAck {
+        OutgoingGuard {
             frame: self,
             incoming_ack_rx,
             incoming_nack_rx,
             outgoing_ack_rx,
             outgoing_nack_rx,
-            seq_num_write_index: 0,
+            seq_num_write_index: 0.into(),
             buf: VecDeque::with_capacity(cap),
             cap,
             mtu,
@@ -143,7 +143,7 @@ where
 // TODO: use adaptive RTO
 const RTO: Duration = Duration::from_millis(77);
 
-impl<F> OutgoingAck<F>
+impl<F> OutgoingGuard<F>
 where
     F: Sink<Packet<Frames<Bytes>>, Error = CodecError>,
 {
@@ -154,13 +154,13 @@ where
             for record in ack.records {
                 match record {
                     Record::Range(start, end) => {
-                        for i in start.0..end.0 {
+                        for i in start.to_u32()..end.to_u32() {
                             // TODO: optimized for range remove for btree map
-                            this.resending.remove(&i);
+                            this.resending.remove(&i.into());
                         }
                     }
                     Record::Single(seq_num) => {
-                        this.resending.remove(&seq_num.0);
+                        this.resending.remove(&seq_num);
                     }
                 }
             }
@@ -170,14 +170,14 @@ where
             for record in nack.records {
                 match record {
                     Record::Range(start, end) => {
-                        for i in start.0..end.0 {
-                            if let Some((set, _)) = this.resending.remove(&i) {
+                        for i in start.to_u32()..end.to_u32() {
+                            if let Some((set, _)) = this.resending.remove(&i.into()) {
                                 this.buf.extend(set);
                             }
                         }
                     }
                     Record::Single(seq_num) => {
-                        if let Some((set, _)) = this.resending.remove(&seq_num.0) {
+                        if let Some((set, _)) = this.resending.remove(&seq_num) {
                             this.buf.extend(set);
                         }
                     }
@@ -276,7 +276,7 @@ where
             }
             if !frames.is_empty() {
                 let frame_set = FrameSet {
-                    seq_num: Uint24le(*this.seq_num_write_index),
+                    seq_num: *this.seq_num_write_index,
                     set: frames,
                 };
                 this.frame
@@ -287,10 +287,8 @@ where
                 sent = true;
                 if reliable {
                     // keep for resending
-                    this.resending.insert(
-                        frame_set.seq_num.0,
-                        (frame_set.set, Instant::now().add(RTO)),
-                    );
+                    this.resending
+                        .insert(frame_set.seq_num, (frame_set.set, Instant::now().add(RTO)));
                 }
                 *this.seq_num_write_index += 1;
             }
@@ -300,7 +298,7 @@ where
     }
 }
 
-impl<F> Sink<Frames<Bytes>> for OutgoingAck<F>
+impl<F> Sink<Frames<Bytes>> for OutgoingGuard<F>
 where
     F: Sink<Packet<Frames<Bytes>>, Error = CodecError>,
 {
@@ -312,7 +310,7 @@ where
         if self.buf.len() >= self.cap {
             debug_assert!(
                 upstream == Poll::Pending,
-                "OutgoingAck::try_empty returns Ready but buffer still remains!"
+                "OutgoingGuard::try_empty returns Ready but buffer still remains!"
             );
             Poll::Pending
         } else {
@@ -343,7 +341,7 @@ where
     }
 }
 
-impl<F> Sink<Frame<Bytes>> for OutgoingAck<F>
+impl<F> Sink<Frame<Bytes>> for OutgoingGuard<F>
 where
     F: Sink<Packet<Frames<Bytes>>, Error = CodecError>,
 {

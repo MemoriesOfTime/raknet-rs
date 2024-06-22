@@ -14,6 +14,7 @@ use priority_queue::PriorityQueue;
 
 use crate::errors::CodecError;
 use crate::packet::connected::{Fragment, Frame, FrameSet, Frames};
+use crate::utils::u24;
 
 const DEFAULT_DEFRAGMENT_BUF_SIZE: usize = 512;
 
@@ -30,9 +31,9 @@ pin_project! {
         // users sending a large number of parted IDs.
         parts: LruCache<u16, PriorityQueue<Frame<BytesMut>, Reverse<u32>>>,
         buffer: VecDeque<FrameSet<Frame<Bytes>>>,
-        seq_num_read_index: u32,
-        outgoing_ack_tx: Sender<u32>,
-        outgoing_nack_tx: Sender<u32>,
+        seq_num_read_index: u24,
+        outgoing_ack_tx: Sender<u24>,
+        outgoing_nack_tx: Sender<u24>,
     }
 }
 
@@ -41,8 +42,8 @@ pub(crate) trait DeFragmented: Sized {
         self,
         limit_size: u32,
         limit_parted: usize,
-        outgoing_ack_tx: Sender<u32>,
-        outgoing_nack_tx: Sender<u32>,
+        outgoing_ack_tx: Sender<u24>,
+        outgoing_nack_tx: Sender<u24>,
     ) -> DeFragment<Self>;
 }
 
@@ -54,15 +55,15 @@ where
         self,
         limit_size: u32,
         limit_parted: usize,
-        outgoing_ack_tx: Sender<u32>,
-        outgoing_nack_tx: Sender<u32>,
+        outgoing_ack_tx: Sender<u24>,
+        outgoing_nack_tx: Sender<u24>,
     ) -> DeFragment<Self> {
         DeFragment {
             frame: self,
             limit_size,
             parts: LruCache::new(NonZeroUsize::new(limit_parted).expect("limit_parted > 0")),
             buffer: VecDeque::with_capacity(DEFAULT_DEFRAGMENT_BUF_SIZE),
-            seq_num_read_index: 0,
+            seq_num_read_index: 0.into(),
             outgoing_ack_tx,
             outgoing_nack_tx,
         }
@@ -107,7 +108,7 @@ where
                     if parted_index >= parted_size {
                         // perhaps network bit-flips
                         this.outgoing_nack_tx
-                            .send(frame_set.seq_num.0)
+                            .send(frame_set.seq_num)
                             .expect("outgoing_nack_rx never drops");
                         return Poll::Ready(Some(Err(CodecError::PartedFrame(format!(
                             "parted_index {} >= parted_size {}",
@@ -117,7 +118,7 @@ where
                     if *this.limit_size != 0 && parted_size > *this.limit_size {
                         // we discarded this packet and prevented the peer from resending it.
                         this.outgoing_ack_tx
-                            .send(frame_set.seq_num.0)
+                            .send(frame_set.seq_num)
                             .expect("outgoing_ack_rx never drops");
                         return Poll::Ready(Some(Err(CodecError::PartedFrame(format!(
                             "parted_size {} exceed limit_size {}",
@@ -165,16 +166,16 @@ where
                 });
             }
 
-            let seq_index = frame_set.seq_num.0;
+            let seq_index = frame_set.seq_num;
             this.outgoing_ack_tx
                 .send(seq_index)
                 .expect("outgoing_ack_rx never drops");
             let pre_read_index = *this.seq_num_read_index;
             if pre_read_index <= seq_index {
                 *this.seq_num_read_index = seq_index + 1;
-                for nack in pre_read_index..seq_index {
+                for nack in pre_read_index.to_u32()..seq_index.to_u32() {
                     this.outgoing_nack_tx
-                        .send(nack)
+                        .send(nack.into())
                         .expect("outgoing_nack_rx never drops");
                 }
             }
@@ -195,13 +196,13 @@ mod test {
 
     use super::DeFragment;
     use crate::errors::CodecError;
-    use crate::packet::connected::{Flags, Fragment, Frame, FrameSet, Frames, Uint24le};
+    use crate::packet::connected::{Flags, Fragment, Frame, FrameSet, Frames};
 
     fn frame_set<'a, T: AsRef<str> + 'a>(
         idx: impl IntoIterator<Item = &'a (u32, u16, u32, T)>,
     ) -> FrameSet<Frames<BytesMut>> {
         FrameSet {
-            seq_num: Uint24le(0),
+            seq_num: 0.into(),
             set: idx
                 .into_iter()
                 .map(|(parted_size, parted_id, parted_index, body)| Frame {
@@ -224,7 +225,7 @@ mod test {
         bodies: impl IntoIterator<Item = &'a str>,
     ) -> FrameSet<Frames<BytesMut>> {
         FrameSet {
-            seq_num: Uint24le(0),
+            seq_num: 0.into(),
             set: bodies
                 .into_iter()
                 .map(|body| Frame {
@@ -262,7 +263,7 @@ mod test {
             limit_size: 0,
             parts: LruCache::new(NonZeroUsize::new(512).expect("limit_parted > 0")),
             buffer: VecDeque::new(),
-            seq_num_read_index: 0,
+            seq_num_read_index: 0.into(),
             outgoing_ack_tx,
             outgoing_nack_tx,
         };
@@ -297,7 +298,7 @@ mod test {
             limit_size: 20,
             parts: LruCache::new(NonZeroUsize::new(512).expect("limit_parted > 0")),
             buffer: VecDeque::new(),
-            seq_num_read_index: 0,
+            seq_num_read_index: 0.into(),
             outgoing_ack_tx,
             outgoing_nack_tx,
         };
@@ -339,7 +340,7 @@ mod test {
             limit_size: 0,
             parts: LruCache::new(NonZeroUsize::new(2).expect("limit_parted > 0")),
             buffer: VecDeque::new(),
-            seq_num_read_index: 0,
+            seq_num_read_index: 0.into(),
             outgoing_ack_tx,
             outgoing_nack_tx,
         };
@@ -375,7 +376,7 @@ mod test {
             limit_size: 0,
             parts: LruCache::new(NonZeroUsize::new(2).expect("limit_parted > 0")),
             buffer: VecDeque::new(),
-            seq_num_read_index: 0,
+            seq_num_read_index: 0.into(),
             outgoing_ack_tx,
             outgoing_nack_tx,
         };
@@ -422,7 +423,7 @@ mod test {
             limit_size: 0,
             parts: LruCache::new(NonZeroUsize::new(1).expect("limit_parted > 0")),
             buffer: VecDeque::new(),
-            seq_num_read_index: 0,
+            seq_num_read_index: 0.into(),
             outgoing_ack_tx,
             outgoing_nack_tx,
         };

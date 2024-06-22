@@ -243,7 +243,7 @@ where
 mod test {
     use std::collections::VecDeque;
 
-    use connected::{FrameSet, Uint24le};
+    use connected::FrameSet;
     use futures::StreamExt;
 
     use super::*;
@@ -323,7 +323,7 @@ mod test {
             .map(Packet::Unconnected)
             .chain(std::iter::once(Packet::Connected(
                 connected::Packet::FrameSet(FrameSet {
-                    seq_num: Uint24le(0),
+                    seq_num: 0.into(),
                     set: Frames::new(),
                 }),
             )))
@@ -342,7 +342,7 @@ mod test {
         assert_eq!(
             handler.next().await.unwrap().0,
             connected::Packet::FrameSet(FrameSet {
-                seq_num: Uint24le(0),
+                seq_num: 0.into(),
                 set: vec![]
             })
         );
@@ -379,7 +379,7 @@ mod test {
     async fn test_offline_reject_unconnected_packet() {
         let test_case = TestCase {
             source: vec![Packet::Connected(connected::Packet::FrameSet(FrameSet {
-                seq_num: Uint24le(0),
+                seq_num: 0.into(),
                 set: Frames::new(),
             }))]
             .into_iter()

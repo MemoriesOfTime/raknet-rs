@@ -1,6 +1,3 @@
-use std::fmt::Display;
-use std::hash::Hash;
-
 use bytes::{Buf, BufMut, BytesMut};
 
 use crate::errors::CodecError;
@@ -66,26 +63,5 @@ impl<B: Buf> Packet<Frames<B>> {
 impl Packet<Frames<BytesMut>> {
     pub(super) fn read_frame_set(buf: &mut BytesMut) -> Result<Self, CodecError> {
         Ok(Packet::FrameSet(FrameSet::read(buf)?))
-    }
-}
-
-/// `uint24` little-endian but actually occupies 4 bytes.
-#[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
-pub(crate) struct Uint24le(pub(crate) u32);
-
-impl Uint24le {
-    fn read(buf: &mut BytesMut) -> Self {
-        // safe cast because only 3 bytes will not overflow
-        Self(buf.get_uint_le(3) as u32)
-    }
-
-    fn write(self, buf: &mut BytesMut) {
-        buf.put_uint_le(self.0 as u64, 3);
-    }
-}
-
-impl Display for Uint24le {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
     }
 }
