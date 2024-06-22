@@ -92,6 +92,7 @@ pin_project! {
         ack_queue: BinaryHeap<Reverse<u32>>,
         nack_queue: BinaryHeap<Reverse<u32>>,
         // ordered by seq_num
+        // TODO: use rbtree?
         resending: BTreeMap<u32, (Frames<Bytes>, Instant)>,
     }
 }
@@ -146,7 +147,7 @@ impl<F> OutgoingAck<F>
 where
     F: Sink<Packet<Frames<Bytes>>, Error = CodecError>,
 {
-    fn try_recv(self: Pin<&mut Self>) {
+    fn try_ack(self: Pin<&mut Self>) {
         let this = self.project();
         for ack in this.incoming_ack_rx.try_iter() {
             trace!("[ack] receive ack count: {}", ack.total_cnt());
@@ -154,6 +155,7 @@ where
                 match record {
                     Record::Range(start, end) => {
                         for i in start.0..end.0 {
+                            // TODO: optimized for range remove for btree map
                             this.resending.remove(&i);
                         }
                     }
@@ -196,6 +198,7 @@ where
         let now = Instant::now();
         while let Some(entry) = this.resending.first_entry() {
             // ordered by seq_num, the large seq_num has the large next_send
+            // TODO: is it a good optimization?
             if now < entry.get().1 {
                 break;
             }
@@ -207,7 +210,7 @@ where
 
     fn try_empty(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), CodecError>> {
         // try to empty *_ack_rx and *_nack_rx buffer
-        self.as_mut().try_recv();
+        self.as_mut().try_ack();
         self.as_mut().try_send_stales();
 
         let mut this = self.project();

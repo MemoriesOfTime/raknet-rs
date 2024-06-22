@@ -9,7 +9,7 @@ use minitrace::Span;
 use pin_project_lite::pin_project;
 
 /// Make different spans. Different spans may have different behaviors.
-pub trait MakeSpan {
+pub(crate) trait MakeSpan {
     fn make(name: impl Into<Cow<'static, str>>) -> Self;
 
     // Whether to set local parent
@@ -39,8 +39,19 @@ impl MakeSpan for LocalSpan {
     }
 }
 
-pub trait StreamExt: Stream + Sized {
+#[allow(unused)] // Commutative with SinkExt::enter_on_item
+pub(crate) trait StreamExt: Stream + Sized {
     /// It starts a span at every time an item is generating from the stream.
+    /// So it could be used to track the span from last reception to the current
+    /// reception of each packet .
+    ///
+    ///                [--------------**SPAN**-------------------]
+    ///                v                                         v
+    /// [---packet1---]           [-----------packet2-----------]
+    ///                           ^                             ^
+    ///                           [----codec children spans----]
+    ///
+    /// ------------------------- timeline ------------------------------>>>
     fn enter_on_item<S: MakeSpan>(
         self,
         name: impl Into<Cow<'static, str>>,
@@ -55,8 +66,20 @@ pub trait StreamExt: Stream + Sized {
 
 impl<S: Stream> StreamExt for S {}
 
-pub trait SinkExt<I>: Sink<I> + Sized {
+#[allow(unused)] // Commutative with StreamExt::enter_on_item
+pub(crate) trait SinkExt<I>: Sink<I> + Sized {
     /// It starts a span at every time an item is preparing to send into the sink.
+    ///
+    /// Tokens in the graph:
+    ///   [xxxx]: non-empty sender buffer
+    ///   []:     empty sender buffer
+    ///
+    ///       [-------------**SPAN**--------------]
+    ///       v                                   v
+    /// [xxxx]             [xxxxxxxxxxxxx]      []
+    ///      ^                  ^^^^^^^^^        ^
+    ///   ready to send        start send        flushed
+    /// 
     fn enter_on_item<S: MakeSpan>(
         self,
         name: impl Into<Cow<'static, str>>,
@@ -72,7 +95,7 @@ pub trait SinkExt<I>: Sink<I> + Sized {
 impl<I, S: Sink<I>> SinkExt<I> for S {}
 
 pin_project! {
-    pub struct EnterOnItem<T, S> {
+    pub(crate) struct EnterOnItem<T, S> {
         #[pin]
         inner: T,
         name: Cow<'static, str>,
@@ -127,15 +150,15 @@ where
     }
 
     fn start_send(self: Pin<&mut Self>, item: I) -> Result<(), Self::Error> {
-        let this = self.project();
-        debug_assert!(this.span.is_some(), "you must poll_ready before start_send");
-        let res = this.inner.start_send(item);
-        this.span.take();
-        res
+        self.project().inner.start_send(item)
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.project().inner.poll_flush(cx)
+        let this = self.project();
+        debug_assert!(this.span.is_some(), "you must poll_ready before poll_flush");
+        let res = this.inner.poll_flush(cx);
+        this.span.take();
+        res
     }
 
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
