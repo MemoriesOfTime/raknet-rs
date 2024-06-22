@@ -135,7 +135,14 @@ impl Stream for Incoming {
                     this.config.sever_guid,
                     this.drop_notifier.clone(),
                 )
-                .enter_on_item::<Span>(format!("io(peer={},mtu={})", peer.addr, peer.mtu));
+                .enter_on_item::<Span, _>("io", move |span| {
+                    span.with_properties(|| {
+                        [
+                            ("peer", peer.addr.to_string()),
+                            ("mtu", peer.mtu.to_string()),
+                        ]
+                    })
+                });
 
             return Poll::Ready(Some(IOImpl::new(io)));
         }

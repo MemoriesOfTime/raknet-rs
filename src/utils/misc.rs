@@ -10,6 +10,7 @@ use crate::errors::CodecError;
 use crate::packet::connected::Frames;
 use crate::packet::{unconnected, Packet};
 
+/// Sink with a provided address
 pub(crate) trait WithAddress: Sized {
     fn with_addr(self, addr: SocketAddr) -> WithAddr<Self>;
 }

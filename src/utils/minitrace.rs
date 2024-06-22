@@ -52,14 +52,16 @@ pub(crate) trait StreamExt: Stream + Sized {
     ///                           [----codec children spans----]
     ///
     /// ------------------------- timeline ------------------------------>>>
-    fn enter_on_item<S: MakeSpan>(
+    fn enter_on_item<S: MakeSpan, O: Fn(S) -> S>(
         self,
         name: impl Into<Cow<'static, str>>,
-    ) -> EnterOnItem<Self, S> {
+        opts: O,
+    ) -> EnterOnItem<Self, S, O> {
         EnterOnItem {
             inner: self,
             name: name.into(),
             span: None,
+            opts,
         }
     }
 }
@@ -79,15 +81,16 @@ pub(crate) trait SinkExt<I>: Sink<I> + Sized {
     /// [xxxx]             [xxxxxxxxxxxxx]      []
     ///      ^                  ^^^^^^^^^        ^
     ///   ready to send        start send        flushed
-    /// 
-    fn enter_on_item<S: MakeSpan>(
+    fn enter_on_item<S: MakeSpan, O: Fn(S) -> S>(
         self,
         name: impl Into<Cow<'static, str>>,
-    ) -> EnterOnItem<Self, S> {
+        opts: O,
+    ) -> EnterOnItem<Self, S, O> {
         EnterOnItem {
             inner: self,
             name: name.into(),
             span: None,
+            opts,
         }
     }
 }
@@ -95,24 +98,28 @@ pub(crate) trait SinkExt<I>: Sink<I> + Sized {
 impl<I, S: Sink<I>> SinkExt<I> for S {}
 
 pin_project! {
-    pub(crate) struct EnterOnItem<T, S> {
+    pub(crate) struct EnterOnItem<T, S, O> {
         #[pin]
         inner: T,
         name: Cow<'static, str>,
         span: Option<S>,
+        opts: O,
     }
 }
 
-impl<T, S> Stream for EnterOnItem<T, S>
+impl<T, S, O> Stream for EnterOnItem<T, S, O>
 where
     T: Stream,
     S: MakeSpan,
+    O: Fn(S) -> S,
 {
     type Item = T::Item;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.project();
-        let span = this.span.get_or_insert_with(|| S::make(this.name.clone()));
+        let span = this
+            .span
+            .get_or_insert_with(|| (this.opts)(S::make(this.name.clone())));
         let _guard = span.try_set_local_parent();
         let res = this.inner.poll_next(cx);
 
@@ -127,16 +134,19 @@ where
     }
 }
 
-impl<T, I, S> Sink<I> for EnterOnItem<T, S>
+impl<T, I, S, O> Sink<I> for EnterOnItem<T, S, O>
 where
     T: Sink<I>,
     S: MakeSpan,
+    O: Fn(S) -> S,
 {
     type Error = T::Error;
 
     fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         let this = self.project();
-        let span = this.span.get_or_insert_with(|| S::make(this.name.clone()));
+        let span = this
+            .span
+            .get_or_insert_with(|| (this.opts)(S::make(this.name.clone())));
         let _guard = span.try_set_local_parent();
         let res = this.inner.poll_ready(cx);
         match res {
