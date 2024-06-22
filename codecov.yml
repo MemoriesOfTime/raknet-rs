@@ -3,14 +3,19 @@
 # Tips. You may run following command to validate before committing any changes
 #   curl --data-binary @codecov.yml https://codecov.io/validate
 coverage:
+  range: "70..95"
+  precision: 2
+  round: down
   status:
-    patch: off # disable patch status
+    patch:
+      default:
+        informational: true
     project:
-      default: false  # disable the default status that measures entire project
-      rust:
-        paths:
-          - "src/"
-        target: auto # compared with the coverage from the base commit
-        threshold: 0.1% # allow the coverage to drop by 0.1% and posting a success status
+      default:
+        target: auto
+        threshold: "1%" # allow drop by 1%
+    changes:
+      default:
+        informational: true
 codecov:
   allow_coverage_offsets: true

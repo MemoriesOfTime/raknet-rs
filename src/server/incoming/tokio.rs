@@ -26,8 +26,6 @@ use crate::server::handler::offline::HandleOffline;
 use crate::server::handler::online::HandleOnline;
 use crate::utils::{Log, Logged, SinkExt, WithAddress};
 
-/// Avoid stupid error: `type parameter {OfflineHandler} is part of concrete type but not used in
-/// parameter list for the impl Trait type alias`
 type OfflineHandler = offline::OfflineHandler<
     Log<UdpFramed<Codec, Arc<TokioUdpSocket>>, (Packet<Frames<BytesMut>>, SocketAddr), CodecError>,
 >;
