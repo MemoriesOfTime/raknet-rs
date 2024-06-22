@@ -39,6 +39,8 @@
 #![feature(ip_bits)]
 #![feature(type_changing_struct_update)]
 #![feature(coroutines, proc_macro_hygiene, stmt_expr_attributes)]
+#![feature(binary_heap_drain_sorted)]
+#![feature(binary_heap_into_iter_sorted)]
 
 /// Protocol codec
 mod codec;

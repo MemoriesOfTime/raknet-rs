@@ -214,6 +214,6 @@ impl core::ops::SubAssign<u24> for u24 {
 
 impl core::ops::SubAssign<u32> for u24 {
     fn sub_assign(&mut self, rhs: u32) {
-        self.0 -= rhs
+        self.0 -= rhs;
     }
 }

@@ -1,5 +1,3 @@
-use std::cmp::Reverse;
-use std::collections::BinaryHeap;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -11,33 +9,6 @@ use pin_project_lite::pin_project;
 use crate::errors::CodecError;
 use crate::packet::connected::Frames;
 use crate::packet::{unconnected, Packet};
-
-pub(crate) struct SortedIterMut<'a, T>
-where
-    T: Ord,
-{
-    pq: &'a mut BinaryHeap<T>,
-}
-
-impl<'a, T> SortedIterMut<'a, T>
-where
-    T: Ord,
-{
-    pub(crate) fn new(pq: &'a mut BinaryHeap<T>) -> Self {
-        Self { pq }
-    }
-}
-
-impl<T> Iterator for SortedIterMut<'_, Reverse<T>>
-where
-    T: Ord,
-{
-    type Item = T;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.pq.pop().map(|v| v.0)
-    }
-}
 
 pub(crate) trait WithAddress: Sized {
     fn with_addr(self, addr: SocketAddr) -> WithAddr<Self>;

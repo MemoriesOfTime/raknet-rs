@@ -23,7 +23,6 @@ lru = "0.12"
 minitrace = { version = "0.6" }
 minstant = "0.1"
 pin-project-lite = "0.2"
-priority-queue = "2.0"
 rand = { version = "0.8", optional = true }
 thiserror = "1"
 tokio = { version = "1", features = ["io-util", "macros"], optional = true }

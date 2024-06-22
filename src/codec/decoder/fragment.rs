@@ -1,5 +1,5 @@
 use std::cmp::Reverse;
-use std::collections::VecDeque;
+use std::collections::{BinaryHeap, VecDeque};
 use std::num::NonZeroUsize;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -10,13 +10,38 @@ use futures::{ready, Stream, StreamExt};
 use lru::LruCache;
 use minitrace::local::LocalSpan;
 use pin_project_lite::pin_project;
-use priority_queue::PriorityQueue;
 
 use crate::errors::CodecError;
 use crate::packet::connected::{Fragment, Frame, FrameSet, Frames};
 use crate::utils::u24;
 
 const DEFAULT_DEFRAGMENT_BUF_SIZE: usize = 512;
+
+/// Frame parts belonging to a same parted id
+struct FramePart {
+    parted_index: Reverse<u32>,
+    frame: Frame<BytesMut>,
+}
+
+impl PartialEq for FramePart {
+    fn eq(&self, other: &Self) -> bool {
+        self.parted_index == other.parted_index
+    }
+}
+
+impl Eq for FramePart {}
+
+impl PartialOrd for FramePart {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for FramePart {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.parted_index.cmp(&other.parted_index)
+    }
+}
 
 pin_project! {
     /// Defragment the frame set packet from stream [`UdpFramed`]. Enable external consumption of
@@ -29,7 +54,7 @@ pin_project! {
         limit_size: u32,
         // reassemble parts helper. [`LruCache`] used to protect from causing OOM due to malicious
         // users sending a large number of parted IDs.
-        parts: LruCache<u16, PriorityQueue<Frame<BytesMut>, Reverse<u32>>>,
+        parts: LruCache<u16, BinaryHeap<FramePart>>,
         buffer: VecDeque<FrameSet<Frame<Bytes>>>,
         seq_num_read_index: u24,
         outgoing_ack_tx: Sender<u24>,
@@ -128,9 +153,12 @@ where
 
                     let frames_queue = this.parts.get_or_insert_mut(parted_id, || {
                         // init the PriorityQueue with the capacity defined by user.
-                        PriorityQueue::with_capacity(parted_size as usize)
+                        BinaryHeap::with_capacity(parted_size as usize)
                     });
-                    frames_queue.push(frame, Reverse(parted_index));
+                    frames_queue.push(FramePart {
+                        parted_index: Reverse(parted_index),
+                        frame,
+                    });
                     if frames_queue.len() < parted_size as usize {
                         continue;
                     }
@@ -140,11 +168,9 @@ where
                     let merged_frame: Frame<Bytes> = this
                         .parts
                         .pop(&parted_id)
-                        .unwrap_or_else(|| {
-                            unreachable!("parted_id {parted_id} should be set before")
-                        })
-                        .into_sorted_iter()
-                        .map(|(f, _)| f)
+                        .expect("parted_id should be set before")
+                        .into_iter_sorted()
+                        .map(|part| part.frame)
                         .reduce(|mut acc, next| {
                             // merge all parted frames
                             acc.body.put(next.body);

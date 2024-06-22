@@ -43,7 +43,7 @@ impl<B: Buf> FrameSet<Frames<B>> {
     }
 }
 
-#[derive(Eq, PartialEq, Clone)]
+#[derive(PartialEq, Clone)]
 pub(crate) struct Frame<B> {
     pub(crate) flags: Flags,
     pub(crate) reliable_frame_index: Option<u24>,
@@ -63,23 +63,6 @@ impl<B: Buf> std::fmt::Debug for Frame<B> {
             .field("fragment", &self.fragment)
             .field("pack_type", &PackType::from_u8(self.body.chunk()[0]))
             .finish()
-    }
-}
-
-impl<B: Hash> Hash for Frame<B> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        // if it is a parted frame, then hash the fragment parted_index
-        // to promise that the same parted_index will be hashed to the same frame
-        // in `frames_queue`
-        if let Some(fragment) = &self.fragment {
-            fragment.parted_index.hash(state);
-            return;
-        }
-        self.flags.hash(state);
-        self.reliable_frame_index.hash(state);
-        self.seq_frame_index.hash(state);
-        self.ordered.hash(state);
-        self.body.hash(state);
     }
 }
 
@@ -180,7 +163,7 @@ impl<B: Buf> Frame<B> {
 
 /// Top 3 bits are reliability type, fourth bit is 1 when the frame is fragmented and part of a
 /// compound.
-#[derive(Debug, Eq, PartialEq, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Flags {
     raw: u8,
     pub(crate) reliability: Reliability,
@@ -337,7 +320,7 @@ impl Flags {
     }
 }
 
-#[derive(Debug, Eq, PartialEq, Hash, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Fragment {
     pub(crate) parted_size: u32,
     pub(crate) parted_id: u16,
@@ -360,7 +343,7 @@ impl Fragment {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Ordered {
     pub(crate) frame_index: u24,
     pub(crate) channel: u8,
@@ -469,12 +452,6 @@ impl std::fmt::Debug for FrameBody {
             Self::DetectLostConnections => write!(f, "DetectLostConnections"),
             Self::User(data) => write!(f, "User(data_size:{})", data.remaining()),
         }
-    }
-}
-
-impl std::fmt::Display for FrameBody {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(self, f)
     }
 }
 

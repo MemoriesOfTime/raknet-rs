@@ -15,7 +15,7 @@ use pin_project_lite::pin_project;
 use crate::errors::CodecError;
 use crate::packet::connected::{self, AckOrNack, Frame, FrameSet, Frames, Record};
 use crate::packet::{Packet, FRAME_SET_HEADER_SIZE};
-use crate::utils::{u24, SortedIterMut};
+use crate::utils::u24;
 
 pin_project! {
     pub(crate) struct IncomingGuard<F> {
@@ -227,7 +227,8 @@ where
                 ready!(this.frame.as_mut().poll_ready(cx))?;
                 sent = false;
             }
-            if let Some(ack) = AckOrNack::extend_from(SortedIterMut::new(this.ack_queue), *this.mtu)
+            if let Some(ack) =
+                AckOrNack::extend_from(this.ack_queue.drain_sorted().map(|v| v.0), *this.mtu)
             {
                 trace!("[ack] send ack count {}", ack.total_cnt());
                 this.frame
@@ -242,7 +243,7 @@ where
                 sent = false;
             }
             if let Some(nack) =
-                AckOrNack::extend_from(SortedIterMut::new(this.nack_queue), *this.mtu)
+                AckOrNack::extend_from(this.nack_queue.drain_sorted().map(|v| v.0), *this.mtu)
             {
                 trace!("[nack] send nack count {}", nack.total_cnt());
                 this.frame
