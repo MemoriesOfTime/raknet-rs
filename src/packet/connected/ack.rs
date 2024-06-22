@@ -135,7 +135,7 @@ impl Record {
 
     fn ack_cnt(&self) -> usize {
         match self {
-            Record::Range(start, end) => (end - (start + 1)).into(),
+            Record::Range(start, end) => usize::from(end - start + 1),
             Record::Single(_) => 1,
         }
     }

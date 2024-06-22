@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 use std::sync::OnceLock;
+use std::time::Duration;
 
 use bytes::Bytes;
 use criterion::{criterion_group, criterion_main, BatchSize, Bencher, Criterion, Throughput};
@@ -29,13 +30,6 @@ pub fn bulk_benchmark(c: &mut Criterion) {
     }
 
     {
-        group.throughput(Throughput::Bytes(short_data.len() as u64 * 1000));
-        group.bench_function("short_data_1000_clients", |bencher| {
-            configure_bencher(bencher, server_addr, short_data, 1000)
-        });
-    }
-
-    {
         group.throughput(Throughput::Bytes(medium_data.len() as u64));
         group.bench_function("medium_data_1_client", |bencher| {
             configure_bencher(bencher, server_addr, medium_data, 1)
@@ -43,16 +37,23 @@ pub fn bulk_benchmark(c: &mut Criterion) {
     }
 
     {
-        group.throughput(Throughput::Bytes(medium_data.len() as u64 * 100));
-        group.bench_function("medium_data_100_clients", |bencher| {
-            configure_bencher(bencher, server_addr, medium_data, 100)
+        group.throughput(Throughput::Bytes(large_data.len() as u64));
+        group.bench_function("large_data_1_client", |bencher| {
+            configure_bencher(bencher, server_addr, large_data, 1)
         });
     }
 
     {
-        group.throughput(Throughput::Bytes(large_data.len() as u64));
-        group.bench_function("large_data_1_client", |bencher| {
-            configure_bencher(bencher, server_addr, large_data, 1)
+        group.throughput(Throughput::Bytes(short_data.len() as u64 * 100));
+        group.bench_function("short_data_100_clients", |bencher| {
+            configure_bencher(bencher, server_addr, short_data, 100)
+        });
+    }
+
+    {
+        group.throughput(Throughput::Bytes(medium_data.len() as u64 * 100));
+        group.bench_function("medium_data_100_clients", |bencher| {
+            configure_bencher(bencher, server_addr, medium_data, 100)
         });
     }
 
@@ -70,7 +71,7 @@ fn configure_bencher(
     bencher: &mut Bencher<'_>,
     server_addr: SocketAddr,
     data: &'static [u8],
-    clients: usize,
+    clients_num: usize,
 ) {
     let mk_client = || async move {
         let sock = TokioUdpSocket::bind("0.0.0.0:0").await.unwrap();
@@ -88,13 +89,30 @@ fn configure_bencher(
         .unwrap()
     };
     bencher.to_async(rt()).iter_batched(
-        || std::iter::repeat_with(mk_client).take(clients),
-        |handshakes| async move {
+        || {
+            std::iter::repeat_with(mk_client)
+                .take(clients_num)
+                .map(|handshake| {
+                    futures::executor::block_on(async move {
+                        let io = handshake.await;
+                        std::thread::sleep(Duration::from_millis(100));
+                        io
+                    })
+                })
+        },
+        |clients| async move {
             let mut join = vec![];
-            for handshake in handshakes {
+            for mut client in clients {
                 let handle = tokio::spawn(async move {
-                    let mut client = handshake.await;
-                    client.send(Bytes::from_static(data)).await.unwrap();
+                    let mut ticker = tokio::time::interval(Duration::from_millis(10));
+                    loop {
+                        tokio::select! {
+                            _ = client.send(Bytes::from_static(data)) => break,
+                            _ = ticker.tick() => {
+                                assert!(SinkExt::<Bytes>::flush(&mut client).await.is_ok());
+                            }
+                        }
+                    }
                 });
                 join.push(handle);
             }
@@ -122,7 +140,17 @@ fn spawn_server() -> SocketAddr {
             .unwrap();
         let mut incoming = sock.make_incoming(config);
         while let Some(mut io) = incoming.next().await {
-            tokio::spawn(async move { while io.next().await.is_some() {} });
+            tokio::spawn(async move {
+                let mut ticker = tokio::time::interval(Duration::from_millis(10));
+                loop {
+                    tokio::select! {
+                        _ = io.next() => {}
+                        _ = ticker.tick() => {
+                            assert!(SinkExt::<Bytes>::flush(&mut io).await.is_ok());
+                        }
+                    };
+                }
+            });
         }
     });
     server_addr

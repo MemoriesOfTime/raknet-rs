@@ -1,4 +1,3 @@
-use std::collections::VecDeque;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -9,126 +8,7 @@ use pin_project_lite::pin_project;
 
 use crate::errors::CodecError;
 use crate::packet::connected::{FrameSet, Frames};
-use crate::utils::u24;
-
-const USIZE_BITS: usize = std::mem::size_of::<usize>() * 8;
-const DEFAULT_BIT_VEC_QUEUE_CAP: usize = 256 * USIZE_BITS;
-
-/// A one-direction bit vector queue
-/// It use a ring buffer `VecDeque<usize>` to store bits
-///
-/// Memory Layout:
-///
-/// `010000000101_110111011111_000001000000000`
-///  ^        ^                ^    ^
-///  |        |________________|____|
-///  |________|         len    |____|
-///     head                    tail
-#[derive(Debug, Clone)]
-struct BitVecQueue {
-    store: VecDeque<usize>,
-    head: usize,
-    tail: usize,
-}
-
-impl Default for BitVecQueue {
-    #[inline]
-    fn default() -> Self {
-        Self::with_capacity(DEFAULT_BIT_VEC_QUEUE_CAP)
-    }
-}
-
-impl BitVecQueue {
-    /// New with a capacity (in bits)
-    fn with_capacity(cap_bits: usize) -> Self {
-        Self {
-            store: VecDeque::with_capacity(cap_bits / USIZE_BITS),
-            head: 0,
-            tail: 0,
-        }
-    }
-
-    fn len(&self) -> usize {
-        if self.store.is_empty() {
-            return 0;
-        }
-        (self.store.len() - 1) * USIZE_BITS + self.tail - self.head + 1
-    }
-
-    fn get(&self, idx: usize) -> Option<bool> {
-        let idx = self.head + idx;
-        let index = idx / USIZE_BITS;
-        let slot = idx % USIZE_BITS;
-        if index == self.store.len() - 1 && slot > self.tail {
-            return None;
-        }
-        let bits = self.store.get(index)?;
-        Some(bits & (1 << (USIZE_BITS - 1 - slot)) != 0)
-    }
-
-    fn set(&mut self, idx: usize, v: bool) {
-        let idx = self.head + idx;
-        let index = idx / USIZE_BITS;
-        let slot = idx % USIZE_BITS;
-        if index == self.store.len() - 1 && slot > self.tail {
-            return;
-        }
-        let Some(bits) = self.store.get_mut(index) else {
-            return;
-        };
-        if v {
-            *bits |= 1 << (USIZE_BITS - 1 - slot);
-        } else {
-            *bits &= !(1 << (USIZE_BITS - 1 - slot));
-        }
-    }
-
-    fn push(&mut self, v: bool) {
-        if self.tail == (USIZE_BITS - 1) || self.store.is_empty() {
-            self.tail = 0;
-            if v {
-                self.store.push_back(1 << (USIZE_BITS - 1));
-            } else {
-                self.store.push_back(0);
-            }
-            return;
-        }
-        self.tail += 1;
-        if v {
-            let last = self.store.back_mut().unwrap();
-            *last |= 1 << (USIZE_BITS - 1 - self.tail);
-        }
-    }
-
-    fn front(&self) -> Option<bool> {
-        let front = self.store.front()?;
-        Some(front & (1 << (USIZE_BITS - 1 - self.head)) != 0)
-    }
-
-    fn pop(&mut self) {
-        let len = self.store.len();
-        if len == 0 {
-            return;
-        }
-        if len == 1 && self.head == self.tail {
-            self.clear();
-            return;
-        }
-        if self.head == (USIZE_BITS - 1) {
-            self.head = 0;
-            let _ig = self.store.pop_front();
-            return;
-        }
-        self.head += 1;
-    }
-
-    /// Clear the bit queue
-    fn clear(&mut self) {
-        self.head = 0;
-        self.tail = 0;
-        self.store.clear();
-    }
-}
+use crate::utils::{u24, BitVecQueue};
 
 /// The deduplication window. For each connect, the maximum size is
 /// 2 ^ (8 * 3) / 8 / 1024 / 1024 = 2MB.
@@ -160,12 +40,12 @@ impl DuplicateWindow {
             // received the sequence number that exceed received_status, extend
             // the received_status and record the received_status[gap] as received
             for _ in 0..gap - self.received_status.len() {
-                self.received_status.push(false);
+                self.received_status.push_back(false);
             }
-            self.received_status.push(true);
+            self.received_status.push_back(true);
         }
         while let Some(true) = self.received_status.front() {
-            self.received_status.pop();
+            self.received_status.pop_front();
             self.first_unreceived += 1;
         }
         false
