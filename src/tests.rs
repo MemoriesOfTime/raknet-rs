@@ -1,7 +1,9 @@
+use std::iter::repeat;
+use std::time::Duration;
+
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
-use minitrace::collector::{self, ConsoleReporter};
-use minitrace::Event;
+use log::info;
 use tokio::net::UdpSocket;
 
 use crate::client::{self, ConnectTo};
@@ -17,20 +19,7 @@ impl Drop for TestGuard {
 
 #[must_use]
 fn test_setup() -> TestGuard {
-    minitrace::set_reporter(ConsoleReporter, collector::Config::default());
-
-    env_logger::Builder::from_default_env()
-        .format(|_, record| {
-            // Add a event to the current local span representing the log record
-            Event::add_to_local_parent(record.level().as_str(), || {
-                [("message".into(), record.args().to_string().into())]
-            });
-            // write nothing as we already use `ConsoleReporter`
-            Ok(())
-        })
-        .filter_level(log::LevelFilter::Trace)
-        .init();
-
+    env_logger::init();
     TestGuard
 }
 
@@ -38,59 +27,68 @@ fn test_setup() -> TestGuard {
 async fn test_tokio_udp_works() {
     let _guard = test_setup();
 
-    let server = async {
+    let echo_server = async {
+        let config = server::ConfigBuilder::default()
+            .send_buf_cap(1024)
+            .sever_guid(1919810)
+            .advertisement(Bytes::from_static(b"123456"))
+            .max_mtu(1500)
+            .min_mtu(510)
+            .max_pending(1024)
+            .support_version(vec![9, 11, 13])
+            .build()
+            .unwrap();
         let mut incoming = UdpSocket::bind("0.0.0.0:19132")
             .await
             .unwrap()
-            .make_incoming(
-                server::ConfigBuilder::default()
-                    .send_buf_cap(1024)
-                    .sever_guid(1919810)
-                    .advertisement(Bytes::from_static(b"123456"))
-                    .max_mtu(1500)
-                    .min_mtu(510)
-                    .max_pending(1024)
-                    .support_version(vec![9, 11, 13])
-                    .build()
-                    .unwrap(),
-            );
+            .make_incoming(config);
         loop {
             let mut io = incoming.next().await.unwrap();
             tokio::spawn(async move {
+                let mut ticker = tokio::time::interval(Duration::from_millis(10));
                 loop {
-                    let msg = io.next().await.unwrap();
-                    assert_eq!(msg, Bytes::from_static(b"1919810"));
-                    io.send(msg).await.unwrap();
-                    io.send(Bytes::from_static(b"114514")).await.unwrap();
+                    tokio::select! {
+                        res = io.next() => {
+                            if let Some(data) = res {
+                                io.send(data).await.unwrap();
+                            } else {
+                                info!("client closed connection");
+                                break;
+                            }
+                        }
+                        _ = ticker.tick() => {
+                            SinkExt::<Bytes>::flush(&mut io).await.unwrap();
+                        }
+                    };
                 }
             });
         }
     };
 
-    tokio::spawn(server);
+    tokio::spawn(echo_server);
 
     let client = async {
+        let config = client::ConfigBuilder::default()
+            .send_buf_cap(1024)
+            .mtu(1000)
+            .client_guid(114514)
+            .protocol_version(11)
+            .build()
+            .unwrap();
         let mut io = UdpSocket::bind("0.0.0.0:0")
             .await
             .unwrap()
-            .connect_to(
-                "127.0.0.1:19132",
-                client::ConfigBuilder::default()
-                    .send_buf_cap(1024)
-                    .mtu(1000)
-                    .client_guid(114514)
-                    .protocol_version(11)
-                    .build()
-                    .unwrap(),
-            )
+            .connect_to("127.0.0.1:19132", config)
             .await
             .unwrap();
-
-        io.send(Bytes::from_static(b"1919810")).await.unwrap();
-        let msg = io.next().await.unwrap();
-        assert_eq!(msg, Bytes::from_static(b"1919810"));
-        let next_msg = io.next().await.unwrap();
-        assert_eq!(next_msg, Bytes::from_static(b"114514"));
+        io.send(Bytes::from_iter(repeat(0xfe).take(2048)))
+            .await
+            .unwrap();
+        assert_eq!(
+            io.next().await.unwrap(),
+            Bytes::from_iter(repeat(0xfe).take(2048))
+        );
+        SinkExt::<Bytes>::close(&mut io).await.unwrap();
     };
 
     tokio::spawn(client).await.unwrap();

@@ -84,7 +84,7 @@ use bytes::Bytes;
 use packet::connected::Reliability;
 
 #[derive(Debug, Clone)]
-struct Peer {
+struct PeerContext {
     addr: SocketAddr,
     mtu: u16,
 }

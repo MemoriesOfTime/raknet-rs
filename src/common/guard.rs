@@ -76,6 +76,21 @@ where
     }
 }
 
+#[derive(Debug)]
+pub(crate) enum Peer {
+    Client,
+    Server,
+}
+
+impl std::fmt::Display for Peer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Peer::Client => write!(f, "client"),
+            Peer::Server => write!(f, "server"),
+        }
+    }
+}
+
 pin_project! {
     pub(crate) struct OutgoingGuard<F> {
         #[pin]
@@ -86,6 +101,7 @@ pin_project! {
         outgoing_nack_rx: priority_mpsc::Receiver<u24>,
         seq_num_write_index: u24,
         buf: VecDeque<Frame<Bytes>>,
+        peer: Peer,
         cap: usize,
         mtu: u16,
         // ordered by seq_num
@@ -95,6 +111,7 @@ pin_project! {
 }
 
 pub(crate) trait HandleOutgoingAck: Sized {
+    #[allow(clippy::too_many_arguments)]
     fn handle_outgoing(
         self,
         incoming_ack_rx: Receiver<AckOrNack>,
@@ -103,6 +120,7 @@ pub(crate) trait HandleOutgoingAck: Sized {
         outgoing_nack_rx: priority_mpsc::Receiver<u24>,
         cap: usize,
         mtu: u16,
+        peer: Peer,
     ) -> OutgoingGuard<Self>;
 }
 
@@ -118,6 +136,7 @@ where
         outgoing_nack_rx: priority_mpsc::Receiver<u24>,
         cap: usize,
         mtu: u16,
+        peer: Peer,
     ) -> OutgoingGuard<Self> {
         assert!(cap > 0, "cap must larger than 0");
         OutgoingGuard {
@@ -128,6 +147,7 @@ where
             outgoing_nack_rx,
             seq_num_write_index: 0.into(),
             buf: VecDeque::with_capacity(cap),
+            peer,
             cap,
             mtu,
             resending: BTreeMap::new(),
@@ -145,7 +165,11 @@ where
     fn try_ack(self: Pin<&mut Self>) {
         let this = self.project();
         for ack in this.incoming_ack_rx.try_iter() {
-            trace!("[ack] receive ack count: {}", ack.total_cnt());
+            trace!(
+                "[{}] receive ack {ack:?}, total count: {}",
+                this.peer,
+                ack.total_cnt()
+            );
             for record in ack.records {
                 match record {
                     Record::Range(start, end) => {
@@ -161,7 +185,11 @@ where
             }
         }
         for nack in this.incoming_nack_rx.try_iter() {
-            trace!("[nack] receive nack count: {}", nack.total_cnt());
+            trace!(
+                "[{}] receive nack {nack:?}, total count: {}",
+                this.peer,
+                nack.total_cnt()
+            );
             for record in nack.records {
                 match record {
                     Record::Range(start, end) => {
@@ -191,7 +219,7 @@ where
             if now < entry.get().1 {
                 break;
             }
-            trace!("[resend] resend stale frame set {}", entry.key());
+            trace!("[{}] resend stale frame set {}", this.peer, entry.key());
             let (set, _) = entry.remove();
             this.buf.extend(set);
         }
@@ -221,7 +249,11 @@ where
             }
             if let Some(ack) = AckOrNack::extend_from(this.outgoing_ack_rx.recv_batch(), *this.mtu)
             {
-                trace!("[ack] send ack count {}", ack.total_cnt());
+                trace!(
+                    "[{}] send ack {ack:?}, total count: {}",
+                    this.peer,
+                    ack.total_cnt()
+                );
                 this.frame
                     .as_mut()
                     .start_send(Packet::Connected(connected::Packet::Ack(ack)))?;
@@ -236,7 +268,11 @@ where
             if let Some(nack) =
                 AckOrNack::extend_from(this.outgoing_nack_rx.recv_batch(), *this.mtu)
             {
-                trace!("[nack] send nack count {}", nack.total_cnt());
+                trace!(
+                    "[{}] send ack {nack:?}, total count: {}",
+                    this.peer,
+                    nack.total_cnt()
+                );
                 this.frame
                     .as_mut()
                     .start_send(Packet::Connected(connected::Packet::Nack(nack)))?;
@@ -256,7 +292,7 @@ where
             // bandwidth
             let mut remain_mtu = *this.mtu as usize - FRAME_SET_HEADER_SIZE;
             while let Some(frame) = this.buf.front() {
-                if remain_mtu > frame.size() {
+                if remain_mtu >= frame.size() {
                     if frame.flags.reliability.is_reliable() {
                         reliable = true;
                     }

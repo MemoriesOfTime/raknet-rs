@@ -61,7 +61,7 @@ impl<B: Buf> std::fmt::Debug for Frame<B> {
             .field("seq_frame_index", &self.seq_frame_index)
             .field("ordered", &self.ordered)
             .field("fragment", &self.fragment)
-            .field("pack_type", &PackType::from_u8(self.body.chunk()[0]))
+            .field("body", &self.body.chunk())
             .finish()
     }
 }

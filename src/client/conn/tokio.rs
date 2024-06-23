@@ -11,7 +11,7 @@ use crate::client::handler::offline::HandleOffline;
 use crate::client::handler::online::HandleOnline;
 use crate::codec::tokio::Codec;
 use crate::codec::{Decoded, Encoded};
-use crate::common::guard::{HandleIncoming, HandleOutgoingAck};
+use crate::common::guard::{HandleIncoming, HandleOutgoingAck, Peer};
 use crate::errors::{CodecError, Error};
 use crate::io::{IOImpl, IO};
 use crate::utils::{priority_mpsc, Logged, WithAddress};
@@ -54,6 +54,7 @@ impl ConnectTo for TokioUdpSocket {
                 outgoing_nack_rx,
                 config.send_buf_cap,
                 config.mtu,
+                Peer::Client,
             )
             .frame_encoded(config.mtu, config.codec_config());
 

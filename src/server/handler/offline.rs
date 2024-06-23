@@ -12,7 +12,7 @@ use pin_project_lite::pin_project;
 use crate::errors::CodecError;
 use crate::packet::connected::Frames;
 use crate::packet::{connected, unconnected, Packet};
-use crate::Peer;
+use crate::PeerContext;
 
 pub(crate) trait HandleOffline: Sized {
     fn handle_offline(self, config: Config) -> OfflineHandler<Self>;
@@ -61,7 +61,7 @@ pin_project! {
         config: Config,
         // Half-connected queue
         pending: lru::LruCache<SocketAddr, u8>,
-        connected: HashMap<SocketAddr, Peer>,
+        connected: HashMap<SocketAddr, PeerContext>,
         state: OfflineState
     }
 }
@@ -106,7 +106,7 @@ where
     F: Stream<Item = (Packet<Frames<BytesMut>>, SocketAddr)>
         + Sink<(Packet<Frames<Bytes>>, SocketAddr), Error = CodecError>,
 {
-    type Item = (connected::Packet<Frames<BytesMut>>, Peer);
+    type Item = (connected::Packet<Frames<BytesMut>>, PeerContext);
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
@@ -115,12 +115,12 @@ where
                 OfflineState::Listening => {}
                 OfflineState::SendingPrepare(pack) => {
                     if let Err(err) = ready!(this.frame.as_mut().poll_ready(cx)) {
-                        error!("[offline] send error: {err}");
+                        error!("[server] send error: {err}");
                         *this.state = OfflineState::Listening;
                         continue;
                     }
                     if let Err(err) = this.frame.as_mut().start_send(pack.take().unwrap()) {
-                        error!("[offline] send error: {err}");
+                        error!("[server] send error: {err}");
                         *this.state = OfflineState::Listening;
                         continue;
                     }
@@ -218,7 +218,7 @@ where
                         )));
                         continue;
                     }
-                    this.connected.insert(addr, Peer { addr, mtu });
+                    this.connected.insert(addr, PeerContext { addr, mtu });
                     unconnected::Packet::OpenConnectionReply2 {
                         magic: (),
                         server_guid: this.config.sever_guid,

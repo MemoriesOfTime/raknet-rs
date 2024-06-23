@@ -16,7 +16,7 @@ use tokio_util::udp::UdpFramed;
 use super::{Config, MakeIncoming};
 use crate::codec::tokio::Codec;
 use crate::codec::{Decoded, Encoded};
-use crate::common::guard::{HandleIncoming, HandleOutgoingAck};
+use crate::common::guard::{HandleIncoming, HandleOutgoingAck, Peer};
 use crate::errors::CodecError;
 use crate::io::{IOImpl, IO};
 use crate::packet::connected::{self, Frames};
@@ -24,7 +24,7 @@ use crate::packet::Packet;
 use crate::server::handler::offline;
 use crate::server::handler::offline::HandleOffline;
 use crate::server::handler::online::HandleOnline;
-use crate::utils::{Log, Logged, SinkExt, WithAddress, priority_mpsc};
+use crate::utils::{priority_mpsc, Log, Logged, SinkExt, WithAddress};
 
 type OfflineHandler = offline::OfflineHandler<
     Log<UdpFramed<Codec, Arc<TokioUdpSocket>>, (Packet<Frames<BytesMut>>, SocketAddr), CodecError>,
@@ -114,6 +114,7 @@ impl Stream for Incoming {
                     outgoing_nack_rx,
                     this.config.send_buf_cap,
                     peer.mtu,
+                    Peer::Server,
                 )
                 .frame_encoded(peer.mtu, this.config.codec_config());
             let raw_write = UdpFramed::new(Arc::clone(this.socket), Codec).with_addr(peer.addr);
