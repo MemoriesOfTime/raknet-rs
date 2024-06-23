@@ -11,7 +11,6 @@ pub(crate) struct AckOrNack {
 
 impl AckOrNack {
     /// Extend a packet from a sorted sequence numbers iterator based on mtu.
-    /// Notice that a uint24le must be unique in the whole iterator
     pub(crate) fn extend_from<I: Iterator<Item = u24>>(
         mut sorted_seq_nums: I,
         mut mtu: u16,
@@ -165,6 +164,10 @@ mod test {
             (vec![0, 2, 3], 14, 0),
             // 3 + 0(4) + 2(4) + 4(4) = 15, no remain
             (vec![0, 2, 4], 15, 0),
+            // 3 + 1(4) + 1(4) + 1(4) = 15, no remain
+            (vec![1, 1, 1], 15, 0),
+            // 3 + 0-999(7) = 10, no remain
+            (Vec::from_iter(0..1000), 10, 0),
         ];
         for (seq_nums, len, remain) in test_cases {
             buf.clear();

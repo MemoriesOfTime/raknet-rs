@@ -80,6 +80,9 @@ impl<T: Ord> Receiver<T> {
         self.0.recv()
     }
 
+    /// Return a reception iterator that holds the lock. Please release it after obtaining what you
+    /// need to prevent lock poisoning (check
+    /// [`crate::utils::priority_mpsc::test`]`::test_lock_poisoning` ).
     pub(crate) fn recv_batch(&self) -> impl Iterator<Item = T> + '_ {
         self.0.recv_batch()
     }
@@ -138,5 +141,17 @@ mod test {
         assert_eq!(receiver.recv(), Some(2));
         let v2 = receiver.recv_batch().collect::<Vec<_>>();
         assert_eq!(v2, vec![3, 4]);
+    }
+
+    #[test]
+    fn test_lock_poisoning() {
+        let (sender, receiver) = unbounded();
+        sender.send_batch(0..5);
+        std::thread::spawn(move || {
+            let mut reception = receiver.recv_batch();
+            panic!("awsl");
+        })
+        .join();
+        assert!(sender.0.heap.is_poisoned());
     }
 }
