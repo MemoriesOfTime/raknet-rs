@@ -113,6 +113,7 @@ fn configure_bencher(
                             }
                         }
                     }
+                    assert!(SinkExt::<Bytes>::close(&mut client).await.is_ok());
                 });
                 join.push(handle);
             }
@@ -144,7 +145,11 @@ fn spawn_server() -> SocketAddr {
                 let mut ticker = tokio::time::interval(Duration::from_millis(10));
                 loop {
                     tokio::select! {
-                        _ = io.next() => {}
+                        res = io.next() => {
+                            if res.is_none() {
+                                break;
+                            }
+                        }
                         _ = ticker.tick() => {
                             assert!(SinkExt::<Bytes>::flush(&mut io).await.is_ok());
                         }

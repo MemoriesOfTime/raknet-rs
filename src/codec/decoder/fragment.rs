@@ -5,7 +5,6 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use bytes::{BufMut, Bytes, BytesMut};
-use flume::Sender;
 use futures::{ready, Stream, StreamExt};
 use lru::LruCache;
 use minitrace::local::LocalSpan;
@@ -13,7 +12,7 @@ use pin_project_lite::pin_project;
 
 use crate::errors::CodecError;
 use crate::packet::connected::{Fragment, Frame, FrameSet, Frames};
-use crate::utils::u24;
+use crate::utils::{priority_mpsc, u24};
 
 const DEFAULT_DEFRAGMENT_BUF_SIZE: usize = 512;
 
@@ -57,8 +56,8 @@ pin_project! {
         parts: LruCache<u16, BinaryHeap<FramePart>>,
         buffer: VecDeque<FrameSet<Frame<Bytes>>>,
         seq_num_read_index: u24,
-        outgoing_ack_tx: Sender<u24>,
-        outgoing_nack_tx: Sender<u24>,
+        outgoing_ack_tx: priority_mpsc::Sender<u24>,
+        outgoing_nack_tx: priority_mpsc::Sender<u24>,
     }
 }
 
@@ -67,8 +66,8 @@ pub(crate) trait DeFragmented: Sized {
         self,
         limit_size: u32,
         limit_parted: usize,
-        outgoing_ack_tx: Sender<u24>,
-        outgoing_nack_tx: Sender<u24>,
+        outgoing_ack_tx: priority_mpsc::Sender<u24>,
+        outgoing_nack_tx: priority_mpsc::Sender<u24>,
     ) -> DeFragment<Self>;
 }
 
@@ -80,8 +79,8 @@ where
         self,
         limit_size: u32,
         limit_parted: usize,
-        outgoing_ack_tx: Sender<u24>,
-        outgoing_nack_tx: Sender<u24>,
+        outgoing_ack_tx: priority_mpsc::Sender<u24>,
+        outgoing_nack_tx: priority_mpsc::Sender<u24>,
     ) -> DeFragment<Self> {
         DeFragment {
             frame: self,
@@ -132,9 +131,7 @@ where
                     // promise that parted_index is always less than parted_size
                     if parted_index >= parted_size {
                         // perhaps network bit-flips
-                        this.outgoing_nack_tx
-                            .send(frame_set.seq_num)
-                            .expect("outgoing_nack_rx never drops");
+                        this.outgoing_nack_tx.send(frame_set.seq_num);
                         return Poll::Ready(Some(Err(CodecError::PartedFrame(format!(
                             "parted_index {} >= parted_size {}",
                             parted_index, parted_size
@@ -142,9 +139,7 @@ where
                     }
                     if *this.limit_size != 0 && parted_size > *this.limit_size {
                         // we discarded this packet and prevented the peer from resending it.
-                        this.outgoing_ack_tx
-                            .send(frame_set.seq_num)
-                            .expect("outgoing_ack_rx never drops");
+                        this.outgoing_ack_tx.send(frame_set.seq_num);
                         return Poll::Ready(Some(Err(CodecError::PartedFrame(format!(
                             "parted_size {} exceed limit_size {}",
                             parted_size, *this.limit_size
@@ -193,17 +188,12 @@ where
             }
 
             let seq_index = frame_set.seq_num;
-            this.outgoing_ack_tx
-                .send(seq_index)
-                .expect("outgoing_ack_rx never drops");
+            this.outgoing_ack_tx.send(seq_index);
             let pre_read_index = *this.seq_num_read_index;
             if pre_read_index <= seq_index {
                 *this.seq_num_read_index = seq_index + 1;
-                for nack in pre_read_index.to_u32()..seq_index.to_u32() {
-                    this.outgoing_nack_tx
-                        .send(nack.into())
-                        .expect("outgoing_nack_rx never drops");
-                }
+                let nack = pre_read_index.to_u32()..seq_index.to_u32();
+                this.outgoing_nack_tx.send_batch(nack.map(u24::from));
             }
         }
     }
@@ -223,6 +213,7 @@ mod test {
     use super::DeFragment;
     use crate::errors::CodecError;
     use crate::packet::connected::{Flags, Fragment, Frame, FrameSet, Frames};
+    use crate::utils::priority_mpsc;
 
     fn frame_set<'a, T: AsRef<str> + 'a>(
         idx: impl IntoIterator<Item = &'a (u32, u16, u32, T)>,
@@ -282,8 +273,8 @@ mod test {
         };
 
         tokio::pin!(frame);
-        let (outgoing_ack_tx, _outgoing_ack_rx) = flume::unbounded();
-        let (outgoing_nack_tx, _outgoing_nack_rx) = flume::unbounded();
+        let (outgoing_ack_tx, _outgoing_ack_rx) = priority_mpsc::unbounded();
+        let (outgoing_nack_tx, _outgoing_nack_rx) = priority_mpsc::unbounded();
         let mut frag = DeFragment {
             frame: frame.map(Ok),
             limit_size: 0,
@@ -317,8 +308,8 @@ mod test {
         };
 
         tokio::pin!(frame);
-        let (outgoing_ack_tx, _outgoing_ack_rx) = flume::unbounded();
-        let (outgoing_nack_tx, _outgoing_nack_rx) = flume::unbounded();
+        let (outgoing_ack_tx, _outgoing_ack_rx) = priority_mpsc::unbounded();
+        let (outgoing_nack_tx, _outgoing_nack_rx) = priority_mpsc::unbounded();
         let mut frag = DeFragment {
             frame: frame.map(Ok),
             limit_size: 20,
@@ -359,8 +350,8 @@ mod test {
         };
 
         tokio::pin!(frame);
-        let (outgoing_ack_tx, _outgoing_ack_rx) = flume::unbounded();
-        let (outgoing_nack_tx, _outgoing_nack_rx) = flume::unbounded();
+        let (outgoing_ack_tx, _outgoing_ack_rx) = priority_mpsc::unbounded();
+        let (outgoing_nack_tx, _outgoing_nack_rx) = priority_mpsc::unbounded();
         let mut frag = DeFragment {
             frame: frame.map(Ok),
             limit_size: 0,
@@ -395,8 +386,8 @@ mod test {
         };
 
         tokio::pin!(frame);
-        let (outgoing_ack_tx, _outgoing_ack_rx) = flume::unbounded();
-        let (outgoing_nack_tx, _outgoing_nack_rx) = flume::unbounded();
+        let (outgoing_ack_tx, _outgoing_ack_rx) = priority_mpsc::unbounded();
+        let (outgoing_nack_tx, _outgoing_nack_rx) = priority_mpsc::unbounded();
         let mut frag = DeFragment {
             frame: frame.map(Ok),
             limit_size: 0,
@@ -442,8 +433,8 @@ mod test {
         };
 
         tokio::pin!(frame);
-        let (outgoing_ack_tx, _outgoing_ack_rx) = flume::unbounded();
-        let (outgoing_nack_tx, _outgoing_nack_rx) = flume::unbounded();
+        let (outgoing_ack_tx, _outgoing_ack_rx) = priority_mpsc::unbounded();
+        let (outgoing_nack_tx, _outgoing_nack_rx) = priority_mpsc::unbounded();
         let mut frag = DeFragment {
             frame: frame.map(Ok),
             limit_size: 0,

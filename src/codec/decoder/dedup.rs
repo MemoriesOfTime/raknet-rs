@@ -1,14 +1,13 @@
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use flume::Sender;
 use futures::{ready, Stream, StreamExt};
 use minitrace::local::LocalSpan;
 use pin_project_lite::pin_project;
 
 use crate::errors::CodecError;
 use crate::packet::connected::{FrameSet, Frames};
-use crate::utils::{u24, BitVecQueue};
+use crate::utils::{priority_mpsc, u24, BitVecQueue};
 
 /// The deduplication window. For each connect, the maximum size is
 /// 2 ^ (8 * 3) / 8 / 1024 / 1024 = 2MB.
@@ -61,19 +60,27 @@ pin_project! {
         // Limit the maximum reliable_frame_index gap for a connection. 0 means no limit.
         max_gap: usize,
         window: DuplicateWindow,
-        outgoing_ack_tx: Sender<u24>,
+        outgoing_ack_tx: priority_mpsc::Sender<u24>,
     }
 }
 
 pub(crate) trait Deduplicated: Sized {
-    fn deduplicated(self, max_gap: usize, outgoing_ack_tx: Sender<u24>) -> Dedup<Self>;
+    fn deduplicated(
+        self,
+        max_gap: usize,
+        outgoing_ack_tx: priority_mpsc::Sender<u24>,
+    ) -> Dedup<Self>;
 }
 
 impl<F, B> Deduplicated for F
 where
     F: Stream<Item = Result<FrameSet<Frames<B>>, CodecError>>,
 {
-    fn deduplicated(self, max_gap: usize, outgoing_ack_tx: Sender<u24>) -> Dedup<Self> {
+    fn deduplicated(
+        self,
+        max_gap: usize,
+        outgoing_ack_tx: priority_mpsc::Sender<u24>,
+    ) -> Dedup<Self> {
         Dedup {
             frame: self,
             max_gap,
@@ -118,9 +125,7 @@ where
                 return Poll::Ready(Some(Ok(frame_set)));
             }
             // all duplicated, send ack back
-            this.outgoing_ack_tx
-                .send(frame_set.seq_num)
-                .expect("outgoing_ack_rx never drops");
+            this.outgoing_ack_tx.send(frame_set.seq_num);
         }
     }
 }
@@ -219,7 +224,7 @@ mod test {
             }
         };
         tokio::pin!(frame);
-        let (outgoing_ack_tx, _rx) = flume::unbounded();
+        let (outgoing_ack_tx, _rx) = priority_mpsc::unbounded();
         let mut dedup = Dedup {
             frame: frame.map(Ok),
             max_gap: 100,
@@ -248,7 +253,7 @@ mod test {
             }
         };
         tokio::pin!(frame);
-        let (outgoing_ack_tx, _rx) = flume::unbounded();
+        let (outgoing_ack_tx, _rx) = priority_mpsc::unbounded();
         let mut dedup = Dedup {
             frame: frame.map(Ok),
             max_gap: 100,
@@ -273,7 +278,7 @@ mod test {
             }
         };
         tokio::pin!(frame);
-        let (outgoing_ack_tx, _rx) = flume::unbounded();
+        let (outgoing_ack_tx, _rx) = priority_mpsc::unbounded();
         let mut dedup = Dedup {
             frame: frame.map(Ok),
             max_gap: 100,
@@ -309,7 +314,7 @@ mod test {
             }
         };
         tokio::pin!(frame);
-        let (outgoing_ack_tx, _rx) = flume::unbounded();
+        let (outgoing_ack_tx, _rx) = priority_mpsc::unbounded();
         let mut dedup = Dedup {
             frame: frame.map(Ok),
             max_gap: scale,

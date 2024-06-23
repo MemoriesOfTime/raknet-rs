@@ -10,7 +10,6 @@ pub(crate) mod tokio;
 
 use bytes::{Bytes, BytesMut};
 use derive_builder::Builder;
-use flume::Sender;
 use futures::{Sink, Stream, StreamExt};
 use log::{debug, trace};
 
@@ -18,7 +17,7 @@ use self::decoder::{DeFragmented, Deduplicated, FrameDecoded, Ordered};
 use self::encoder::{Fragmented, FrameEncoded};
 use crate::errors::CodecError;
 use crate::packet::connected::{Frame, FrameBody, FrameSet, Frames};
-use crate::utils::{u24, Logged};
+use crate::utils::{priority_mpsc, u24, Logged};
 use crate::Message;
 
 /// Codec config
@@ -57,8 +56,8 @@ pub(crate) trait Decoded {
     fn decoded(
         self,
         config: Config,
-        outgoing_ack_tx: Sender<u24>,
-        outgoing_nack_tx: Sender<u24>,
+        outgoing_ack_tx: priority_mpsc::Sender<u24>,
+        outgoing_nack_tx: priority_mpsc::Sender<u24>,
     ) -> impl Stream<Item = FrameBody>;
 }
 
@@ -69,8 +68,8 @@ where
     fn decoded(
         self,
         config: Config,
-        outgoing_ack_tx: Sender<u24>,
-        outgoing_nack_tx: Sender<u24>,
+        outgoing_ack_tx: priority_mpsc::Sender<u24>,
+        outgoing_nack_tx: priority_mpsc::Sender<u24>,
     ) -> impl Stream<Item = FrameBody> {
         fn ok_f(pack: &FrameBody) {
             trace!("[decoder] received packet: {:?}", pack);
@@ -123,6 +122,7 @@ pub mod micro_bench {
 
     use super::{BytesMut, Config, Decoded, FrameSet, Frames, Stream};
     use crate::packet::connected::{Flags, Fragment, Frame, Ordered, Reliability};
+    use crate::utils::priority_mpsc;
 
     #[derive(derive_builder::Builder, Debug, Clone)]
     pub struct Options {
@@ -258,8 +258,8 @@ pub mod micro_bench {
 
             let config = self.config;
             let data = self.data.clone();
-            let (outgoing_ack_tx, _outgoing_ack_rx) = flume::unbounded();
-            let (outgoing_nack_tx, _outgoing_nack_rx) = flume::unbounded();
+            let (outgoing_ack_tx, _outgoing_ack_rx) = priority_mpsc::unbounded();
+            let (outgoing_nack_tx, _outgoing_nack_rx) = priority_mpsc::unbounded();
 
             let stream = self
                 .into_stream()
@@ -277,8 +277,8 @@ pub mod micro_bench {
         #[allow(clippy::semicolon_if_nothing_returned)]
         pub async fn bench_decoded(self) {
             let config = self.config;
-            let (outgoing_ack_tx, _outgoing_ack_rx) = flume::unbounded();
-            let (outgoing_nack_tx, _outgoing_nack_rx) = flume::unbounded();
+            let (outgoing_ack_tx, _outgoing_ack_rx) = priority_mpsc::unbounded();
+            let (outgoing_nack_tx, _outgoing_nack_rx) = priority_mpsc::unbounded();
 
             let stream = self
                 .into_stream()

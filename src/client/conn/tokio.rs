@@ -14,7 +14,7 @@ use crate::codec::{Decoded, Encoded};
 use crate::common::guard::{HandleIncoming, HandleOutgoingAck};
 use crate::errors::{CodecError, Error};
 use crate::io::{IOImpl, IO};
-use crate::utils::{Logged, WithAddress};
+use crate::utils::{priority_mpsc, Logged, WithAddress};
 
 impl ConnectTo for TokioUdpSocket {
     async fn connect_to(
@@ -30,8 +30,8 @@ impl ConnectTo for TokioUdpSocket {
         let (incoming_ack_tx, incoming_ack_rx) = flume::unbounded();
         let (incoming_nack_tx, incoming_nack_rx) = flume::unbounded();
 
-        let (outgoing_ack_tx, outgoing_ack_rx) = flume::unbounded();
-        let (outgoing_nack_tx, outgoing_nack_rx) = flume::unbounded();
+        let (outgoing_ack_tx, outgoing_ack_rx) = priority_mpsc::unbounded();
+        let (outgoing_nack_tx, outgoing_nack_rx) = priority_mpsc::unbounded();
 
         let mut lookups = addrs.to_socket_addrs()?;
 

@@ -129,7 +129,7 @@ where
                 }
                 OfflineState::SendingFlush => {
                     if let Err(err) = ready!(this.frame.as_mut().poll_flush(cx)) {
-                        error!("[offline] send error: {err}");
+                        error!("[server] send error: {err}");
                     }
                     *this.state = OfflineState::Listening;
                 }
@@ -146,7 +146,7 @@ where
                         return Poll::Ready(Some((pack, peer.clone())));
                     }
                     debug!(
-                        "[offline] ignore connected packet {:?} from unconnected client {addr}",
+                        "[server] ignore connected packet {:?} from unconnected client {addr}",
                         pack.pack_type()
                     );
                     // TODO: Send DETECT_LOST_CONNECTION ?
@@ -184,9 +184,9 @@ where
                         continue;
                     }
                     if this.pending.put(addr, protocol_version).is_some() {
-                        debug!(
-                            "[offline] received duplicate open connection request 1 from {addr}"
-                        );
+                        debug!("[server] received duplicate open connection request 1 from {addr}");
+                    } else {
+                        debug!("[server] received open connection request 1 from {addr}");
                     }
                     // max_mtu >= final_mtu >= min_mtu
                     let final_mtu = mtu.clamp(this.config.min_mtu, this.config.max_mtu);
@@ -199,13 +199,14 @@ where
                 }
                 unconnected::Packet::OpenConnectionRequest2 { mtu, .. } => {
                     if this.pending.pop(&addr).is_none() {
-                        debug!("[offline] received open connection request 2 from {addr} without open connection request 1");
+                        debug!("[server] received open connection request 2 from {addr} without open connection request 1");
                         *this.state = OfflineState::SendingPrepare(Some((
                             Self::make_incompatible_version(this.config),
                             addr,
                         )));
                         continue;
-                    };
+                    }
+                    debug!("[server] received open connection request 2 from {addr}");
                     // client should adjust the mtu
                     if mtu < this.config.min_mtu
                         || mtu > this.config.max_mtu

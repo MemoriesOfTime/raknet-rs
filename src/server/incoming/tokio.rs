@@ -24,7 +24,7 @@ use crate::packet::Packet;
 use crate::server::handler::offline;
 use crate::server::handler::offline::HandleOffline;
 use crate::server::handler::online::HandleOnline;
-use crate::utils::{Log, Logged, SinkExt, WithAddress};
+use crate::utils::{Log, Logged, SinkExt, WithAddress, priority_mpsc};
 
 type OfflineHandler = offline::OfflineHandler<
     Log<UdpFramed<Codec, Arc<TokioUdpSocket>>, (Packet<Frames<BytesMut>>, SocketAddr), CodecError>,
@@ -87,13 +87,13 @@ impl Stream for Incoming {
             };
             if let Some(router_tx) = this.router.get_mut(&peer.addr) {
                 if router_tx.send(pack).is_err() {
-                    error!("[incoming] connection was dropped before closed");
+                    error!("[server] connection was dropped before closed");
                     this.router.remove(&peer.addr);
                     this.offline.as_mut().disconnect(&peer.addr);
                 }
                 continue;
             }
-            info!("[incoming] new incoming from {}", peer.addr);
+            info!("[server] new incoming from {}", peer.addr);
 
             let (router_tx, router_rx) = flume::unbounded();
             router_tx.send(pack).unwrap();
@@ -102,8 +102,8 @@ impl Stream for Incoming {
             let (incoming_ack_tx, incoming_ack_rx) = flume::unbounded();
             let (incoming_nack_tx, incoming_nack_rx) = flume::unbounded();
 
-            let (outgoing_ack_tx, outgoing_ack_rx) = flume::unbounded();
-            let (outgoing_nack_tx, outgoing_nack_rx) = flume::unbounded();
+            let (outgoing_ack_tx, outgoing_ack_rx) = priority_mpsc::unbounded();
+            let (outgoing_nack_tx, outgoing_nack_rx) = priority_mpsc::unbounded();
 
             let write = UdpFramed::new(Arc::clone(this.socket), Codec)
                 .with_addr(peer.addr)

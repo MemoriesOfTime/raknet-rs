@@ -9,3 +9,4 @@ pub(crate) use log::*;
 pub(crate) use minitrace::*;
 pub(crate) use misc::*;
 pub(crate) use seq_num::*;
+pub(crate) mod priority_mpsc;

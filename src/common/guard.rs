@@ -1,5 +1,4 @@
-use std::cmp::Reverse;
-use std::collections::{BTreeMap, BinaryHeap, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 use std::ops::Add;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
@@ -15,7 +14,7 @@ use pin_project_lite::pin_project;
 use crate::errors::CodecError;
 use crate::packet::connected::{self, AckOrNack, Frame, FrameSet, Frames, Record};
 use crate::packet::{Packet, FRAME_SET_HEADER_SIZE};
-use crate::utils::u24;
+use crate::utils::{priority_mpsc, u24};
 
 pin_project! {
     pub(crate) struct IncomingGuard<F> {
@@ -83,14 +82,12 @@ pin_project! {
         frame: F,
         incoming_ack_rx: Receiver<AckOrNack>,
         incoming_nack_rx: Receiver<AckOrNack>,
-        outgoing_ack_rx: Receiver<u24>,
-        outgoing_nack_rx: Receiver<u24>,
+        outgoing_ack_rx: priority_mpsc::Receiver<u24>,
+        outgoing_nack_rx: priority_mpsc::Receiver<u24>,
         seq_num_write_index: u24,
         buf: VecDeque<Frame<Bytes>>,
         cap: usize,
         mtu: u16,
-        ack_queue: BinaryHeap<Reverse<u24>>,
-        nack_queue: BinaryHeap<Reverse<u24>>,
         // ordered by seq_num
         // TODO: use rbtree?
         resending: BTreeMap<u24, (Frames<Bytes>, Instant)>,
@@ -102,8 +99,8 @@ pub(crate) trait HandleOutgoingAck: Sized {
         self,
         incoming_ack_rx: Receiver<AckOrNack>,
         incoming_nack_rx: Receiver<AckOrNack>,
-        outgoing_ack_rx: Receiver<u24>,
-        outgoing_nack_rx: Receiver<u24>,
+        outgoing_ack_rx: priority_mpsc::Receiver<u24>,
+        outgoing_nack_rx: priority_mpsc::Receiver<u24>,
         cap: usize,
         mtu: u16,
     ) -> OutgoingGuard<Self>;
@@ -117,8 +114,8 @@ where
         self,
         incoming_ack_rx: Receiver<AckOrNack>,
         incoming_nack_rx: Receiver<AckOrNack>,
-        outgoing_ack_rx: Receiver<u24>,
-        outgoing_nack_rx: Receiver<u24>,
+        outgoing_ack_rx: priority_mpsc::Receiver<u24>,
+        outgoing_nack_rx: priority_mpsc::Receiver<u24>,
         cap: usize,
         mtu: u16,
     ) -> OutgoingGuard<Self> {
@@ -133,8 +130,6 @@ where
             buf: VecDeque::with_capacity(cap),
             cap,
             mtu,
-            ack_queue: BinaryHeap::new(),
-            nack_queue: BinaryHeap::new(),
             resending: BTreeMap::new(),
         }
     }
@@ -184,12 +179,6 @@ where
                 }
             }
         }
-        for ack in this.outgoing_ack_rx.try_iter() {
-            this.ack_queue.push(Reverse(ack));
-        }
-        for nack in this.outgoing_nack_rx.try_iter() {
-            this.nack_queue.push(Reverse(nack));
-        }
     }
 
     fn try_send_stales(self: Pin<&mut Self>) {
@@ -219,7 +208,10 @@ where
 
         let mut sent = false;
 
-        while !this.ack_queue.is_empty() || !this.nack_queue.is_empty() || !this.buf.is_empty() {
+        while !this.outgoing_ack_rx.is_empty()
+            || !this.outgoing_nack_rx.is_empty()
+            || !this.buf.is_empty()
+        {
             // Round-Robin
 
             // 1st. sent the ack
@@ -227,8 +219,7 @@ where
                 ready!(this.frame.as_mut().poll_ready(cx))?;
                 sent = false;
             }
-            if let Some(ack) =
-                AckOrNack::extend_from(this.ack_queue.drain_sorted().map(|v| v.0), *this.mtu)
+            if let Some(ack) = AckOrNack::extend_from(this.outgoing_ack_rx.recv_batch(), *this.mtu)
             {
                 trace!("[ack] send ack count {}", ack.total_cnt());
                 this.frame
@@ -243,7 +234,7 @@ where
                 sent = false;
             }
             if let Some(nack) =
-                AckOrNack::extend_from(this.nack_queue.drain_sorted().map(|v| v.0), *this.mtu)
+                AckOrNack::extend_from(this.outgoing_nack_rx.recv_batch(), *this.mtu)
             {
                 trace!("[nack] send nack count {}", nack.total_cnt());
                 this.frame
@@ -328,7 +319,9 @@ where
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         ready!(self.as_mut().try_empty(cx))?;
         debug_assert!(
-            self.buf.is_empty() && self.ack_queue.is_empty() && self.nack_queue.is_empty()
+            self.buf.is_empty()
+                && self.outgoing_ack_rx.is_empty()
+                && self.outgoing_nack_rx.is_empty()
         );
         self.project().frame.poll_flush(cx)
     }
@@ -336,7 +329,9 @@ where
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         ready!(self.as_mut().try_empty(cx))?;
         debug_assert!(
-            self.buf.is_empty() && self.ack_queue.is_empty() && self.nack_queue.is_empty()
+            self.buf.is_empty()
+                && self.outgoing_ack_rx.is_empty()
+                && self.outgoing_nack_rx.is_empty()
         );
         self.project().frame.poll_close(cx)
     }

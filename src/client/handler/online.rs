@@ -79,15 +79,15 @@ where
             match this.state {
                 State::SendConnectionRequest(pack) => {
                     if let Err(err) = ready!(SinkExt::<FrameBody>::poll_ready_unpin(write, cx)) {
-                        debug!("[online] SendConnectionRequest poll_ready error: {err}, retrying");
+                        debug!("[client] SendConnectionRequest poll_ready error: {err}, retrying");
                         continue;
                     }
                     if let Err(err) = write.start_send_unpin(pack.clone().unwrap()) {
-                        debug!("[online] SendConnectionRequest start_send error: {err}, retrying");
+                        debug!("[client] SendConnectionRequest start_send error: {err}, retrying");
                         continue;
                     }
                     if let Err(err) = ready!(SinkExt::<FrameBody>::poll_flush_unpin(write, cx)) {
-                        debug!("[online] SendConnectionRequest poll_flush error: {err}, retrying");
+                        debug!("[client] SendConnectionRequest poll_flush error: {err}, retrying");
                         continue;
                     }
                     *this.state = State::WaitConnectionRequestReply(pack.take());
@@ -112,7 +112,7 @@ where
                             );
                         }
                         _ => {
-                            debug!("[online] got unexpected packet {body:?} on WaitConnectionRequestReply, fallback to SendConnectionRequest");
+                            debug!("[client] got unexpected packet {body:?} on WaitConnectionRequestReply, fallback to SendConnectionRequest");
                             *this.state = State::SendConnectionRequest(pack.take());
                         }
                     }
@@ -120,19 +120,19 @@ where
                 State::SendNewIncomingConnection(pack) => {
                     if let Err(err) = ready!(SinkExt::<FrameBody>::poll_ready_unpin(write, cx)) {
                         debug!(
-                            "[online] SendNewIncomingConnection poll_ready error: {err}, retrying"
+                            "[client] SendNewIncomingConnection poll_ready error: {err}, retrying"
                         );
                         continue;
                     }
                     if let Err(err) = write.start_send_unpin(pack.clone()) {
                         debug!(
-                            "[online] SendNewIncomingConnection start_send error: {err}, retrying"
+                            "[client] SendNewIncomingConnection start_send error: {err}, retrying"
                         );
                         continue;
                     }
                     if let Err(err) = ready!(SinkExt::<FrameBody>::poll_flush_unpin(write, cx)) {
                         debug!(
-                            "[online] SendNewIncomingConnection poll_flush error: {err}, retrying"
+                            "[client] SendNewIncomingConnection poll_flush error: {err}, retrying"
                         );
                         continue;
                     }
@@ -182,23 +182,23 @@ where
                         FrameBody::DetectLostConnections => *this.state = FilterIOState::SendPing,
                         FrameBody::User(data) => return Poll::Ready(Some(data)),
                         _ => {
-                            debug!("[online] ignore packet {body:?} on Connected",);
+                            debug!("[client] ignore packet {body:?} on Connected",);
                         }
                     }
                 }
                 FilterIOState::SendPing => {
                     if let Err(err) = ready!(this.write.poll_ready_unpin(cx)) {
-                        debug!("[online] SendPing poll_ready error: {err}, retrying");
+                        debug!("[client] SendPing poll_ready error: {err}, retrying");
                         continue;
                     }
                     if let Err(err) = this.write.start_send_unpin(FrameBody::ConnectedPing {
                         client_timestamp: timestamp(),
                     }) {
-                        debug!("[online] SendPing start_send error: {err}, retrying");
+                        debug!("[client] SendPing start_send error: {err}, retrying");
                         continue;
                     }
                     if let Err(err) = ready!(this.write.poll_flush_unpin(cx)) {
-                        debug!("[online] SendPing poll_flush error: {err}, retrying");
+                        debug!("[client] SendPing poll_flush error: {err}, retrying");
                         continue;
                     }
                     *this.state = FilterIOState::Serving;
