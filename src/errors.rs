@@ -10,7 +10,7 @@ pub enum CodecError {
     InvalidPacketLength(&'static str),
     #[error("invalid record type {0}")]
     InvalidRecordType(u8),
-    #[error("invalid packet type {0}")]
+    #[error("invalid packet type {0}, maybe it is a user packet")]
     InvalidPacketType(u8),
     #[error("parted frame error, reason: {0}")]
     PartedFrame(String),

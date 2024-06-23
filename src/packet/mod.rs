@@ -82,11 +82,18 @@ impl PackType {
             0x08 => Ok(PackType::OpenConnectionReply2),
             0x09 => Ok(PackType::ConnectionRequest),
             0x10 => Ok(PackType::ConnectionRequestAccepted),
+            0x11 => Ok(PackType::ConnectionRequestFailed),
             0x12 => Ok(PackType::AlreadyConnected),
             0x13 => Ok(PackType::NewIncomingConnection),
+            0x14 => Ok(PackType::NoFreeIncomingConnections),
             0x15 => Ok(PackType::DisconnectNotification),
+            0x16 => Ok(PackType::ConnectionLost),
+            0x17 => Ok(PackType::ConnectionBanned),
             0x19 => Ok(PackType::IncompatibleProtocolVersion),
+            0x1a => Ok(PackType::IpRecentlyConnected),
+            0x1b => Ok(PackType::Timestamp),
             0x1c => Ok(PackType::UnconnectedPong),
+            0x1d => Ok(PackType::AdvertiseSystem),
             ACK_FLAG.. => Ok(PackType::Ack),
             NACK_FLAG.. => Ok(PackType::Nack),
             VALID_FLAG.. => Ok(PackType::FrameSet),
@@ -197,6 +204,13 @@ impl Packet<Frames<BytesMut>> {
             }
             PackType::AlreadyConnected => {
                 read_buf!(buf, 24, unconnected::Packet::read_already_connected(buf))
+            }
+            PackType::ConnectionRequestFailed => {
+                read_buf!(
+                    buf,
+                    24,
+                    unconnected::Packet::read_connection_request_failed(buf)
+                )
             }
             PackType::OpenConnectionRequest2 => {
                 unconnected::Packet::read_open_connection_request2(buf)

@@ -81,6 +81,20 @@ async fn test_tokio_udp_works() {
             .connect_to("127.0.0.1:19132", config)
             .await
             .unwrap();
+        io.send(Bytes::from_iter(repeat(0xfe).take(512)))
+            .await
+            .unwrap();
+        assert_eq!(
+            io.next().await.unwrap(),
+            Bytes::from_iter(repeat(0xfe).take(512))
+        );
+        io.send(Bytes::from_iter(repeat(0xfe).take(1024)))
+            .await
+            .unwrap();
+        assert_eq!(
+            io.next().await.unwrap(),
+            Bytes::from_iter(repeat(0xfe).take(1024))
+        );
         io.send(Bytes::from_iter(repeat(0xfe).take(2048)))
             .await
             .unwrap();
@@ -88,7 +102,15 @@ async fn test_tokio_udp_works() {
             io.next().await.unwrap(),
             Bytes::from_iter(repeat(0xfe).take(2048))
         );
+        io.send(Bytes::from_iter(repeat(0xfe).take(4096)))
+            .await
+            .unwrap();
+        assert_eq!(
+            io.next().await.unwrap(),
+            Bytes::from_iter(repeat(0xfe).take(4096))
+        );
         SinkExt::<Bytes>::close(&mut io).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
     };
 
     tokio::spawn(client).await.unwrap();

@@ -88,9 +88,9 @@ impl Deref for AddrDropGuard {
 
 impl Drop for AddrDropGuard {
     fn drop(&mut self) {
-        if self.drop_notifier.try_send(self.client_addr).is_err() {
+        if let Err(err) = self.drop_notifier.try_send(self.client_addr) {
             error!(
-                "[server] cannot send IO for {} drop notification to drop_notifier",
+                "[server] cannot send address {} into drop_notifier, err: {err}",
                 self.client_addr
             );
             return;

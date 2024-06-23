@@ -149,6 +149,13 @@ impl Packet {
         })
     }
 
+    pub(super) fn read_connection_request_failed(buf: &mut BytesMut) -> Result<Self, CodecError> {
+        Ok(Packet::ConnectionRequestFailed {
+            magic: buf.get_checked_magic()?, // 16
+            server_guid: buf.get_u64(),      // 8
+        })
+    }
+
     pub(super) fn write(self, buf: &mut BytesMut) {
         // Fixed id (type)
         buf.put_u8(self.pack_type().into());
