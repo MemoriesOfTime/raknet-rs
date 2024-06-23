@@ -44,16 +44,16 @@ pub fn bulk_benchmark(c: &mut Criterion) {
     }
 
     {
-        group.throughput(Throughput::Bytes(short_data.len() as u64 * 100));
-        group.bench_function("short_data_100_clients", |bencher| {
-            configure_bencher(bencher, server_addr, short_data, 100)
+        group.throughput(Throughput::Bytes(short_data.len() as u64 * 10));
+        group.bench_function("short_data_10_clients", |bencher| {
+            configure_bencher(bencher, server_addr, short_data, 10)
         });
     }
 
     {
-        group.throughput(Throughput::Bytes(medium_data.len() as u64 * 100));
-        group.bench_function("medium_data_100_clients", |bencher| {
-            configure_bencher(bencher, server_addr, medium_data, 100)
+        group.throughput(Throughput::Bytes(medium_data.len() as u64 * 10));
+        group.bench_function("medium_data_10_clients", |bencher| {
+            configure_bencher(bencher, server_addr, medium_data, 10)
         });
     }
 

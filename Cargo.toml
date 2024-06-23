@@ -41,6 +41,10 @@ rand = "0.8"
 reqwest = "0.12"
 tokio = { version = "1", features = ["full"] }
 
+# TODO: Remove it when tokio-macros release its new version
+[patch.crates-io]
+tokio-macros = { git = "https://github.com/tokio-rs/tokio.git", rev = "833ee027d0ec44d88765157ec98b6809f0070169" }
+
 [features]
 default = ["tokio-udp"]
 micro-bench = ["dep:rand"]

@@ -23,7 +23,7 @@ fn test_setup() -> TestGuard {
     TestGuard
 }
 
-#[tokio::test]
+#[tokio::test(unhandled_panic = "shutdown_runtime")]
 async fn test_tokio_udp_works() {
     let _guard = test_setup();
 
@@ -81,6 +81,13 @@ async fn test_tokio_udp_works() {
             .connect_to("127.0.0.1:19132", config)
             .await
             .unwrap();
+        io.send(Bytes::from_iter(repeat(0xfe).take(256)))
+            .await
+            .unwrap();
+        assert_eq!(
+            io.next().await.unwrap(),
+            Bytes::from_iter(repeat(0xfe).take(256))
+        );
         io.send(Bytes::from_iter(repeat(0xfe).take(512)))
             .await
             .unwrap();
