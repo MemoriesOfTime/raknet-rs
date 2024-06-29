@@ -19,6 +19,7 @@ impl Drop for TestGuard {
 
 #[must_use]
 fn test_setup() -> TestGuard {
+    std::env::set_var("RUST_LOG", "trace");
     env_logger::init();
     TestGuard
 }
@@ -43,8 +44,9 @@ async fn test_tokio_udp_works() {
             .unwrap()
             .make_incoming(config);
         loop {
-            let mut io = incoming.next().await.unwrap();
+            let io = incoming.next().await.unwrap();
             tokio::spawn(async move {
+                tokio::pin!(io);
                 let mut ticker = tokio::time::interval(Duration::from_millis(10));
                 loop {
                     tokio::select! {

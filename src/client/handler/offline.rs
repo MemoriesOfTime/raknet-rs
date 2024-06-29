@@ -75,19 +75,19 @@ where
                 State::SendOpenConnectionRequest1(pack) => {
                     if let Err(err) = ready!(frame.poll_ready_unpin(cx)) {
                         debug!(
-                            "[offline] SendingOpenConnectionRequest1 poll_ready error: {err}, retrying"
+                            "[client] SendingOpenConnectionRequest1 poll_ready error: {err}, retrying"
                         );
                         continue;
                     }
                     if let Err(err) = frame.start_send_unpin((pack.clone(), *this.server_addr)) {
                         debug!(
-                            "[offline] SendingOpenConnectionRequest1 start_send error: {err}, retrying"
+                            "[client] SendingOpenConnectionRequest1 start_send error: {err}, retrying"
                         );
                         continue;
                     }
                     if let Err(err) = ready!(frame.poll_flush_unpin(cx)) {
                         debug!(
-                            "[offline] SendingOpenConnectionRequest1 poll_flush error: {err}, retrying"
+                            "[client] SendingOpenConnectionRequest1 poll_flush error: {err}, retrying"
                         );
                         continue;
                     }
@@ -117,19 +117,19 @@ where
                 State::SendOpenConnectionRequest2(pack) => {
                     if let Err(err) = ready!(frame.poll_ready_unpin(cx)) {
                         debug!(
-                            "[offline] SendOpenConnectionRequest2 poll_ready error: {err}, retrying"
+                            "[client] SendOpenConnectionRequest2 poll_ready error: {err}, retrying"
                         );
                         continue;
                     }
                     if let Err(err) = frame.start_send_unpin((pack.clone(), *this.server_addr)) {
                         debug!(
-                            "[offline] SendOpenConnectionRequest2 start_send error: {err}, retrying"
+                            "[client] SendOpenConnectionRequest2 start_send error: {err}, retrying"
                         );
                         continue;
                     }
                     if let Err(err) = ready!(frame.poll_flush_unpin(cx)) {
                         debug!(
-                            "[offline] SendOpenConnectionRequest2 poll_flush error: {err}, retrying"
+                            "[client] SendOpenConnectionRequest2 poll_flush error: {err}, retrying"
                         );
                         continue;
                     }

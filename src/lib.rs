@@ -55,8 +55,11 @@ mod packet;
 /// Utils
 mod utils;
 
-/// Common handlers
-mod common;
+/// Incoming/Outgoing guard
+mod guard;
+
+/// Acknowledge handler
+mod ack;
 
 /// Raknet server
 pub mod server;
@@ -82,6 +85,21 @@ use std::net::SocketAddr;
 
 use bytes::Bytes;
 use packet::connected::Reliability;
+
+#[derive(Debug, Clone, Copy)]
+enum RoleContext {
+    Client,
+    Server,
+}
+
+impl std::fmt::Display for RoleContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RoleContext::Client => write!(f, "client"),
+            RoleContext::Server => write!(f, "server"),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 struct PeerContext {

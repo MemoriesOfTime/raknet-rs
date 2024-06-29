@@ -18,7 +18,7 @@ use self::encoder::{Fragmented, FrameEncoded};
 use crate::errors::CodecError;
 use crate::packet::connected::{Frame, FrameBody, FrameSet, Frames};
 use crate::utils::{priority_mpsc, u24, Logged};
-use crate::Message;
+use crate::{Message, RoleContext};
 
 /// Codec config
 #[derive(Clone, Copy, Debug, Builder)]
@@ -58,6 +58,7 @@ pub(crate) trait Decoded {
         config: Config,
         outgoing_ack_tx: priority_mpsc::Sender<u24>,
         outgoing_nack_tx: priority_mpsc::Sender<u24>,
+        role: RoleContext,
     ) -> impl Stream<Item = FrameBody>;
 }
 
@@ -70,14 +71,8 @@ where
         config: Config,
         outgoing_ack_tx: priority_mpsc::Sender<u24>,
         outgoing_nack_tx: priority_mpsc::Sender<u24>,
+        role: RoleContext,
     ) -> impl Stream<Item = FrameBody> {
-        fn ok_f(pack: &FrameBody) {
-            trace!("[decoder] received packet: {:?}", pack);
-        }
-        fn err_f(err: CodecError) {
-            debug!("[decoder] got codec error: {err} when decode packet");
-        }
-
         self.map(Ok)
             .deduplicated(config.max_dedup_gap, outgoing_ack_tx.clone())
             .defragmented(
@@ -88,7 +83,14 @@ where
             )
             .ordered(config.max_channels)
             .frame_decoded()
-            .logged_all(ok_f, err_f)
+            .logged_all(
+                move |pack| {
+                    trace!("[{role}] received packet: {:?}", pack);
+                },
+                move |err| {
+                    debug!("[{role}] got codec error: {err} when decode packet");
+                },
+            )
     }
 }
 
@@ -102,7 +104,7 @@ pub(crate) trait Encoded {
 
 impl<F> Encoded for F
 where
-    F: Sink<Frames<Bytes>, Error = CodecError> + Sink<Frame<Bytes>, Error = CodecError>,
+    F: Sink<Frame<Bytes>, Error = CodecError>,
 {
     fn frame_encoded(
         self,
@@ -123,6 +125,7 @@ pub mod micro_bench {
     use super::{BytesMut, Config, Decoded, FrameSet, Frames, Stream};
     use crate::packet::connected::{Flags, Fragment, Frame, Ordered, Reliability};
     use crate::utils::priority_mpsc;
+    use crate::RoleContext;
 
     #[derive(derive_builder::Builder, Debug, Clone)]
     pub struct Options {
@@ -261,9 +264,12 @@ pub mod micro_bench {
             let (outgoing_ack_tx, _outgoing_ack_rx) = priority_mpsc::unbounded();
             let (outgoing_nack_tx, _outgoing_nack_rx) = priority_mpsc::unbounded();
 
-            let stream = self
-                .into_stream()
-                .decoded(config, outgoing_ack_tx, outgoing_nack_tx);
+            let stream = self.into_stream().decoded(
+                config,
+                outgoing_ack_tx,
+                outgoing_nack_tx,
+                RoleContext::Server,
+            );
             #[futures_async_stream::for_await]
             for res in stream {
                 let body = match res {
@@ -280,9 +286,12 @@ pub mod micro_bench {
             let (outgoing_ack_tx, _outgoing_ack_rx) = priority_mpsc::unbounded();
             let (outgoing_nack_tx, _outgoing_nack_rx) = priority_mpsc::unbounded();
 
-            let stream = self
-                .into_stream()
-                .decoded(config, outgoing_ack_tx, outgoing_nack_tx);
+            let stream = self.into_stream().decoded(
+                config,
+                outgoing_ack_tx,
+                outgoing_nack_tx,
+                RoleContext::Server,
+            );
             #[futures_async_stream::for_await]
             for _r in stream {}
         }

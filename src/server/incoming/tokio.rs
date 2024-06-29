@@ -4,9 +4,9 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
 use flume::{Receiver, Sender};
-use futures::Stream;
+use futures::{SinkExt, Stream};
 use log::{debug, error, info};
 use minitrace::Span;
 use pin_project_lite::pin_project;
@@ -16,15 +16,16 @@ use tokio_util::udp::UdpFramed;
 use super::{Config, MakeIncoming};
 use crate::codec::tokio::Codec;
 use crate::codec::{Decoded, Encoded};
-use crate::common::guard::{HandleIncoming, HandleOutgoingAck, Peer};
 use crate::errors::CodecError;
+use crate::guard::{HandleIncoming, HandleOutgoingAck};
 use crate::io::{IOImpl, IO};
 use crate::packet::connected::{self, Frames};
-use crate::packet::Packet;
+use crate::packet::{unconnected, Packet};
 use crate::server::handler::offline;
 use crate::server::handler::offline::HandleOffline;
 use crate::server::handler::online::HandleOnline;
-use crate::utils::{priority_mpsc, Log, Logged, SinkExt, WithAddress};
+use crate::utils::{priority_mpsc, Log, Logged, StreamExt};
+use crate::RoleContext;
 
 type OfflineHandler = offline::OfflineHandler<
     Log<UdpFramed<Codec, Arc<TokioUdpSocket>>, (Packet<Frames<BytesMut>>, SocketAddr), CodecError>,
@@ -54,16 +55,13 @@ impl Incoming {
 
 impl MakeIncoming for TokioUdpSocket {
     fn make_incoming(self, config: Config) -> impl Stream<Item = impl IO> {
-        fn err_f(err: CodecError) {
-            debug!("[frame] got codec error: {err} when decode frames");
-        }
-
         let socket = Arc::new(self);
         let (drop_notifier, drop_receiver) = flume::unbounded();
-
         Incoming {
             offline: UdpFramed::new(Arc::clone(&socket), Codec)
-                .logged_err(err_f)
+                .logged_err(|err| {
+                    debug!("[server] got codec error: {err} when decode offline frames");
+                })
                 .handle_offline(config.offline_config()),
             socket,
             config,
@@ -106,18 +104,22 @@ impl Stream for Incoming {
             let (outgoing_nack_tx, outgoing_nack_rx) = priority_mpsc::unbounded();
 
             let write = UdpFramed::new(Arc::clone(this.socket), Codec)
-                .with_addr(peer.addr)
                 .handle_outgoing(
                     incoming_ack_rx,
                     incoming_nack_rx,
                     outgoing_ack_rx,
                     outgoing_nack_rx,
                     this.config.send_buf_cap,
-                    peer.mtu,
-                    Peer::Server,
+                    peer.clone(),
+                    RoleContext::Server,
                 )
                 .frame_encoded(peer.mtu, this.config.codec_config());
-            let raw_write = UdpFramed::new(Arc::clone(this.socket), Codec).with_addr(peer.addr);
+
+            let raw_write = UdpFramed::new(Arc::clone(this.socket), Codec).with(
+                move |input: unconnected::Packet| async move {
+                    Ok((Packet::<Frames<Bytes>>::Unconnected(input), peer.addr))
+                },
+            );
 
             let io = router_rx
                 .into_stream()
@@ -126,6 +128,7 @@ impl Stream for Incoming {
                     this.config.codec_config(),
                     outgoing_ack_tx,
                     outgoing_nack_tx,
+                    RoleContext::Server,
                 )
                 .handle_online(
                     write,
@@ -137,7 +140,7 @@ impl Stream for Incoming {
                 .enter_on_item::<Span, _>("io", move |span| {
                     span.with_properties(|| {
                         [
-                            ("peer", peer.addr.to_string()),
+                            ("addr", peer.addr.to_string()),
                             ("mtu", peer.mtu.to_string()),
                         ]
                     })

@@ -27,8 +27,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     tokio::spawn(async move {
         loop {
-            let mut io = incoming.next().await.unwrap();
+            let io = incoming.next().await.unwrap();
             tokio::spawn(async move {
+                tokio::pin!(io);
                 loop {
                     if let Some(data) = io.next().await {
                         println!(

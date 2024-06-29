@@ -11,10 +11,11 @@ use crate::client::handler::offline::HandleOffline;
 use crate::client::handler::online::HandleOnline;
 use crate::codec::tokio::Codec;
 use crate::codec::{Decoded, Encoded};
-use crate::common::guard::{HandleIncoming, HandleOutgoingAck, Peer};
-use crate::errors::{CodecError, Error};
+use crate::errors::Error;
+use crate::guard::{HandleIncoming, HandleOutgoingAck};
 use crate::io::{IOImpl, IO};
-use crate::utils::{priority_mpsc, Logged, WithAddress};
+use crate::utils::{priority_mpsc, Logged};
+use crate::{PeerContext, RoleContext};
 
 impl ConnectTo for TokioUdpSocket {
     async fn connect_to(
@@ -22,9 +23,6 @@ impl ConnectTo for TokioUdpSocket {
         addrs: impl ToSocketAddrs,
         config: super::Config,
     ) -> Result<impl IO, Error> {
-        fn err_f(err: CodecError) {
-            debug!("[frame] got codec error: {err} when decode frames");
-        }
         let socket = Arc::new(self);
 
         let (incoming_ack_tx, incoming_ack_rx) = flume::unbounded();
@@ -46,24 +44,33 @@ impl ConnectTo for TokioUdpSocket {
         };
 
         let write = UdpFramed::new(Arc::clone(&socket), Codec)
-            .with_addr(addr)
             .handle_outgoing(
                 incoming_ack_rx,
                 incoming_nack_rx,
                 outgoing_ack_rx,
                 outgoing_nack_rx,
                 config.send_buf_cap,
-                config.mtu,
-                Peer::Client,
+                PeerContext {
+                    addr,
+                    mtu: config.mtu,
+                },
+                RoleContext::Client,
             )
             .frame_encoded(config.mtu, config.codec_config());
 
         let io = UdpFramed::new(socket, Codec)
-            .logged_err(err_f)
+            .logged_err(|err| {
+                debug!("[client] got codec error: {err} when decode offline frames");
+            })
             .handle_offline(addr, config.offline_config())
             .await?
             .handle_incoming(incoming_ack_tx, incoming_nack_tx)
-            .decoded(config.codec_config(), outgoing_ack_tx, outgoing_nack_tx)
+            .decoded(
+                config.codec_config(),
+                outgoing_ack_tx,
+                outgoing_nack_tx,
+                RoleContext::Client,
+            )
             .handle_online(write, addr, config.client_guid)
             .await?;
 

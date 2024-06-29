@@ -1,4 +1,3 @@
-use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
@@ -6,30 +5,36 @@ use futures::{Sink, Stream};
 use pin_project_lite::pin_project;
 
 pub(crate) trait Logged<T, E>: Sized {
-    fn logged_err(self, f: fn(E)) -> Log<Self, T, E>;
+    fn logged_err(self, f: impl Fn(&E) + Send + Sync + 'static) -> Log<Self, T, E>;
 
-    fn logged_all(self, ok_f: fn(&T), err_f: fn(E)) -> Log<Self, T, E>;
+    fn logged_all(
+        self,
+        ok_f: impl Fn(&T) + Send + Sync + 'static,
+        err_f: impl Fn(&E) + Send + Sync + 'static,
+    ) -> Log<Self, T, E>;
 }
 
 impl<F, T, E> Logged<T, E> for F
 where
     F: Stream<Item = Result<T, E>>,
 {
-    fn logged_err(self, f: fn(E)) -> Log<Self, T, E> {
+    fn logged_err(self, f: impl Fn(&E) + Send + Sync + 'static) -> Log<Self, T, E> {
         Log {
             source: self,
-            err_f: f,
+            err_f: Box::new(f),
             ok_f: None,
-            _mark: PhantomData,
         }
     }
 
-    fn logged_all(self, ok_f: fn(&T), err_f: fn(E)) -> Log<Self, T, E> {
+    fn logged_all(
+        self,
+        ok_f: impl Fn(&T) + Send + Sync + 'static,
+        err_f: impl Fn(&E) + Send + Sync + 'static,
+    ) -> Log<Self, T, E> {
         Log {
             source: self,
-            err_f,
-            ok_f: Some(ok_f),
-            _mark: PhantomData,
+            err_f: Box::new(err_f),
+            ok_f: Some(Box::new(ok_f)),
         }
     }
 }
@@ -39,9 +44,8 @@ pin_project! {
     pub(crate) struct Log<F, T, E> {
         #[pin]
         source: F,
-        err_f: fn(E),
-        ok_f: Option<fn(&T)>,
-        _mark: PhantomData<T>,
+        ok_f: Option<Box<dyn Fn(&T) + Send + Sync>>,
+        err_f: Box<dyn Fn(&E) + Send + Sync>,
     }
 }
 
@@ -60,7 +64,7 @@ where
             };
             let v = match res {
                 Ok(v) => v,
-                Err(err) => {
+                Err(ref err) => {
                     (*this.err_f)(err);
                     continue;
                 }

@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, VecDeque};
+use std::net::SocketAddr;
 use std::ops::Add;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
@@ -15,8 +16,11 @@ use crate::errors::CodecError;
 use crate::packet::connected::{self, AckOrNack, Frame, FrameSet, Frames, Record};
 use crate::packet::{Packet, FRAME_SET_HEADER_SIZE};
 use crate::utils::{priority_mpsc, u24};
+use crate::{PeerContext, RoleContext};
 
 pin_project! {
+    // IncomingGuard delivers all acknowledgement packets into outgoing guard, mapping
+    // connected::Packet into FrameSet
     pub(crate) struct IncomingGuard<F> {
         #[pin]
         frame: F,
@@ -76,22 +80,9 @@ where
     }
 }
 
-#[derive(Debug)]
-pub(crate) enum Peer {
-    Client,
-    Server,
-}
-
-impl std::fmt::Display for Peer {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Peer::Client => write!(f, "client"),
-            Peer::Server => write!(f, "server"),
-        }
-    }
-}
-
 pin_project! {
+    // OutgoingGuard equips with Acknowledgement handler and packets buffer and provides
+    // resending policies and
     pub(crate) struct OutgoingGuard<F> {
         #[pin]
         frame: F,
@@ -101,9 +92,9 @@ pin_project! {
         outgoing_nack_rx: priority_mpsc::Receiver<u24>,
         seq_num_write_index: u24,
         buf: VecDeque<Frame<Bytes>>,
-        peer: Peer,
+        peer: PeerContext,
+        role: RoleContext,
         cap: usize,
-        mtu: u16,
         // ordered by seq_num
         // TODO: use rbtree?
         resending: BTreeMap<u24, (Frames<Bytes>, Instant)>,
@@ -119,14 +110,14 @@ pub(crate) trait HandleOutgoingAck: Sized {
         outgoing_ack_rx: priority_mpsc::Receiver<u24>,
         outgoing_nack_rx: priority_mpsc::Receiver<u24>,
         cap: usize,
-        mtu: u16,
-        peer: Peer,
+        peer: PeerContext,
+        role: RoleContext,
     ) -> OutgoingGuard<Self>;
 }
 
 impl<F> HandleOutgoingAck for F
 where
-    F: Sink<Packet<Frames<Bytes>>, Error = CodecError>,
+    F: Sink<(Packet<Frames<Bytes>>, SocketAddr), Error = CodecError>,
 {
     fn handle_outgoing(
         self,
@@ -135,8 +126,8 @@ where
         outgoing_ack_rx: priority_mpsc::Receiver<u24>,
         outgoing_nack_rx: priority_mpsc::Receiver<u24>,
         cap: usize,
-        mtu: u16,
-        peer: Peer,
+        peer: PeerContext,
+        role: RoleContext,
     ) -> OutgoingGuard<Self> {
         assert!(cap > 0, "cap must larger than 0");
         OutgoingGuard {
@@ -148,8 +139,8 @@ where
             seq_num_write_index: 0.into(),
             buf: VecDeque::with_capacity(cap),
             peer,
+            role,
             cap,
-            mtu,
             resending: BTreeMap::new(),
         }
     }
@@ -160,14 +151,14 @@ const RTO: Duration = Duration::from_millis(77);
 
 impl<F> OutgoingGuard<F>
 where
-    F: Sink<Packet<Frames<Bytes>>, Error = CodecError>,
+    F: Sink<(Packet<Frames<Bytes>>, SocketAddr), Error = CodecError>,
 {
     fn try_ack(self: Pin<&mut Self>) {
         let this = self.project();
         for ack in this.incoming_ack_rx.try_iter() {
             trace!(
                 "[{}] receive ack {ack:?}, total count: {}",
-                this.peer,
+                this.role,
                 ack.total_cnt()
             );
             for record in ack.records {
@@ -187,7 +178,7 @@ where
         for nack in this.incoming_nack_rx.try_iter() {
             trace!(
                 "[{}] receive nack {nack:?}, total count: {}",
-                this.peer,
+                this.role,
                 nack.total_cnt()
             );
             for record in nack.records {
@@ -219,7 +210,7 @@ where
             if now < entry.get().1 {
                 break;
             }
-            trace!("[{}] resend stale frame set {}", this.peer, entry.key());
+            trace!("[{}] resend stale frame set {}", this.role, entry.key());
             let (set, _) = entry.remove();
             this.buf.extend(set);
         }
@@ -240,23 +231,25 @@ where
             || !this.outgoing_nack_rx.is_empty()
             || !this.buf.is_empty()
         {
-            // Round-Robin
+            // TODO: Round-Robin
 
             // 1st. sent the ack
             if sent {
                 ready!(this.frame.as_mut().poll_ready(cx))?;
                 sent = false;
             }
-            if let Some(ack) = AckOrNack::extend_from(this.outgoing_ack_rx.recv_batch(), *this.mtu)
+            if let Some(ack) =
+                AckOrNack::extend_from(this.outgoing_ack_rx.recv_batch(), this.peer.mtu)
             {
                 trace!(
                     "[{}] send ack {ack:?}, total count: {}",
-                    this.peer,
+                    this.role,
                     ack.total_cnt()
                 );
-                this.frame
-                    .as_mut()
-                    .start_send(Packet::Connected(connected::Packet::Ack(ack)))?;
+                this.frame.as_mut().start_send((
+                    Packet::Connected(connected::Packet::Ack(ack)),
+                    this.peer.addr,
+                ))?;
                 sent = true;
             }
 
@@ -266,16 +259,17 @@ where
                 sent = false;
             }
             if let Some(nack) =
-                AckOrNack::extend_from(this.outgoing_nack_rx.recv_batch(), *this.mtu)
+                AckOrNack::extend_from(this.outgoing_nack_rx.recv_batch(), this.peer.mtu)
             {
                 trace!(
                     "[{}] send ack {nack:?}, total count: {}",
-                    this.peer,
+                    this.role,
                     nack.total_cnt()
                 );
-                this.frame
-                    .as_mut()
-                    .start_send(Packet::Connected(connected::Packet::Nack(nack)))?;
+                this.frame.as_mut().start_send((
+                    Packet::Connected(connected::Packet::Nack(nack)),
+                    this.peer.addr,
+                ))?;
                 sent = true;
             }
 
@@ -290,7 +284,7 @@ where
 
             // TODO: implement sliding window congestion control to select a proper transmission
             // bandwidth
-            let mut remain_mtu = *this.mtu as usize - FRAME_SET_HEADER_SIZE;
+            let mut remain_mtu = this.peer.mtu as usize - FRAME_SET_HEADER_SIZE;
             while let Some(frame) = this.buf.front() {
                 if remain_mtu >= frame.size() {
                     if frame.flags.reliability.is_reliable() {
@@ -307,11 +301,10 @@ where
                     seq_num: *this.seq_num_write_index,
                     set: frames,
                 };
-                this.frame
-                    .as_mut()
-                    .start_send(Packet::Connected(connected::Packet::FrameSet(
-                        frame_set.clone(),
-                    )))?;
+                this.frame.as_mut().start_send((
+                    Packet::Connected(connected::Packet::FrameSet(frame_set.clone())),
+                    this.peer.addr,
+                ))?;
                 sent = true;
                 if reliable {
                     // keep for resending
@@ -326,9 +319,9 @@ where
     }
 }
 
-impl<F> Sink<Frames<Bytes>> for OutgoingGuard<F>
+impl<F> Sink<Frame<Bytes>> for OutgoingGuard<F>
 where
-    F: Sink<Packet<Frames<Bytes>>, Error = CodecError>,
+    F: Sink<(Packet<Frames<Bytes>>, SocketAddr), Error = CodecError>,
 {
     type Error = CodecError;
 
@@ -346,9 +339,9 @@ where
         }
     }
 
-    fn start_send(self: Pin<&mut Self>, frames: Frames<Bytes>) -> Result<(), Self::Error> {
+    fn start_send(self: Pin<&mut Self>, frame: Frame<Bytes>) -> Result<(), Self::Error> {
         let this = self.project();
-        this.buf.extend(frames);
+        this.buf.push_back(frame);
         Ok(())
     }
 
@@ -370,30 +363,5 @@ where
                 && self.outgoing_nack_rx.is_empty()
         );
         self.project().frame.poll_close(cx)
-    }
-}
-
-impl<F> Sink<Frame<Bytes>> for OutgoingGuard<F>
-where
-    F: Sink<Packet<Frames<Bytes>>, Error = CodecError>,
-{
-    type Error = CodecError;
-
-    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Sink::<Frames<Bytes>>::poll_ready(self, cx)
-    }
-
-    fn start_send(self: Pin<&mut Self>, frame: Frame<Bytes>) -> Result<(), Self::Error> {
-        let this = self.project();
-        this.buf.push_back(frame); // optimizing for non-split frame
-        Ok(())
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Sink::<Frames<Bytes>>::poll_flush(self, cx)
-    }
-
-    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Sink::<Frames<Bytes>>::poll_close(self, cx)
     }
 }

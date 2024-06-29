@@ -140,8 +140,9 @@ fn spawn_server() -> SocketAddr {
             .build()
             .unwrap();
         let mut incoming = sock.make_incoming(config);
-        while let Some(mut io) = incoming.next().await {
+        while let Some(io) = incoming.next().await {
             tokio::spawn(async move {
+                tokio::pin!(io);
                 let mut ticker = tokio::time::interval(Duration::from_millis(10));
                 loop {
                     tokio::select! {

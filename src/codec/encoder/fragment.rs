@@ -8,7 +8,7 @@ use minitrace::local::LocalSpan;
 use pin_project_lite::pin_project;
 
 use crate::errors::CodecError;
-use crate::packet::connected::{self, Flags, Frame, Frames, Ordered, Reliability};
+use crate::packet::connected::{self, Flags, Frame, Ordered, Reliability};
 use crate::packet::{PackType, FRAME_SET_HEADER_SIZE};
 use crate::utils::u24;
 use crate::Message;
@@ -30,7 +30,7 @@ pub(crate) trait Fragmented: Sized {
 
 impl<F> Fragmented for F
 where
-    F: Sink<Frames<Bytes>, Error = CodecError> + Sink<Frame<Bytes>, Error = CodecError>,
+    F: Sink<Frame<Bytes>, Error = CodecError>,
 {
     fn fragmented(self, mtu: u16, max_channels: usize) -> Fragment<Self> {
         Fragment {
@@ -45,16 +45,16 @@ where
 
 impl<F> Sink<Message> for Fragment<F>
 where
-    F: Sink<Frames<Bytes>, Error = CodecError> + Sink<Frame<Bytes>, Error = CodecError>,
+    F: Sink<Frame<Bytes>, Error = CodecError>,
 {
     type Error = CodecError;
 
     fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Sink::<Frames<Bytes>>::poll_ready(self.project().frame, cx)
+        self.project().frame.poll_ready(cx)
     }
 
     fn start_send(self: Pin<&mut Self>, msg: Message) -> Result<(), Self::Error> {
-        let this = self.project();
+        let mut this = self.project();
 
         let _span = LocalSpan::enter_with_local_parent("codec.fragment").with_properties(|| {
             [
@@ -132,7 +132,6 @@ where
         *this.split_write_index += 1;
 
         // exceeding the mtu, split the data
-        let mut frames = Vec::with_capacity(split);
         let mut data = msg.into_data();
         for i in 0..split {
             let (reliable_frame_index, ordered) = common()?;
@@ -148,7 +147,7 @@ where
                 }),
                 body: data.split_to(min(per_len, data.len())),
             };
-            frames.push(frame);
+            this.frame.as_mut().start_send(frame)?;
         }
 
         if reliability.is_sequenced_or_ordered() {
@@ -160,17 +159,18 @@ where
             "split failed, there still remains data"
         );
 
-        this.frame.start_send(frames)
+        Ok(())
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Sink::<Frames<Bytes>>::poll_flush(self.project().frame, cx)
+        self.project().frame.poll_flush(cx)
     }
 
+    // FIXME: wrong implementation
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         let mut this = self.project();
         let mut frame = this.frame.as_mut();
-        ready!(Sink::<Frames<Bytes>>::poll_ready(frame.as_mut(), cx))?;
+        ready!(frame.as_mut().poll_ready(cx))?;
 
         let reliable_frame_index = Some(*this.reliable_write_index);
         *this.reliable_write_index += 1;
@@ -185,13 +185,14 @@ where
             body: Bytes::from_static(&[PackType::DisconnectNotification as u8]),
         })?;
 
-        ready!(Sink::<Frames<Bytes>>::poll_flush(frame.as_mut(), cx))?;
-        Sink::<Frames<Bytes>>::poll_close(frame.as_mut(), cx)
+        ready!(frame.as_mut().poll_flush(cx))?;
+        frame.as_mut().poll_close(cx)
     }
 }
 
 #[cfg(test)]
 mod test {
+    use connected::Frames;
     use futures::SinkExt;
 
     use super::*;

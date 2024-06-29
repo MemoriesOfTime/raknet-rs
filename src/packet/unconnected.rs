@@ -92,8 +92,12 @@ impl Packet {
             server_guid: buf.get_u64(),      // 8
             magic: buf.get_checked_magic()?, // 16
             data: {
-                let len = buf.get_u16();
-                buf.split_off(len as usize).freeze()
+                let len = buf.get_u16() as usize;
+                read_buf!(buf, len, {
+                    let data = Bytes::copy_from_slice(&buf.chunk()[..len]);
+                    buf.advance(len);
+                    data
+                })
             }, // > 2
         })
     }
