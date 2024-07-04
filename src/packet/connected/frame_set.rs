@@ -9,7 +9,11 @@ use crate::packet::{
 };
 use crate::utils::{u24, BufExt, BufMutExt};
 
-pub(crate) type Frames<B> = Vec<Frame<B>>;
+pub(crate) type Frames<B = Bytes> = Vec<Frame<B>>;
+
+pub(crate) type FramesMut = Frames<BytesMut>;
+
+pub(crate) type FrameMut = Frame<BytesMut>;
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct FrameSet<S> {
@@ -17,7 +21,7 @@ pub(crate) struct FrameSet<S> {
     pub(crate) set: S,
 }
 
-impl FrameSet<Frames<BytesMut>> {
+impl FrameSet<FramesMut> {
     pub(super) fn read(buf: &mut BytesMut) -> Result<Self, CodecError> {
         let seq_num = read_buf!(buf, 3, buf.get_u24_le());
         let mut frames = vec![];
@@ -48,7 +52,7 @@ impl<B: Buf> FrameSet<Frames<B>> {
 }
 
 #[derive(PartialEq, Clone)]
-pub(crate) struct Frame<B> {
+pub(crate) struct Frame<B = Bytes> {
     pub(crate) flags: Flags,
     pub(crate) reliable_frame_index: Option<u24>,
     pub(crate) seq_frame_index: Option<u24>,
@@ -70,8 +74,8 @@ impl<B: Buf> std::fmt::Debug for Frame<B> {
     }
 }
 
-impl Frame<BytesMut> {
-    pub(crate) fn freeze(self) -> Frame<Bytes> {
+impl FrameMut {
+    pub(crate) fn freeze(self) -> Frame {
         Frame {
             body: self.body.freeze(),
             ..self

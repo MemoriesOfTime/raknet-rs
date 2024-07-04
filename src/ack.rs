@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::AtomicBool;
 
-use bytes::Bytes;
 use flume::{Receiver, Sender};
 use log::trace;
 use minstant::Instant;
@@ -48,8 +47,8 @@ impl Acknowledgement {
 
     pub(crate) fn filter_resending(
         &self,
-        resending: &mut BTreeMap<u24, (Frames<Bytes>, Instant)>,
-        buffer: &mut VecDeque<Frame<Bytes>>,
+        resending: &mut BTreeMap<u24, (Frames, Instant)>,
+        buffer: &mut VecDeque<Frame>,
     ) {
         for ack in self.incoming_ack_rx.try_iter() {
             trace!(

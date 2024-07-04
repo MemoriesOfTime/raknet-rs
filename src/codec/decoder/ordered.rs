@@ -137,7 +137,7 @@ mod test {
     use crate::errors::CodecError;
     use crate::packet::connected::{Flags, Frame, FrameSet, Ordered};
 
-    fn frame_sets(idx: impl IntoIterator<Item = (u8, u32)>) -> Vec<FrameSet<Frame<Bytes>>> {
+    fn frame_sets(idx: impl IntoIterator<Item = (u8, u32)>) -> Vec<FrameSet<Frame>> {
         idx.into_iter()
             .map(|(channel, frame_index)| FrameSet {
                 seq_num: 0.into(),

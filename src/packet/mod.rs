@@ -4,6 +4,7 @@ pub(crate) mod unconnected;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
 use bytes::{Buf, BufMut, BytesMut};
+use connected::FramesMut;
 
 use self::connected::Frames;
 use crate::errors::CodecError;
@@ -151,7 +152,7 @@ impl<B: Buf> Packet<Frames<B>> {
     }
 }
 
-impl Packet<Frames<BytesMut>> {
+impl Packet<FramesMut> {
     pub(crate) fn read(buf: &mut BytesMut) -> Result<Option<Self>, CodecError> {
         if buf.is_empty() {
             return Ok(None);

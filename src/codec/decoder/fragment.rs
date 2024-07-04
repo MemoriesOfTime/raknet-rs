@@ -4,14 +4,14 @@ use std::num::NonZeroUsize;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::BufMut;
 use futures::{ready, Stream, StreamExt};
 use lru::LruCache;
 use minitrace::local::LocalSpan;
 use pin_project_lite::pin_project;
 
 use crate::errors::CodecError;
-use crate::packet::connected::{Fragment, Frame, FrameSet, Frames};
+use crate::packet::connected::{Fragment, Frame, FrameMut, FrameSet, FramesMut};
 use crate::utils::{priority_mpsc, u24};
 
 const DEFAULT_DEFRAGMENT_BUF_SIZE: usize = 512;
@@ -19,7 +19,7 @@ const DEFAULT_DEFRAGMENT_BUF_SIZE: usize = 512;
 /// Frame parts belonging to a same parted id
 struct FramePart {
     parted_index: Reverse<u32>,
-    frame: Frame<BytesMut>,
+    frame: FrameMut,
 }
 
 impl PartialEq for FramePart {
@@ -54,7 +54,7 @@ pin_project! {
         // reassemble parts helper. [`LruCache`] used to protect from causing OOM due to malicious
         // users sending a large number of parted IDs.
         parts: LruCache<u16, BinaryHeap<FramePart>>,
-        buffer: VecDeque<FrameSet<Frame<Bytes>>>,
+        buffer: VecDeque<FrameSet<Frame>>,
         seq_num_read_index: u24,
         outgoing_ack_tx: priority_mpsc::Sender<u24>,
         outgoing_nack_tx: priority_mpsc::Sender<u24>,
@@ -73,7 +73,7 @@ pub(crate) trait DeFragmented: Sized {
 
 impl<F> DeFragmented for F
 where
-    F: Stream<Item = Result<FrameSet<Frames<BytesMut>>, CodecError>>,
+    F: Stream<Item = Result<FrameSet<FramesMut>, CodecError>>,
 {
     fn defragmented(
         self,
@@ -96,9 +96,9 @@ where
 
 impl<F> Stream for DeFragment<F>
 where
-    F: Stream<Item = Result<FrameSet<Frames<BytesMut>>, CodecError>>,
+    F: Stream<Item = Result<FrameSet<FramesMut>, CodecError>>,
 {
-    type Item = Result<FrameSet<Frame<Bytes>>, CodecError>;
+    type Item = Result<FrameSet<Frame>, CodecError>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
@@ -160,7 +160,7 @@ where
                     // parted_index is always less than parted_size, frames_queue length
                     // reaches parted_size and frame is hashed by parted_index, so here we
                     // get the complete frames vector
-                    let merged_frame: Frame<Bytes> = this
+                    let merged_frame: Frame = this
                         .parts
                         .pop(&parted_id)
                         .expect("parted_id should be set before")
@@ -212,12 +212,12 @@ mod test {
 
     use super::DeFragment;
     use crate::errors::CodecError;
-    use crate::packet::connected::{Flags, Fragment, Frame, FrameSet, Frames};
+    use crate::packet::connected::{Flags, Fragment, Frame, FrameSet, FramesMut};
     use crate::utils::priority_mpsc;
 
     fn frame_set<'a, T: AsRef<str> + 'a>(
         idx: impl IntoIterator<Item = &'a (u32, u16, u32, T)>,
-    ) -> FrameSet<Frames<BytesMut>> {
+    ) -> FrameSet<FramesMut> {
         FrameSet {
             seq_num: 0.into(),
             set: idx
@@ -238,9 +238,7 @@ mod test {
         }
     }
 
-    fn no_frag_frame_set<'a>(
-        bodies: impl IntoIterator<Item = &'a str>,
-    ) -> FrameSet<Frames<BytesMut>> {
+    fn no_frag_frame_set<'a>(bodies: impl IntoIterator<Item = &'a str>) -> FrameSet<FramesMut> {
         FrameSet {
             seq_num: 0.into(),
             set: bodies

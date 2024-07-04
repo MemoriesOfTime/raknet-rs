@@ -193,7 +193,7 @@ mod test {
         assert_eq!(window.received_status.len(), 0);
     }
 
-    fn frame_set(idx: impl IntoIterator<Item = u32>) -> FrameSet<Frames<Bytes>> {
+    fn frame_set(idx: impl IntoIterator<Item = u32>) -> FrameSet<Frames> {
         FrameSet {
             seq_num: 0.into(),
             set: idx

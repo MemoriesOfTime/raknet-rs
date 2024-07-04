@@ -30,7 +30,7 @@ pub(crate) trait Fragmented: Sized {
 
 impl<F> Fragmented for F
 where
-    F: Sink<Frame<Bytes>, Error = CodecError>,
+    F: Sink<Frame, Error = CodecError>,
 {
     fn fragmented(self, mtu: u16, max_channels: usize) -> Fragment<Self> {
         Fragment {
@@ -45,7 +45,7 @@ where
 
 impl<F> Sink<Message> for Fragment<F>
 where
-    F: Sink<Frame<Bytes>, Error = CodecError>,
+    F: Sink<Frame, Error = CodecError>,
 {
     type Error = CodecError;
 
@@ -199,10 +199,10 @@ mod test {
 
     #[derive(Debug, Default)]
     struct DstSink {
-        buf: Frames<Bytes>,
+        buf: Frames,
     }
 
-    impl Sink<Frames<Bytes>> for DstSink {
+    impl Sink<Frames> for DstSink {
         type Error = CodecError;
 
         fn poll_ready(
@@ -212,7 +212,7 @@ mod test {
             Poll::Ready(Ok(()))
         }
 
-        fn start_send(mut self: Pin<&mut Self>, item: Frames<Bytes>) -> Result<(), Self::Error> {
+        fn start_send(mut self: Pin<&mut Self>, item: Frames) -> Result<(), Self::Error> {
             self.buf.extend(item);
             Ok(())
         }
@@ -232,7 +232,7 @@ mod test {
         }
     }
 
-    impl Sink<Frame<Bytes>> for DstSink {
+    impl Sink<Frame> for DstSink {
         type Error = CodecError;
 
         fn poll_ready(
@@ -242,7 +242,7 @@ mod test {
             Poll::Ready(Ok(()))
         }
 
-        fn start_send(mut self: Pin<&mut Self>, item: Frame<Bytes>) -> Result<(), Self::Error> {
+        fn start_send(mut self: Pin<&mut Self>, item: Frame) -> Result<(), Self::Error> {
             self.buf.push(item);
             Ok(())
         }

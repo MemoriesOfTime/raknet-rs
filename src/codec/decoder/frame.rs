@@ -1,7 +1,6 @@
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use bytes::Bytes;
 use futures::{ready, Stream, StreamExt};
 use minitrace::local::LocalSpan;
 use pin_project_lite::pin_project;
@@ -22,7 +21,7 @@ pub(crate) trait FrameDecoded: Sized {
 
 impl<F> FrameDecoded for F
 where
-    F: Stream<Item = Result<FrameSet<Frame<Bytes>>, CodecError>>,
+    F: Stream<Item = Result<FrameSet<Frame>, CodecError>>,
 {
     fn frame_decoded(self) -> FrameDecoder<Self> {
         FrameDecoder { frame: self }
@@ -31,7 +30,7 @@ where
 
 impl<F> Stream for FrameDecoder<F>
 where
-    F: Stream<Item = Result<FrameSet<Frame<Bytes>>, CodecError>>,
+    F: Stream<Item = Result<FrameSet<Frame>, CodecError>>,
 {
     type Item = Result<FrameBody, CodecError>;
 

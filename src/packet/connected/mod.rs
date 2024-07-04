@@ -60,7 +60,7 @@ impl<B: Buf> Packet<Frames<B>> {
     }
 }
 
-impl Packet<Frames<BytesMut>> {
+impl Packet<FramesMut> {
     pub(super) fn read_frame_set(buf: &mut BytesMut) -> Result<Self, CodecError> {
         Ok(Packet::FrameSet(FrameSet::read(buf)?))
     }

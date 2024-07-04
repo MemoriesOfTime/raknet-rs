@@ -4,7 +4,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 
-use bytes::{Bytes, BytesMut};
 use flume::{Receiver, Sender};
 use futures::{SinkExt, Stream};
 use log::{debug, error, info};
@@ -19,7 +18,7 @@ use crate::codec::{Decoded, Encoded};
 use crate::errors::CodecError;
 use crate::guard::{HandleIncoming, HandleOutgoingAck};
 use crate::io::{IOImpl, IO};
-use crate::packet::connected::{self, Frames};
+use crate::packet::connected::{self, Frames, FramesMut};
 use crate::packet::{unconnected, Packet};
 use crate::server::handler::offline;
 use crate::server::handler::offline::HandleOffline;
@@ -28,7 +27,7 @@ use crate::utils::{priority_mpsc, Log, Logged, StreamExt};
 use crate::RoleContext;
 
 type OfflineHandler = offline::OfflineHandler<
-    Log<UdpFramed<Codec, Arc<TokioUdpSocket>>, (Packet<Frames<BytesMut>>, SocketAddr), CodecError>,
+    Log<UdpFramed<Codec, Arc<TokioUdpSocket>>, (Packet<FramesMut>, SocketAddr), CodecError>,
 >;
 
 pin_project! {
@@ -37,7 +36,7 @@ pin_project! {
         offline: OfflineHandler,
         config: Config,
         socket: Arc<TokioUdpSocket>,
-        router: HashMap<SocketAddr, Sender<connected::Packet<Frames<BytesMut>>>>,
+        router: HashMap<SocketAddr, Sender<connected::Packet<FramesMut>>>,
         drop_receiver: Receiver<SocketAddr>,
         drop_notifier: Sender<SocketAddr>,
     }
@@ -117,7 +116,7 @@ impl Stream for Incoming {
 
             let raw_write = UdpFramed::new(Arc::clone(this.socket), Codec).with(
                 move |input: unconnected::Packet| async move {
-                    Ok((Packet::<Frames<Bytes>>::Unconnected(input), peer.addr))
+                    Ok((Packet::<Frames>::Unconnected(input), peer.addr))
                 },
             );
 

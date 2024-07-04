@@ -2,13 +2,12 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
-use bytes::{Bytes, BytesMut};
 use futures::{Future, Sink, SinkExt, Stream, StreamExt};
 use log::debug;
 use pin_project_lite::pin_project;
 
 use crate::errors::{CodecError, Error};
-use crate::packet::connected::{self, Frames};
+use crate::packet::connected::{self, Frames, FramesMut};
 use crate::packet::{unconnected, Packet};
 
 #[derive(Debug, Clone, Copy, derive_builder::Builder)]
@@ -24,8 +23,8 @@ pub(crate) trait HandleOffline: Sized {
 
 impl<F> HandleOffline for F
 where
-    F: Stream<Item = (Packet<Frames<BytesMut>>, SocketAddr)>
-        + Sink<(Packet<Frames<Bytes>>, SocketAddr), Error = CodecError>,
+    F: Stream<Item = (Packet<FramesMut>, SocketAddr)>
+        + Sink<(Packet<Frames>, SocketAddr), Error = CodecError>,
 {
     fn handle_offline(self, server_addr: SocketAddr, config: Config) -> OfflineHandler<Self> {
         OfflineHandler {
@@ -53,19 +52,19 @@ pin_project! {
 }
 
 enum State {
-    SendOpenConnectionRequest1(Packet<Frames<Bytes>>),
+    SendOpenConnectionRequest1(Packet<Frames>),
     WaitOpenConnectionReply1,
-    SendOpenConnectionRequest2(Packet<Frames<Bytes>>),
+    SendOpenConnectionRequest2(Packet<Frames>),
     WaitOpenConnectionReply2,
 }
 
 impl<F> Future for OfflineHandler<F>
 where
-    F: Stream<Item = (Packet<Frames<BytesMut>>, SocketAddr)>
-        + Sink<(Packet<Frames<Bytes>>, SocketAddr), Error = CodecError>
+    F: Stream<Item = (Packet<FramesMut>, SocketAddr)>
+        + Sink<(Packet<Frames>, SocketAddr), Error = CodecError>
         + Unpin,
 {
-    type Output = Result<impl Stream<Item = connected::Packet<Frames<BytesMut>>>, Error>;
+    type Output = Result<impl Stream<Item = connected::Packet<FramesMut>>, Error>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
@@ -167,9 +166,9 @@ pin_project! {
 
 impl<F> Stream for FilterConnected<F>
 where
-    F: Stream<Item = (Packet<Frames<BytesMut>>, SocketAddr)> + Unpin,
+    F: Stream<Item = (Packet<FramesMut>, SocketAddr)> + Unpin,
 {
-    type Item = connected::Packet<Frames<BytesMut>>;
+    type Item = connected::Packet<FramesMut>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.project();

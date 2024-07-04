@@ -4,13 +4,13 @@ use std::num::NonZeroUsize;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use futures::{ready, Sink, Stream};
 use log::{debug, error, warn};
 use pin_project_lite::pin_project;
 
 use crate::errors::CodecError;
-use crate::packet::connected::Frames;
+use crate::packet::connected::{Frames, FramesMut};
 use crate::packet::{connected, unconnected, Packet};
 use crate::PeerContext;
 
@@ -20,8 +20,8 @@ pub(crate) trait HandleOffline: Sized {
 
 impl<F> HandleOffline for F
 where
-    F: Stream<Item = (Packet<Frames<BytesMut>>, SocketAddr)>
-        + Sink<(Packet<Frames<Bytes>>, SocketAddr), Error = CodecError>,
+    F: Stream<Item = (Packet<FramesMut>, SocketAddr)>
+        + Sink<(Packet<Frames>, SocketAddr), Error = CodecError>,
 {
     fn handle_offline(self, config: Config) -> OfflineHandler<Self> {
         OfflineHandler {
@@ -49,7 +49,7 @@ pub(crate) struct Config {
 
 enum OfflineState {
     Listening,
-    SendingPrepare(Option<(Packet<Frames<Bytes>>, SocketAddr)>),
+    SendingPrepare(Option<(Packet<Frames>, SocketAddr)>),
     SendingFlush,
 }
 
@@ -76,9 +76,9 @@ impl<F> OfflineHandler<F> {
 
 impl<F> OfflineHandler<F>
 where
-    F: Sink<(Packet<Frames<Bytes>>, SocketAddr), Error = CodecError>,
+    F: Sink<(Packet<Frames>, SocketAddr), Error = CodecError>,
 {
-    fn make_incompatible_version(config: &Config) -> Packet<Frames<Bytes>> {
+    fn make_incompatible_version(config: &Config) -> Packet<Frames> {
         Packet::Unconnected(unconnected::Packet::IncompatibleProtocol {
             server_protocol: *config.support_version.last().unwrap(),
             magic: (),
@@ -86,14 +86,14 @@ where
         })
     }
 
-    fn make_already_connected(config: &Config) -> Packet<Frames<Bytes>> {
+    fn make_already_connected(config: &Config) -> Packet<Frames> {
         Packet::Unconnected(unconnected::Packet::AlreadyConnected {
             magic: (),
             server_guid: config.sever_guid,
         })
     }
 
-    fn make_connection_request_failed(config: &Config) -> Packet<Frames<Bytes>> {
+    fn make_connection_request_failed(config: &Config) -> Packet<Frames> {
         Packet::Unconnected(unconnected::Packet::ConnectionRequestFailed {
             magic: (),
             server_guid: config.sever_guid,
@@ -103,10 +103,10 @@ where
 
 impl<F> Stream for OfflineHandler<F>
 where
-    F: Stream<Item = (Packet<Frames<BytesMut>>, SocketAddr)>
-        + Sink<(Packet<Frames<Bytes>>, SocketAddr), Error = CodecError>,
+    F: Stream<Item = (Packet<FramesMut>, SocketAddr)>
+        + Sink<(Packet<Frames>, SocketAddr), Error = CodecError>,
 {
-    type Item = (connected::Packet<Frames<BytesMut>>, PeerContext);
+    type Item = (connected::Packet<FramesMut>, PeerContext);
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
@@ -250,12 +250,12 @@ mod test {
     use super::*;
 
     struct TestCase {
-        source: VecDeque<Packet<Frames<BytesMut>>>,
-        dst: Vec<Packet<Frames<Bytes>>>,
+        source: VecDeque<Packet<FramesMut>>,
+        dst: Vec<Packet<Frames>>,
     }
 
     impl Stream for TestCase {
-        type Item = (Packet<Frames<BytesMut>>, SocketAddr);
+        type Item = (Packet<FramesMut>, SocketAddr);
 
         fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
             let addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
@@ -266,7 +266,7 @@ mod test {
         }
     }
 
-    impl Sink<(Packet<Frames<Bytes>>, SocketAddr)> for TestCase {
+    impl Sink<(Packet<Frames>, SocketAddr)> for TestCase {
         type Error = CodecError;
 
         fn poll_ready(
@@ -278,7 +278,7 @@ mod test {
 
         fn start_send(
             mut self: Pin<&mut Self>,
-            item: (Packet<Frames<Bytes>>, SocketAddr),
+            item: (Packet<Frames>, SocketAddr),
         ) -> Result<(), Self::Error> {
             self.dst.push(item.0);
             Ok(())

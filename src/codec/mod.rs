@@ -8,7 +8,6 @@ mod encoder;
 #[cfg(feature = "tokio-udp")]
 pub(crate) mod tokio;
 
-use bytes::{Bytes, BytesMut};
 use derive_builder::Builder;
 use futures::{Sink, Stream, StreamExt};
 use log::{debug, trace};
@@ -16,7 +15,7 @@ use log::{debug, trace};
 use self::decoder::{DeFragmented, Deduplicated, FrameDecoded, Ordered};
 use self::encoder::{Fragmented, FrameEncoded};
 use crate::errors::CodecError;
-use crate::packet::connected::{Frame, FrameBody, FrameSet, Frames};
+use crate::packet::connected::{Frame, FrameBody, FrameSet, FramesMut};
 use crate::utils::{priority_mpsc, u24, Logged};
 use crate::{Message, RoleContext};
 
@@ -64,7 +63,7 @@ pub(crate) trait Decoded {
 
 impl<F> Decoded for F
 where
-    F: Stream<Item = FrameSet<Frames<BytesMut>>>,
+    F: Stream<Item = FrameSet<FramesMut>>,
 {
     fn decoded(
         self,
@@ -104,7 +103,7 @@ pub(crate) trait Encoded {
 
 impl<F> Encoded for F
 where
-    F: Sink<Frame<Bytes>, Error = CodecError>,
+    F: Sink<Frame, Error = CodecError>,
 {
     fn frame_encoded(
         self,
@@ -118,11 +117,12 @@ where
 /// Micro bench helper
 #[cfg(feature = "micro-bench")]
 pub mod micro_bench {
+    use bytes::BytesMut;
     use rand::rngs::StdRng;
     use rand::seq::SliceRandom;
     use rand::{Rng, SeedableRng};
 
-    use super::{BytesMut, Config, Decoded, FrameSet, Frames, Stream};
+    use super::{Config, Decoded, FrameSet, FramesMut, Stream};
     use crate::packet::connected::{Flags, Fragment, Frame, Ordered, Reliability};
     use crate::utils::priority_mpsc;
     use crate::RoleContext;
@@ -153,12 +153,12 @@ pub mod micro_bench {
             }
         }
 
-        fn gen_inputs(&self) -> Vec<FrameSet<Frames<BytesMut>>> {
+        fn gen_inputs(&self) -> Vec<FrameSet<FramesMut>> {
             assert!(self.frame_per_set * self.frame_set_cnt % self.parted_size == 0);
             assert!(self.data.len() > self.parted_size);
             assert!(self.parted_size >= 1);
             let mut rng = StdRng::seed_from_u64(self.seed);
-            let frames: Frames<BytesMut> = std::iter::repeat(self.data.clone())
+            let frames: FramesMut = std::iter::repeat(self.data.clone())
                 .take(self.frame_per_set * self.frame_set_cnt)
                 .enumerate()
                 .map(|(idx, mut body)| {
@@ -241,7 +241,7 @@ pub mod micro_bench {
         config: Config,
         #[cfg(test)]
         data: BytesMut,
-        frame_sets: Vec<FrameSet<Frames<BytesMut>>>,
+        frame_sets: Vec<FrameSet<FramesMut>>,
     }
 
     impl MicroBench {
@@ -296,7 +296,7 @@ pub mod micro_bench {
             for _r in stream {}
         }
 
-        fn into_stream(mut self) -> impl Stream<Item = FrameSet<Frames<BytesMut>>> {
+        fn into_stream(mut self) -> impl Stream<Item = FrameSet<FramesMut>> {
             #[futures_async_stream::stream]
             async move {
                 while let Some(frame_set) = self.frame_sets.pop() {

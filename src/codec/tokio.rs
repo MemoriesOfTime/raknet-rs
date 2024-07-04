@@ -2,7 +2,7 @@ use bytes::{Buf, BytesMut};
 use tokio_util::codec::{Decoder, Encoder};
 
 use crate::errors::CodecError;
-use crate::packet::connected::Frames;
+use crate::packet::connected::{Frames, FramesMut};
 use crate::packet::Packet;
 
 /// The raknet codec
@@ -20,7 +20,7 @@ impl<B: Buf> Encoder<Packet<Frames<B>>> for Codec {
 impl Decoder for Codec {
     type Error = CodecError;
     // we might want to update the package during codec
-    type Item = Packet<Frames<BytesMut>>;
+    type Item = Packet<FramesMut>;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         Packet::read(src)

@@ -5,7 +5,6 @@ use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 use std::time::Duration;
 
-use bytes::Bytes;
 use flume::{Receiver, Sender};
 use futures::{Sink, Stream, StreamExt};
 use log::trace;
@@ -91,13 +90,13 @@ pin_project! {
         outgoing_ack_rx: priority_mpsc::Receiver<u24>,
         outgoing_nack_rx: priority_mpsc::Receiver<u24>,
         seq_num_write_index: u24,
-        buf: VecDeque<Frame<Bytes>>,
+        buf: VecDeque<Frame>,
         peer: PeerContext,
         role: RoleContext,
         cap: usize,
         // ordered by seq_num
         // TODO: use rbtree?
-        resending: BTreeMap<u24, (Frames<Bytes>, Instant)>,
+        resending: BTreeMap<u24, (Frames, Instant)>,
     }
 }
 
@@ -117,7 +116,7 @@ pub(crate) trait HandleOutgoingAck: Sized {
 
 impl<F> HandleOutgoingAck for F
 where
-    F: Sink<(Packet<Frames<Bytes>>, SocketAddr), Error = CodecError>,
+    F: Sink<(Packet<Frames>, SocketAddr), Error = CodecError>,
 {
     fn handle_outgoing(
         self,
@@ -151,7 +150,7 @@ const RTO: Duration = Duration::from_millis(77);
 
 impl<F> OutgoingGuard<F>
 where
-    F: Sink<(Packet<Frames<Bytes>>, SocketAddr), Error = CodecError>,
+    F: Sink<(Packet<Frames>, SocketAddr), Error = CodecError>,
 {
     fn try_ack(self: Pin<&mut Self>) {
         let this = self.project();
@@ -319,9 +318,9 @@ where
     }
 }
 
-impl<F> Sink<Frame<Bytes>> for OutgoingGuard<F>
+impl<F> Sink<Frame> for OutgoingGuard<F>
 where
-    F: Sink<(Packet<Frames<Bytes>>, SocketAddr), Error = CodecError>,
+    F: Sink<(Packet<Frames>, SocketAddr), Error = CodecError>,
 {
     type Error = CodecError;
 
@@ -339,9 +338,10 @@ where
         }
     }
 
-    fn start_send(self: Pin<&mut Self>, frame: Frame<Bytes>) -> Result<(), Self::Error> {
+    fn start_send(self: Pin<&mut Self>, frame: Frame) -> Result<(), Self::Error> {
         let this = self.project();
         this.buf.push_back(frame);
+        // Always success
         Ok(())
     }
 
