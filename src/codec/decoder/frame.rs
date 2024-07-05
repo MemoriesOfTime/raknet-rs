@@ -2,7 +2,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use futures::{ready, Stream, StreamExt};
-use minitrace::local::LocalSpan;
+use minitrace::{Event, Span};
 use pin_project_lite::pin_project;
 
 use crate::errors::CodecError;
@@ -41,10 +41,18 @@ where
             return Poll::Ready(None);
         };
 
-        let _span = LocalSpan::enter_with_local_parent("codec.reframe")
+        let span = Span::enter_with_local_parent("codec.reframe")
             .with_properties(|| [("frame_seq_num", frame_set.seq_num.to_string())]);
 
-        let body = FrameBody::read(frame_set.set.body)?;
-        Poll::Ready(Some(Ok(body)))
+        match FrameBody::read(frame_set.set.body) {
+            Ok(body) => {
+                let _ = span.with_property(|| ("frame_type", format!("{:?}", body)));
+                Poll::Ready(Some(Ok(body)))
+            }
+            Err(err) => {
+                Event::add_to_parent(err.to_string(), &span, || []);
+                Poll::Ready(Some(Err(err)))
+            }
+        }
     }
 }

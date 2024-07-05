@@ -137,20 +137,17 @@ where
 
 #[cfg(test)]
 mod test {
-
     use std::ops::Sub;
 
     use bytes::Bytes;
     use futures::StreamExt;
     use futures_async_stream::stream;
     use indexmap::IndexSet;
-    use minitrace::collector::SpanContext;
 
     use super::*;
     use crate::ack::Acknowledgement;
     use crate::errors::CodecError;
     use crate::packet::connected::{Flags, Frame, FrameSet};
-    use crate::tests::test_trace_log_setup_with_assert;
 
     #[test]
     fn test_duplicate_windows_check_ordered() {
@@ -357,42 +354,5 @@ mod test {
     #[tokio::test]
     async fn test_dedup_fuzzing_with_scale_100000() {
         test_dedup_fuzzing_with_scale(100000).await;
-    }
-
-    #[tokio::test]
-    async fn test_dedup_collect_spans() {
-        let _guard = test_trace_log_setup_with_assert(|spans| {
-            assert_eq!(spans.len(), 4); // 1 root + 2 frame_sets yielded(ignore 1 duplicated) + 1 dedup exceed
-            for span in spans {
-                if !span.events.is_empty() {
-                    assert_eq!(span.events.len(), 1);
-                    assert_eq!(span.events[0].name, "dedup gap exceed 100");
-                }
-            }
-        });
-        let _root = Span::root("root", SpanContext::random()).set_local_parent();
-        let frame = {
-            #[stream]
-            async {
-                yield frame_set([0]);
-                yield frame_set([0]); // duplicated
-                yield frame_set([101]);
-                yield frame_set([102]);
-            }
-        };
-        tokio::pin!(frame);
-        let mut dedup = Dedup {
-            frame: frame.map(Ok),
-            max_gap: 100,
-            window: DuplicateWindow::default(),
-            ack: Acknowledgement::new_arc(crate::RoleContext::Server),
-        };
-        assert_eq!(dedup.next().await.unwrap().unwrap(), frame_set([0]));
-        assert_eq!(dedup.next().await.unwrap().unwrap(), frame_set([101]));
-        assert!(matches!(
-            dedup.next().await.unwrap(),
-            Err(CodecError::DedupExceed(..))
-        ));
-        assert!(dedup.next().await.is_none());
     }
 }

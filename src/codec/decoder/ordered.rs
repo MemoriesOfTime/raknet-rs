@@ -5,7 +5,7 @@ use std::task::{Context, Poll};
 use bytes::Buf;
 use futures::{ready, Stream, StreamExt};
 use log::warn;
-use minitrace::local::LocalSpan;
+use minitrace::{Event, Span};
 use pin_project_lite::pin_project;
 
 use crate::errors::CodecError;
@@ -72,6 +72,7 @@ where
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
+        let mut span: Option<Span> = None;
 
         loop {
             // empty each channel in order
@@ -87,12 +88,18 @@ where
                 }
             }
 
+            if let Some(mut old_span) = span.take() {
+                // cancel the old span as there is no frame yielded
+                old_span.cancel();
+            }
             let Some(frame_set) = ready!(this.frame.poll_next_unpin(cx)?) else {
                 return Poll::Ready(None);
             };
-
-            let _span = LocalSpan::enter_with_local_parent("codec.reorder")
-                .with_properties(|| [("frame_seq_num", frame_set.seq_num.to_string())]);
+            // start a new span
+            span.replace(
+                Span::enter_with_local_parent("codec.reorder")
+                    .with_properties(|| [("frame_seq_num", frame_set.seq_num.to_string())]),
+            );
 
             if let Some(connected::Ordered {
                 frame_index,
@@ -101,23 +108,19 @@ where
             {
                 let channel = usize::from(channel);
                 if channel >= *this.max_channels {
-                    return Poll::Ready(Some(Err(CodecError::OrderedFrame(format!(
-                        "channel {} >= max_channels {}",
-                        channel, *this.max_channels
-                    )))));
+                    let err = format!("channel {} >= max_channels {}", channel, *this.max_channels);
+                    Event::add_to_parent(err.clone(), &span.unwrap(), || []);
+                    return Poll::Ready(Some(Err(CodecError::OrderedFrame(err))));
                 }
                 let ordering = this
                     .ordering
                     .get_mut(channel)
                     .expect("channel < max_channels");
-
                 if frame_index < ordering.read {
                     warn!("ignore old ordered frame index {frame_index}");
                     continue;
                 }
-
                 ordering.map.insert(frame_index, frame_set);
-
                 // we cannot read anymore
                 continue;
             }

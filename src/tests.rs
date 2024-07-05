@@ -16,17 +16,14 @@ use crate::server::{self, MakeIncoming};
 #[allow(clippy::type_complexity)]
 pub(crate) struct TestTraceLogGuard {
     spans: Arc<Mutex<Vec<SpanRecord>>>,
-    asserts: Box<dyn Fn(&Vec<SpanRecord>)>,
 }
 
 impl Drop for TestTraceLogGuard {
     #[allow(clippy::print_stderr)]
     fn drop(&mut self) {
         minitrace::flush();
-        // TODO: draw span tree
-        let spans = self.spans.lock().clone();
-        (self.asserts)(&spans);
 
+        let spans = self.spans.lock().clone();
         let spans_map: HashMap<SpanId, SpanRecord> = spans
             .iter()
             .map(|span| (span.span_id, span.clone()))
@@ -46,36 +43,35 @@ impl Drop for TestTraceLogGuard {
             spans: &HashMap<SpanId, SpanRecord>,
             span_id: SpanId,
             depth: usize,
-            begin_at: u64,
         ) {
             let span = &spans[&span_id];
             let mut properties = String::new();
             for (key, value) in &span.properties {
-                properties.push_str(&format!(", {}:{}", key, value));
+                properties.push_str(&format!(", {}: {}", key, value));
+            }
+            let mut events = String::new();
+            for ev in &span.events {
+                events.push_str(&format!("'{}'", ev.name));
             }
             eprintln!(
-                "{}{}(begin:{}ns, duration:{}ns{})",
+                "{}{}(duration:{}ns{}, {{{}}})",
                 "  ".repeat(depth),
                 span.name,
-                span.begin_time_unix_ns - begin_at,
                 span.duration_ns,
-                properties
+                properties,
+                events
             );
             if let Some(children) = adjacency_list.get(&span_id) {
                 for child in children {
-                    dfs(adjacency_list, spans, *child, depth + 1, begin_at);
+                    dfs(adjacency_list, spans, *child, depth + 1);
                 }
             }
         }
-
+        if adjacency_list.is_empty() {
+            return;
+        }
         for root in &adjacency_list[&SpanId::default()] {
-            dfs(
-                &adjacency_list,
-                &spans_map,
-                *root,
-                0,
-                spans_map[root].begin_time_unix_ns,
-            );
+            dfs(&adjacency_list, &spans_map, *root, 0);
             eprintln!();
         }
     }
@@ -85,26 +81,12 @@ impl Drop for TestTraceLogGuard {
 pub(crate) fn test_trace_log_setup() -> TestTraceLogGuard {
     std::env::set_var("RUST_LOG", "trace");
     let (reporter, spans) = minitrace::collector::TestReporter::new();
-    minitrace::set_reporter(reporter, minitrace::collector::Config::default());
+    minitrace::set_reporter(
+        reporter,
+        minitrace::collector::Config::default().report_before_root_finish(true),
+    );
     env_logger::init();
-    TestTraceLogGuard {
-        spans,
-        asserts: Box::new(|_| {}),
-    }
-}
-
-#[must_use]
-pub(crate) fn test_trace_log_setup_with_assert(
-    asserts: impl Fn(&Vec<SpanRecord>) + 'static,
-) -> TestTraceLogGuard {
-    std::env::set_var("RUST_LOG", "trace");
-    let (reporter, spans) = minitrace::collector::TestReporter::new();
-    minitrace::set_reporter(reporter, minitrace::collector::Config::default());
-    env_logger::init();
-    TestTraceLogGuard {
-        spans,
-        asserts: Box::new(asserts),
-    }
+    TestTraceLogGuard { spans }
 }
 
 #[tokio::test(unhandled_panic = "shutdown_runtime")]

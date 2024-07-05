@@ -459,55 +459,14 @@ pub(crate) enum FrameBody {
 impl std::fmt::Debug for FrameBody {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::ConnectedPing { client_timestamp } => f
-                .debug_struct("ConnectedPing")
-                .field("client_timestamp", client_timestamp)
-                .finish(),
-            Self::ConnectedPong {
-                client_timestamp,
-                server_timestamp,
-            } => f
-                .debug_struct("ConnectedPong")
-                .field("client_timestamp", client_timestamp)
-                .field("server_timestamp", server_timestamp)
-                .finish(),
-            Self::ConnectionRequest {
-                client_guid,
-                request_timestamp,
-                use_encryption,
-            } => f
-                .debug_struct("ConnectionRequest")
-                .field("client_guid", client_guid)
-                .field("request_timestamp", request_timestamp)
-                .field("use_encryption", use_encryption)
-                .finish(),
-            Self::ConnectionRequestAccepted {
-                client_address,
-                system_index,
-                request_timestamp,
-                accepted_timestamp,
-                ..
-            } => f
-                .debug_struct("ConnectionRequestAccepted")
-                .field("client_address", client_address)
-                .field("system_index", system_index)
-                .field("request_timestamp", request_timestamp)
-                .field("accepted_timestamp", accepted_timestamp)
-                .finish(),
-            Self::NewIncomingConnection {
-                server_address,
-                request_timestamp,
-                accepted_timestamp,
-                ..
-            } => f
-                .debug_struct("NewIncomingConnection")
-                .field("server_address", server_address)
-                .field("request_timestamp", request_timestamp)
-                .field("accepted_timestamp", accepted_timestamp)
-                .finish(),
+            Self::ConnectedPing { .. } => write!(f, "ConnectedPing"),
+            Self::ConnectedPong { .. } => write!(f, "ConnectedPong"),
+            Self::ConnectionRequest { .. } => write!(f, "ConnectionRequest"),
+            Self::ConnectionRequestAccepted { .. } => write!(f, "ConnectionRequestAccepted"),
+            Self::NewIncomingConnection { .. } => write!(f, "NewIncomingConnection"),
             Self::DisconnectNotification => write!(f, "Disconnect"),
             Self::DetectLostConnections => write!(f, "DetectLostConnections"),
-            Self::User(data) => write!(f, "User(data_size:{})", data.remaining()),
+            Self::User(data) => write!(f, "User(size:{})", data.len()),
         }
     }
 }

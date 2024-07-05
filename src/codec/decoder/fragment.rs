@@ -7,7 +7,7 @@ use std::task::{Context, Poll};
 use bytes::BufMut;
 use futures::{ready, Stream, StreamExt};
 use lru::LruCache;
-use minitrace::local::LocalSpan;
+use minitrace::{Event, Span};
 use pin_project_lite::pin_project;
 
 use crate::ack::SharedAck;
@@ -95,6 +95,7 @@ where
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
+        let mut span: Option<Span> = None;
 
         loop {
             // empty buffer
@@ -102,17 +103,22 @@ where
                 return Poll::Ready(Some(Ok(frame_set)));
             }
 
+            if let Some(mut old_span) = span.take() {
+                // cancel the old span as there is no frame yielded
+                old_span.cancel();
+            }
             let Some(frame_set) = ready!(this.frame.poll_next_unpin(cx)?) else {
                 return Poll::Ready(None);
             };
-
-            let _span =
-                LocalSpan::enter_with_local_parent("codec.defragment").with_properties(|| {
+            // start a new span
+            span.replace(
+                Span::enter_with_local_parent("codec.defragment").with_properties(|| {
                     [
                         ("frame_set_size", frame_set.set.len().to_string()),
                         ("frame_seq_num", frame_set.seq_num.to_string()),
                     ]
-                });
+                }),
+            );
 
             for frame in frame_set.set {
                 if let Some(Fragment {
@@ -125,20 +131,23 @@ where
                     if parted_index >= parted_size {
                         // perhaps network bit-flips
                         this.ack.outgoing_nack(frame_set.seq_num);
-                        return Poll::Ready(Some(Err(CodecError::PartedFrame(format!(
+                        let err = format!(
                             "parted_index {} >= parted_size {}",
                             parted_index, parted_size
-                        )))));
+                        );
+                        Event::add_to_parent(err.clone(), &span.unwrap(), || []);
+                        return Poll::Ready(Some(Err(CodecError::PartedFrame(err))));
                     }
                     if *this.limit_size != 0 && parted_size > *this.limit_size {
                         // we discarded this packet and prevented the peer from resending it.
                         this.ack.outgoing_ack(frame_set.seq_num);
-                        return Poll::Ready(Some(Err(CodecError::PartedFrame(format!(
+                        let err = format!(
                             "parted_size {} exceed limit_size {}",
                             parted_size, *this.limit_size
-                        )))));
+                        );
+                        Event::add_to_parent(err.clone(), &span.unwrap(), || []);
+                        return Poll::Ready(Some(Err(CodecError::PartedFrame(err))));
                     }
-
                     let frames_queue = this.parts.get_or_insert_mut(parted_id, || {
                         // init the PriorityQueue with the capacity defined by user.
                         BinaryHeap::with_capacity(parted_size as usize)
