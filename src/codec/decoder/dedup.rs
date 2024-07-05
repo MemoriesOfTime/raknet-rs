@@ -2,7 +2,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use futures::{ready, Stream, StreamExt};
-use minitrace::local::LocalSpan;
+use minitrace::{Event, Span};
 use pin_project_lite::pin_project;
 
 use crate::ack::SharedAck;
@@ -91,18 +91,29 @@ where
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
+        let mut span: Option<Span> = None;
         loop {
+            if let Some(mut old_span) = span.take() {
+                // cancel the old span as there is no frame yielded
+                old_span.cancel();
+            }
             let Some(mut frame_set) = ready!(this.frame.poll_next_unpin(cx)?) else {
                 return Poll::Ready(None);
             };
-            let _span =
-                LocalSpan::enter_with_local_parent("codec.deduplication").with_properties(|| {
+            span.replace(
+                Span::enter_with_local_parent("codec.deduplication").with_properties(|| {
                     [
                         ("frame_set_size", frame_set.set.len().to_string()),
                         ("frame_seq_num", frame_set.seq_num.to_string()),
                     ]
-                });
+                }),
+            );
             if *this.max_gap != 0 && this.window.received_status.len() > *this.max_gap {
+                Event::add_to_parent(
+                    format!("dedup gap exceed {}", *this.max_gap),
+                    &span.unwrap(),
+                    || [],
+                );
                 return Poll::Ready(Some(Err(CodecError::DedupExceed(
                     *this.max_gap,
                     this.window.received_status.len(),
@@ -110,6 +121,7 @@ where
             }
             frame_set.set.retain(|frame| {
                 let Some(reliable_frame_index) = frame.reliable_frame_index else {
+                    // no reliable_frame_index, just pass
                     return true;
                 };
                 !this.window.duplicate(reliable_frame_index)
@@ -132,11 +144,13 @@ mod test {
     use futures::StreamExt;
     use futures_async_stream::stream;
     use indexmap::IndexSet;
+    use minitrace::collector::SpanContext;
 
     use super::*;
     use crate::ack::Acknowledgement;
     use crate::errors::CodecError;
     use crate::packet::connected::{Flags, Frame, FrameSet};
+    use crate::tests::test_trace_log_setup_with_assert;
 
     #[test]
     fn test_duplicate_windows_check_ordered() {
@@ -343,5 +357,42 @@ mod test {
     #[tokio::test]
     async fn test_dedup_fuzzing_with_scale_100000() {
         test_dedup_fuzzing_with_scale(100000).await;
+    }
+
+    #[tokio::test]
+    async fn test_dedup_collect_spans() {
+        let _guard = test_trace_log_setup_with_assert(|spans| {
+            assert_eq!(spans.len(), 4); // 1 root + 2 frame_sets yielded(ignore 1 duplicated) + 1 dedup exceed
+            for span in spans {
+                if !span.events.is_empty() {
+                    assert_eq!(span.events.len(), 1);
+                    assert_eq!(span.events[0].name, "dedup gap exceed 100");
+                }
+            }
+        });
+        let _root = Span::root("root", SpanContext::random()).set_local_parent();
+        let frame = {
+            #[stream]
+            async {
+                yield frame_set([0]);
+                yield frame_set([0]); // duplicated
+                yield frame_set([101]);
+                yield frame_set([102]);
+            }
+        };
+        tokio::pin!(frame);
+        let mut dedup = Dedup {
+            frame: frame.map(Ok),
+            max_gap: 100,
+            window: DuplicateWindow::default(),
+            ack: Acknowledgement::new_arc(crate::RoleContext::Server),
+        };
+        assert_eq!(dedup.next().await.unwrap().unwrap(), frame_set([0]));
+        assert_eq!(dedup.next().await.unwrap().unwrap(), frame_set([101]));
+        assert!(matches!(
+            dedup.next().await.unwrap(),
+            Err(CodecError::DedupExceed(..))
+        ));
+        assert!(dedup.next().await.is_none());
     }
 }

@@ -39,7 +39,6 @@ impl MakeSpan for LocalSpan {
     }
 }
 
-#[allow(unused)] // Commutative with SinkExt::enter_on_item
 pub(crate) trait StreamExt: Stream + Sized {
     /// It starts a span at every time an item is generating from the stream, and the span will end
     /// when an option yield from the stream. So it could be used to track the span from last
@@ -67,36 +66,6 @@ pub(crate) trait StreamExt: Stream + Sized {
 }
 
 impl<S: Stream> StreamExt for S {}
-
-#[allow(unused)] // Commutative with StreamExt::enter_on_item
-pub(crate) trait SinkExt<I>: Sink<I> + Sized {
-    /// It initiates a span each time an operation is performed on this sink, and the span will end
-    /// when flushed or closed.
-    ///
-    /// Tokens in the graph:
-    ///   [xxxx]: non-empty sender buffer
-    ///   []:     empty sender buffer
-    ///
-    ///       [-------------**SPAN**--------------]
-    ///       v                                   v
-    /// [xxxx]             [xxxxxxxxxxxxx]      []
-    ///      ^                  ^^^^^^^^^        ^
-    ///   ready to send        start send        flushed
-    fn enter_on_item<S: MakeSpan, O: Fn(S) -> S>(
-        self,
-        name: impl Into<Cow<'static, str>>,
-        opts: O,
-    ) -> EnterOnItem<Self, S, O> {
-        EnterOnItem {
-            inner: self,
-            name: name.into(),
-            span: None,
-            opts,
-        }
-    }
-}
-
-impl<I, S: Sink<I>> SinkExt<I> for S {}
 
 pin_project! {
     pub(crate) struct EnterOnItem<T, S, O> {
@@ -135,6 +104,7 @@ where
     }
 }
 
+// Propagate Sink trait to inner stream
 impl<T, I, S, O> Sink<I> for EnterOnItem<T, S, O>
 where
     T: Sink<I>,
@@ -144,50 +114,18 @@ where
     type Error = T::Error;
 
     fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        let this = self.project();
-        let span = this
-            .span
-            .get_or_insert_with(|| (this.opts)(S::make(this.name.clone())));
-        let _guard = span.try_set_local_parent();
-        let res = this.inner.poll_ready(cx);
-        match res {
-            r @ Poll::Ready(Err(_)) => {
-                // early stopped
-                this.span.take();
-                r
-            }
-            other => other,
-        }
+        self.project().inner.poll_ready(cx)
     }
 
     fn start_send(self: Pin<&mut Self>, item: I) -> Result<(), Self::Error> {
-        let this = self.project();
-        let span = this
-            .span
-            .get_or_insert_with(|| (this.opts)(S::make(this.name.clone())));
-        let _guard = span.try_set_local_parent();
-        this.inner.start_send(item)
+        self.project().inner.start_send(item)
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        let this = self.project();
-        let span = this
-            .span
-            .get_or_insert_with(|| (this.opts)(S::make(this.name.clone())));
-        let _guard = span.try_set_local_parent();
-        let res = this.inner.poll_flush(cx);
-        this.span.take();
-        res
+        self.project().inner.poll_flush(cx)
     }
 
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        let this = self.project();
-        let span = this
-            .span
-            .get_or_insert_with(|| (this.opts)(S::make(this.name.clone())));
-        let _guard = span.try_set_local_parent();
-        let res = this.inner.poll_close(cx);
-        this.span.take();
-        res
+        self.project().inner.poll_close(cx)
     }
 }

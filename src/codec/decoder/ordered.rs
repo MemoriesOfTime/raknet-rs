@@ -4,7 +4,7 @@ use std::task::{Context, Poll};
 
 use bytes::Buf;
 use futures::{ready, Stream, StreamExt};
-use log::debug;
+use log::warn;
 use minitrace::local::LocalSpan;
 use pin_project_lite::pin_project;
 
@@ -112,7 +112,7 @@ where
                     .expect("channel < max_channels");
 
                 if frame_index < ordering.read {
-                    debug!("[decoder] ignore old ordered frame index {frame_index}");
+                    warn!("ignore old ordered frame index {frame_index}");
                     continue;
                 }
 

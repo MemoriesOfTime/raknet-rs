@@ -3,7 +3,6 @@ use std::task::{Context, Poll};
 
 use bytes::BytesMut;
 use futures::Sink;
-use minitrace::local::LocalSpan;
 use pin_project_lite::pin_project;
 
 use crate::errors::CodecError;
@@ -66,9 +65,6 @@ where
 
     fn start_send(self: Pin<&mut Self>, body: FrameBody) -> Result<(), Self::Error> {
         // Reliabilities with some build-in packet
-        let _span = LocalSpan::enter_with_local_parent("codec.frame")
-            .with_property(|| ("frame_body_type", format!("{body:?}")));
-
         let reliability = match body {
             FrameBody::ConnectedPing { .. } => Reliability::Unreliable,
             FrameBody::ConnectedPong { .. } => Reliability::Unreliable,

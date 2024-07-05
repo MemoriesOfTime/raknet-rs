@@ -1,32 +1,115 @@
+use std::collections::HashMap;
 use std::iter::repeat;
+use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
 use log::info;
+use minitrace::collector::{SpanId, SpanRecord};
+use parking_lot::Mutex;
 use tokio::net::UdpSocket;
 
 use crate::client::{self, ConnectTo};
 use crate::server::{self, MakeIncoming};
 
-struct TestGuard;
+#[allow(clippy::type_complexity)]
+pub(crate) struct TestTraceLogGuard {
+    spans: Arc<Mutex<Vec<SpanRecord>>>,
+    asserts: Box<dyn Fn(&Vec<SpanRecord>)>,
+}
 
-impl Drop for TestGuard {
+impl Drop for TestTraceLogGuard {
+    #[allow(clippy::print_stderr)]
     fn drop(&mut self) {
         minitrace::flush();
+        // TODO: draw span tree
+        let spans = self.spans.lock().clone();
+        (self.asserts)(&spans);
+
+        let spans_map: HashMap<SpanId, SpanRecord> = spans
+            .iter()
+            .map(|span| (span.span_id, span.clone()))
+            .collect();
+        let adjacency_list: HashMap<SpanId, Vec<SpanId>> = spans.iter().fold(
+            std::collections::HashMap::new(),
+            |mut map,
+             SpanRecord {
+                 span_id, parent_id, ..
+             }| {
+                map.entry(*parent_id).or_default().push(*span_id);
+                map
+            },
+        );
+        fn dfs(
+            adjacency_list: &HashMap<SpanId, Vec<SpanId>>,
+            spans: &HashMap<SpanId, SpanRecord>,
+            span_id: SpanId,
+            depth: usize,
+            begin_at: u64,
+        ) {
+            let span = &spans[&span_id];
+            let mut properties = String::new();
+            for (key, value) in &span.properties {
+                properties.push_str(&format!(", {}:{}", key, value));
+            }
+            eprintln!(
+                "{}{}(begin:{}ns, duration:{}ns{})",
+                "  ".repeat(depth),
+                span.name,
+                span.begin_time_unix_ns - begin_at,
+                span.duration_ns,
+                properties
+            );
+            if let Some(children) = adjacency_list.get(&span_id) {
+                for child in children {
+                    dfs(adjacency_list, spans, *child, depth + 1, begin_at);
+                }
+            }
+        }
+
+        for root in &adjacency_list[&SpanId::default()] {
+            dfs(
+                &adjacency_list,
+                &spans_map,
+                *root,
+                0,
+                spans_map[root].begin_time_unix_ns,
+            );
+            eprintln!();
+        }
     }
 }
 
 #[must_use]
-fn test_setup() -> TestGuard {
+pub(crate) fn test_trace_log_setup() -> TestTraceLogGuard {
     std::env::set_var("RUST_LOG", "trace");
+    let (reporter, spans) = minitrace::collector::TestReporter::new();
+    minitrace::set_reporter(reporter, minitrace::collector::Config::default());
     env_logger::init();
-    TestGuard
+    TestTraceLogGuard {
+        spans,
+        asserts: Box::new(|_| {}),
+    }
+}
+
+#[must_use]
+pub(crate) fn test_trace_log_setup_with_assert(
+    asserts: impl Fn(&Vec<SpanRecord>) + 'static,
+) -> TestTraceLogGuard {
+    std::env::set_var("RUST_LOG", "trace");
+    let (reporter, spans) = minitrace::collector::TestReporter::new();
+    minitrace::set_reporter(reporter, minitrace::collector::Config::default());
+    env_logger::init();
+    TestTraceLogGuard {
+        spans,
+        asserts: Box::new(asserts),
+    }
 }
 
 #[tokio::test(unhandled_panic = "shutdown_runtime")]
 async fn test_tokio_udp_works() {
-    let _guard = test_setup();
+    let _guard = test_trace_log_setup();
 
     let echo_server = async {
         let config = server::ConfigBuilder::default()
