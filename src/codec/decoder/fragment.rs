@@ -162,10 +162,10 @@ where
                         .reduce(|mut acc, next| {
                             // merge all parted frames
                             acc.body.put(next.body);
-                            acc.reassembled();
                             acc
                         })
                         .expect("there is at least one frame")
+                        .reassembled()
                         .freeze();
 
                     this.buffer.push_back(FrameSet {
@@ -277,7 +277,7 @@ mod test {
 
         // frames should be merged
         assert_eq!(String::from_utf8(set.set.body.to_vec()).unwrap(), "happy");
-        // wiped
+        // fragment part was wiped
         assert!(!set.set.flags.parted);
         assert!(set.set.fragment.is_none());
 

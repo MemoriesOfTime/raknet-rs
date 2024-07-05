@@ -20,7 +20,7 @@ pin_project! {
         mtu: u16,
         reliable_write_index: u24,
         order_write_index: Vec<u24>,
-        split_write_index: u16,
+        parted_id_write: u16,
     }
 }
 
@@ -38,7 +38,7 @@ where
             mtu,
             reliable_write_index: 0.into(),
             order_write_index: std::iter::repeat(0.into()).take(max_channels).collect(),
-            split_write_index: 0,
+            parted_id_write: 0,
         }
     }
 }
@@ -66,9 +66,12 @@ where
 
         let mut reliability = msg.get_reliability();
         let order_channel = msg.get_order_channel();
+        let mut body = msg.into_data();
+
+        // max_len is the maximum size of the frame body (excluding the fragment part option)
         let max_len = *this.mtu as usize - FRAME_SET_HEADER_SIZE - reliability.size();
 
-        if msg.get_data().len() >= max_len {
+        if body.len() > max_len {
             // adjust reliability when packet needs splitting
             reliability = match reliability {
                 Reliability::Unreliable => Reliability::Reliable,
@@ -78,6 +81,7 @@ where
             };
         }
 
+        // get reliable_frame_index and ordered part
         let mut common = || {
             let mut reliable_frame_index = None;
             let mut ordered = None;
@@ -106,34 +110,31 @@ where
             Ok((reliable_frame_index, ordered))
         };
 
-        if msg.get_data().len() < max_len {
+        if body.len() <= max_len {
             // not exceeding the mtu, no need to split.
             let (reliable_frame_index, ordered) = common()?;
             if reliability.is_sequenced_or_ordered() {
                 this.order_write_index[order_channel as usize] += 1;
             }
-
             let frame = Frame {
                 flags: Flags::new(reliability, false),
                 reliable_frame_index,
                 seq_frame_index: None,
                 ordered,
                 fragment: None,
-                body: msg.into_data(),
+                body,
             };
             return this.frame.start_send(frame);
         }
 
-        // subtract the fragment part size
+        // subtract the fragment part option size
         let per_len = max_len - FRAGMENT_PART_SIZE;
-
-        let split = (msg.get_data().len() - 1) / per_len + 1;
-        let parted_id = *this.split_write_index;
-        *this.split_write_index += 1;
+        let parted_size = body.len().div_ceil(per_len) as u32;
+        let parted_id = *this.parted_id_write;
+        *this.parted_id_write = this.parted_id_write.wrapping_add(1);
 
         // exceeding the mtu, split the data
-        let mut data = msg.into_data();
-        for i in 0..split {
+        for parted_index in 0..parted_size {
             let (reliable_frame_index, ordered) = common()?;
             let frame = Frame {
                 flags: Flags::new(reliability, true),
@@ -141,12 +142,17 @@ where
                 seq_frame_index: None,
                 ordered,
                 fragment: Some(connected::Fragment {
-                    parted_size: split as u32,
+                    parted_size,
                     parted_id,
-                    parted_index: i as u32,
+                    parted_index,
                 }),
-                body: data.split_to(min(per_len, data.len())),
+                body: body.split_to(min(per_len, body.len())),
             };
+            debug_assert!(
+                frame.body.len() <= max_len,
+                "split failed, the frame body is too large"
+            );
+            // FIXME: poll_ready is not ensured before start_send
             this.frame.as_mut().start_send(frame)?;
         }
 
@@ -155,7 +161,7 @@ where
         }
 
         debug_assert!(
-            data.remaining() == 0,
+            body.remaining() == 0,
             "split failed, there still remains data"
         );
 
@@ -297,7 +303,22 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_fragmented_fulfill_mtu() {
+    async fn test_fragmented_fulfill_one_packet() {
+        let mut dst = DstSink::default().fragmented(50, 8);
+        dst.send(Message::new(
+            Reliability::ReliableOrdered,
+            0,
+            Bytes::from_iter(std::iter::repeat(0xfe).take(50 - FRAME_SET_HEADER_SIZE - 10)),
+        ))
+        .await
+        .unwrap();
+        assert_eq!(dst.frame.buf.len(), 1);
+        assert!(dst.frame.buf[0].fragment.is_none());
+        assert_eq!(dst.frame.buf[0].size(), 50 - FRAME_SET_HEADER_SIZE);
+    }
+
+    #[tokio::test]
+    async fn test_fragmented_split_packet() {
         let mut dst = DstSink::default().fragmented(50, 8);
         dst.send(Message::new(
             Reliability::ReliableOrdered,

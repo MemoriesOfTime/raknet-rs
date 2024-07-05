@@ -40,7 +40,7 @@ impl ResendMap {
         for record in ack.records {
             match record {
                 Record::Range(start, end) => {
-                    // TODO: optimized for range remove for btree map
+                    // TODO: optimized for range remove for sorted map
                     for i in start.to_u32()..end.to_u32() {
                         self.map.remove(&i.into());
                     }

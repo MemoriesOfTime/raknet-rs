@@ -27,6 +27,8 @@ pub(crate) struct Acknowledgement {
     outgoing_ack_tx: PrioritySender<u24>,
     outgoing_ack_rx: PriorityReceiver<u24>,
 
+    // TODO: nack channel should always be in order according to [`DeFragment::poll_next`], replace
+    // it with flume
     outgoing_nack_tx: PrioritySender<u24>,
     outgoing_nack_rx: PriorityReceiver<u24>,
 

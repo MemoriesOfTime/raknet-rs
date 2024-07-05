@@ -5,7 +5,8 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 use crate::errors::CodecError;
 use crate::packet::{
-    read_buf, PackType, SocketAddrRead, SocketAddrWrite, NEEDS_B_AND_AS_FLAG, PARTED_FLAG,
+    read_buf, PackType, SocketAddrRead, SocketAddrWrite, FRAGMENT_PART_SIZE, NEEDS_B_AND_AS_FLAG,
+    PARTED_FLAG,
 };
 use crate::utils::{u24, BufExt, BufMutExt};
 
@@ -96,13 +97,14 @@ impl FrameMut {
     }
 
     /// Remove the parted flags & fragment payload
-    pub(crate) fn reassembled(&mut self) {
+    pub(crate) fn reassembled(mut self) -> Self {
         if !self.flags.parted {
-            return;
+            return self;
         }
         self.flags.raw &= PARTED_FLAG.reverse_bits();
         self.flags.parted = false;
         self.fragment = None;
+        self
     }
 
     fn read(buf: &mut BytesMut, deep_copy: bool) -> Result<Self, CodecError> {
@@ -179,11 +181,11 @@ impl<B: Buf> Frame<B> {
         buf.put(self.body);
     }
 
-    /// Get the total ¬size of this frame
+    /// Get the total size of this frame
     pub(crate) fn size(&self) -> usize {
         let mut size = self.flags.reliability.size();
         if self.fragment.is_some() {
-            size += 10;
+            size += FRAGMENT_PART_SIZE;
         }
         size += self.body.remaining();
         size
