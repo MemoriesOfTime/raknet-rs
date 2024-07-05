@@ -15,17 +15,16 @@ pub fn codec_benchmark(c: &mut Criterion) {
 
     // large packets, every frame set only contains one frame
     {
-        let opts = micro_bench::codec::Options::builder()
-            .frame_per_set(1)
-            .frame_set_cnt(14400)
-            .duplicated_ratio(0.01)
-            .unordered(true)
-            .parted_size(4)
-            .shuffle(false)
-            .seed(seed)
-            .data(BytesMut::from_iter(include_bytes!("data/body-large.txt")))
-            .build()
-            .unwrap();
+        let opts = micro_bench::codec::Options {
+            frame_per_set: 1,
+            frame_set_cnt: 14400,
+            duplicated_ratio: 0.01,
+            unordered: true,
+            parted_size: 4,
+            shuffle: false,
+            seed,
+            data: BytesMut::from_iter(include_bytes!("data/body-large.txt")),
+        };
 
         // total data size: 16369200 bytes, data count: 3600, mtu: 1136
         println!(
@@ -46,17 +45,16 @@ pub fn codec_benchmark(c: &mut Criterion) {
 
     // medium packets, every frame set contains 6 frame
     {
-        let opts = micro_bench::codec::Options::builder()
-            .frame_per_set(6)
-            .frame_set_cnt(600)
-            .duplicated_ratio(0.01)
-            .unordered(true)
-            .parted_size(1)
-            .shuffle(false)
-            .seed(seed)
-            .data(BytesMut::from_iter(include_bytes!("data/body-medium.txt")))
-            .build()
-            .unwrap();
+        let opts = micro_bench::codec::Options {
+            frame_per_set: 6,
+            frame_set_cnt: 600,
+            duplicated_ratio: 0.01,
+            unordered: true,
+            parted_size: 1,
+            shuffle: false,
+            seed,
+            data: BytesMut::from_iter(include_bytes!("data/body-medium.txt")),
+        };
 
         // total data size: 630000 bytes, data count: 3600, mtu: 1050
         println!(
@@ -77,17 +75,16 @@ pub fn codec_benchmark(c: &mut Criterion) {
 
     // short packets, every frame set contains 36 frame
     {
-        let opts = micro_bench::codec::Options::builder()
-            .frame_per_set(36)
-            .frame_set_cnt(100)
-            .duplicated_ratio(0.01)
-            .unordered(true)
-            .parted_size(1)
-            .shuffle(false)
-            .seed(seed)
-            .data(BytesMut::from_iter(include_bytes!("data/body-short.txt")))
-            .build()
-            .unwrap();
+        let opts = micro_bench::codec::Options {
+            frame_per_set: 36,
+            frame_set_cnt: 100,
+            duplicated_ratio: 0.01,
+            unordered: true,
+            parted_size: 1,
+            shuffle: false,
+            seed,
+            data: BytesMut::from_iter(include_bytes!("data/body-short.txt")),
+        };
 
         // total data size: 118800 bytes, data count: 3600, mtu: 1188
         println!(
@@ -108,17 +105,16 @@ pub fn codec_benchmark(c: &mut Criterion) {
 
     // large packets, every frame set only contains one frame
     {
-        let opts = micro_bench::codec::Options::builder()
-            .frame_per_set(1)
-            .frame_set_cnt(1440)
-            .duplicated_ratio(0.01)
-            .unordered(true)
-            .parted_size(4)
-            .shuffle(false)
-            .seed(seed)
-            .data(BytesMut::from_iter(include_bytes!("data/body-large.txt")))
-            .build()
-            .unwrap();
+        let opts = micro_bench::codec::Options {
+            frame_per_set: 1,
+            frame_set_cnt: 1440,
+            duplicated_ratio: 0.01,
+            unordered: true,
+            parted_size: 4,
+            shuffle: false,
+            seed,
+            data: BytesMut::from_iter(include_bytes!("data/body-large.txt")),
+        };
 
         // total data size: 1,636,920 bytes, data count: 360, mtu: 1136
         println!(
@@ -139,17 +135,16 @@ pub fn codec_benchmark(c: &mut Criterion) {
 
     // medium packets, every frame set contains 6 frame
     {
-        let opts = micro_bench::codec::Options::builder()
-            .frame_per_set(6)
-            .frame_set_cnt(1550)
-            .duplicated_ratio(0.01)
-            .unordered(true)
-            .parted_size(1)
-            .shuffle(false)
-            .seed(seed)
-            .data(BytesMut::from_iter(include_bytes!("data/body-medium.txt")))
-            .build()
-            .unwrap();
+        let opts = micro_bench::codec::Options {
+            frame_per_set: 6,
+            frame_set_cnt: 1550,
+            duplicated_ratio: 0.01,
+            unordered: true,
+            parted_size: 1,
+            shuffle: false,
+            seed,
+            data: BytesMut::from_iter(include_bytes!("data/body-medium.txt")),
+        };
 
         // total data size: 1,636,800 bytes, data count: 9300, mtu: 1056
         println!(
@@ -170,17 +165,16 @@ pub fn codec_benchmark(c: &mut Criterion) {
 
     // short packets, every frame set contains 36 frame
     {
-        let opts = micro_bench::codec::Options::builder()
-            .frame_per_set(36)
-            .frame_set_cnt(1378)
-            .duplicated_ratio(0.01)
-            .unordered(true)
-            .parted_size(1)
-            .shuffle(false)
-            .seed(seed)
-            .data(BytesMut::from_iter(include_bytes!("data/body-short.txt")))
-            .build()
-            .unwrap();
+        let opts = micro_bench::codec::Options {
+            frame_per_set: 36,
+            frame_set_cnt: 1378,
+            duplicated_ratio: 0.01,
+            unordered: true,
+            parted_size: 1,
+            shuffle: false,
+            seed,
+            data: BytesMut::from_iter(include_bytes!("data/body-short.txt")),
+        };
 
         // total data size: 1,637,064 bytes, data count: 49608, mtu: 1188
         println!(

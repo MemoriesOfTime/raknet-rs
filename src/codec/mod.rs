@@ -120,32 +120,19 @@ pub mod micro_bench {
     use crate::packet::connected::{Flags, Fragment, Frame, Ordered, Reliability};
     use crate::RoleContext;
 
-    #[derive(derive_builder::Builder, Debug, Clone)]
+    #[derive(Debug, Clone)]
     pub struct Options {
-        frame_set_cnt: usize,
-        frame_per_set: usize,
-        duplicated_ratio: f32,
-        unordered: bool,
-        parted_size: usize,
-        shuffle: bool,
-        seed: u64,
-        data: BytesMut,
+        pub frame_set_cnt: usize,
+        pub frame_per_set: usize,
+        pub duplicated_ratio: f32,
+        pub unordered: bool,
+        pub parted_size: usize,
+        pub shuffle: bool,
+        pub seed: u64,
+        pub data: BytesMut,
     }
 
     impl Options {
-        pub fn builder() -> OptionsBuilder {
-            OptionsBuilder {
-                frame_set_cnt: None,
-                frame_per_set: None,
-                duplicated_ratio: None,
-                unordered: None,
-                parted_size: None,
-                shuffle: None,
-                seed: None,
-                data: None,
-            }
-        }
-
         fn gen_inputs(&self) -> Vec<FrameSet<FramesMut>> {
             assert!(self.frame_per_set * self.frame_set_cnt % self.parted_size == 0);
             assert!(self.data.len() > self.parted_size);
@@ -290,17 +277,16 @@ pub mod micro_bench {
     #[cfg(test)]
     #[tokio::test]
     async fn test_bench() {
-        let opts = Options::builder()
-            .frame_per_set(8)
-            .frame_set_cnt(100)
-            .duplicated_ratio(0.1)
-            .unordered(true)
-            .parted_size(4)
-            .shuffle(true)
-            .seed(114514)
-            .data(BytesMut::from_iter(b"1145141919810"))
-            .build()
-            .unwrap();
+        let opts = Options {
+            frame_per_set: 8,
+            frame_set_cnt: 100,
+            duplicated_ratio: 0.1,
+            unordered: true,
+            parted_size: 4,
+            shuffle: true,
+            seed: 114514,
+            data: BytesMut::from_iter(b"1145141919810"),
+        };
         assert_eq!(opts.input_data_size(), 8 * 100 / 4 * "1145141919810".len());
         let bench = MicroBench::new(opts);
         bench.bench_decoded_checked().await;
