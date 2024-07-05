@@ -3,7 +3,9 @@
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::ops::DerefMut;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
+
+use parking_lot::{Mutex, MutexGuard};
 
 /// Create an unbounded priority channel. The smallest T with highest priority by default
 pub(crate) fn unbounded<T: Ord>() -> (Sender<T>, Receiver<T>) {
@@ -32,24 +34,24 @@ impl<'a, T: Ord> Iterator for BatchRecv<'a, T> {
 
 impl<T: Ord> PriorityChanShare<T> {
     fn send(&self, t: T) {
-        self.heap.lock().unwrap().push(Reverse(t));
+        self.heap.lock().push(Reverse(t));
     }
 
     fn send_batch(&self, t: impl IntoIterator<Item = T>) {
-        self.heap.lock().unwrap().extend(t.into_iter().map(Reverse));
+        self.heap.lock().extend(t.into_iter().map(Reverse));
     }
 
     fn recv(&self) -> Option<T> {
-        self.heap.lock().unwrap().pop().map(|v| v.0)
+        self.heap.lock().pop().map(|v| v.0)
     }
 
     fn recv_batch(&self) -> BatchRecv<'_, T> {
-        let guard = self.heap.lock().unwrap();
+        let guard = self.heap.lock();
         BatchRecv { guard }
     }
 
     fn is_empty(&self) -> bool {
-        self.heap.lock().unwrap().is_empty()
+        self.heap.lock().is_empty()
     }
 }
 
@@ -143,8 +145,25 @@ mod test {
         assert_eq!(v2, vec![3, 4]);
     }
 
+    // No poison support for now :(
+    // https://github.com/Amanieu/parking_lot/issues/44
+    //
+    // > Generally the intended behavior on panic is to simply release any locks while unwinding.
+    // 
+    // #[test]
+    // fn test_lock_poisoning() {
+    //     let (sender, receiver) = unbounded();
+    //     sender.send_batch(0..5);
+    //     std::thread::spawn(move || {
+    //         let mut reception = receiver.recv_batch();
+    //         panic!("awsl");
+    //     })
+    //     .join();
+    //     assert!(sender.0.heap.is_poisoned());
+    // }
+
     #[test]
-    fn test_lock_poisoning() {
+    fn test_lock_panic_release() {
         let (sender, receiver) = unbounded();
         sender.send_batch(0..5);
         std::thread::spawn(move || {
@@ -152,6 +171,7 @@ mod test {
             panic!("awsl");
         })
         .join();
-        assert!(sender.0.heap.is_poisoned());
+        // lock is released
+        assert!(!sender.0.heap.is_locked());
     }
 }
