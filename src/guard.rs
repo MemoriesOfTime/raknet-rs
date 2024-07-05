@@ -12,7 +12,7 @@ use minstant::Instant;
 use pin_project_lite::pin_project;
 
 use crate::errors::CodecError;
-use crate::packet::connected::{self, AckOrNack, Frame, FrameSet, Frames, Record};
+use crate::packet::connected::{self, AckOrNack, Frame, FrameSet, Frames, FramesRef, Record};
 use crate::packet::{Packet, FRAME_SET_HEADER_SIZE};
 use crate::utils::{priority_mpsc, u24};
 use crate::{PeerContext, RoleContext};
@@ -116,7 +116,8 @@ pub(crate) trait HandleOutgoingAck: Sized {
 
 impl<F> HandleOutgoingAck for F
 where
-    F: Sink<(Packet<Frames>, SocketAddr), Error = CodecError>,
+    F:, /* for<'a> Sink<(Packet<FramesRef<'a>>, SocketAddr), Error = CodecError>,  // In order
+         * for cargo clippy to work properly on high rank lifetime, this was commented out. */
 {
     fn handle_outgoing(
         self,
@@ -150,7 +151,7 @@ const RTO: Duration = Duration::from_millis(77);
 
 impl<F> OutgoingGuard<F>
 where
-    F: Sink<(Packet<Frames>, SocketAddr), Error = CodecError>,
+    F: for<'a> Sink<(Packet<FramesRef<'a>>, SocketAddr), Error = CodecError>,
 {
     fn try_ack(self: Pin<&mut Self>) {
         let this = self.project();
@@ -278,7 +279,7 @@ where
                 sent = false;
             }
 
-            // TODO: more efficient send buf
+            // TODO: with capacity
             let mut frames = vec![];
             let mut reliable = false;
 
@@ -299,17 +300,17 @@ where
             if !frames.is_empty() {
                 let frame_set = FrameSet {
                     seq_num: *this.seq_num_write_index,
-                    set: frames,
+                    set: &frames[..],
                 };
                 this.frame.as_mut().start_send((
-                    Packet::Connected(connected::Packet::FrameSet(frame_set.clone())),
+                    Packet::Connected(connected::Packet::FrameSet(frame_set)),
                     this.peer.addr,
                 ))?;
                 sent = true;
                 if reliable {
                     // keep for resending
                     this.resending
-                        .insert(frame_set.seq_num, (frame_set.set, Instant::now().add(RTO)));
+                        .insert(*this.seq_num_write_index, (frames, Instant::now().add(RTO)));
                 }
                 *this.seq_num_write_index += 1;
             }
@@ -321,7 +322,7 @@ where
 
 impl<F> Sink<Frame> for OutgoingGuard<F>
 where
-    F: Sink<(Packet<Frames>, SocketAddr), Error = CodecError>,
+    F: for<'a> Sink<(Packet<FramesRef<'a>>, SocketAddr), Error = CodecError>,
 {
     type Error = CodecError;
 

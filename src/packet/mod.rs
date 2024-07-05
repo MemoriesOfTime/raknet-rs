@@ -4,7 +4,7 @@ pub(crate) mod unconnected;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
 use bytes::{Buf, BufMut, BytesMut};
-use connected::FramesMut;
+use connected::{FramesMut, FramesRef};
 
 use self::connected::Frames;
 use crate::errors::CodecError;
@@ -143,6 +143,19 @@ pub(crate) enum Packet<S> {
 }
 
 impl<B: Buf> Packet<Frames<B>> {
+    pub(crate) fn write(self, buf: &mut BytesMut) {
+        match self {
+            Packet::Unconnected(packet) => {
+                packet.write(buf);
+            }
+            Packet::Connected(packet) => {
+                packet.write(buf);
+            }
+        }
+    }
+}
+
+impl<'a, B: Buf + Clone> Packet<FramesRef<'a, B>> {
     pub(crate) fn write(self, buf: &mut BytesMut) {
         match self {
             Packet::Unconnected(packet) => {

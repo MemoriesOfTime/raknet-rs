@@ -17,7 +17,8 @@ impl<B: Buf> Encoder<Packet<Frames<B>>> for Codec {
     }
 }
 
-impl<'a, B: Buf> Encoder<Packet<FramesRef<'a, B>>> for Codec {
+// encode from a frames slice
+impl<'a, B: Buf + Clone> Encoder<Packet<FramesRef<'a, B>>> for Codec {
     type Error = CodecError;
 
     fn encode(
@@ -25,8 +26,8 @@ impl<'a, B: Buf> Encoder<Packet<FramesRef<'a, B>>> for Codec {
         item: Packet<FramesRef<'a, B>>,
         dst: &mut BytesMut,
     ) -> Result<(), Self::Error> {
-        // TODO: encode Packet<FramesRef<'a, B>> into dst
-        todo!()
+        item.write(dst);
+        Ok(())
     }
 }
 

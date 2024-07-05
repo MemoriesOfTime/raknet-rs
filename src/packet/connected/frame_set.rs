@@ -55,6 +55,15 @@ impl<B: Buf> FrameSet<Frames<B>> {
     }
 }
 
+impl<'a, B: Buf + Clone> FrameSet<FramesRef<'a, B>> {
+    pub(super) fn write(self, buf: &mut BytesMut) {
+        buf.put_u24_le(self.seq_num);
+        for frame in self.set {
+            frame.write_ref(buf);
+        }
+    }
+}
+
 #[derive(PartialEq, Clone)]
 pub(crate) struct Frame<B = Bytes> {
     pub(crate) flags: Flags,
@@ -178,6 +187,32 @@ impl<B: Buf> Frame<B> {
         }
         size += self.body.remaining();
         size
+    }
+}
+
+impl<B: Buf + Clone> Frame<B> {
+    fn write_ref(&self, buf: &mut BytesMut) {
+        self.flags.write(buf);
+        // length in bits
+        // self.body will be split up so cast to u16 should not overflow here
+        debug_assert!(
+            self.body.remaining() < (u16::MAX >> 3) as usize,
+            "self.body should be constructed based on mtu"
+        );
+        buf.put_u16((self.body.remaining() << 3) as u16);
+        if let Some(reliable_frame_index) = self.reliable_frame_index {
+            buf.put_u24_le(reliable_frame_index);
+        }
+        if let Some(seq_frame_index) = self.seq_frame_index {
+            buf.put_u24_le(seq_frame_index);
+        }
+        if let Some(ordered) = self.ordered {
+            ordered.write(buf);
+        }
+        if let Some(fragment) = self.fragment {
+            fragment.write(buf);
+        }
+        buf.put(self.body.clone()); // Bytes or BytesMut's clone are cheap
     }
 }
 
@@ -323,7 +358,7 @@ impl Flags {
         Self::parse(raw)
     }
 
-    fn write(self, buf: &mut BytesMut) {
+    fn write(&self, buf: &mut BytesMut) {
         buf.put_u8(self.raw);
     }
 
