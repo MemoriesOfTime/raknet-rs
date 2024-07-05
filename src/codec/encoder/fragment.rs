@@ -9,7 +9,7 @@ use pin_project_lite::pin_project;
 
 use crate::errors::CodecError;
 use crate::packet::connected::{self, Flags, Frame, Ordered, Reliability};
-use crate::packet::{PackType, FRAME_SET_HEADER_SIZE};
+use crate::packet::{PackType, FRAGMENT_PART_SIZE, FRAME_SET_HEADER_SIZE};
 use crate::utils::u24;
 use crate::Message;
 
@@ -125,7 +125,7 @@ where
         }
 
         // subtract the fragment part size
-        let per_len = max_len - 10;
+        let per_len = max_len - FRAGMENT_PART_SIZE;
 
         let split = (msg.get_data().len() - 1) / per_len + 1;
         let parted_id = *this.split_write_index;
@@ -202,36 +202,6 @@ mod test {
         buf: Frames,
     }
 
-    impl Sink<Frames> for DstSink {
-        type Error = CodecError;
-
-        fn poll_ready(
-            self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-        ) -> Poll<Result<(), Self::Error>> {
-            Poll::Ready(Ok(()))
-        }
-
-        fn start_send(mut self: Pin<&mut Self>, item: Frames) -> Result<(), Self::Error> {
-            self.buf.extend(item);
-            Ok(())
-        }
-
-        fn poll_flush(
-            self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-        ) -> Poll<Result<(), Self::Error>> {
-            Poll::Ready(Ok(()))
-        }
-
-        fn poll_close(
-            self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-        ) -> Poll<Result<(), Self::Error>> {
-            Poll::Ready(Ok(()))
-        }
-    }
-
     impl Sink<Frame> for DstSink {
         type Error = CodecError;
 
@@ -282,13 +252,15 @@ mod test {
         .await
         .unwrap();
         // error
-        dst.send(Message::new(
-            Reliability::ReliableOrdered,
-            100,
-            Bytes::from_static(b"hello world"),
-        ))
-        .await
-        .unwrap_err();
+        let err = dst
+            .send(Message::new(
+                Reliability::ReliableOrdered,
+                100,
+                Bytes::from_static(b"hello world"),
+            ))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CodecError::OrderedFrame(_)));
         // 1
         dst.send(Message::new(
             Reliability::Reliable,
@@ -322,5 +294,30 @@ mod test {
             dst.frame.buf[6].body,
             Bytes::from_static(&[PackType::DisconnectNotification as u8])
         );
+    }
+
+    #[tokio::test]
+    async fn test_fragmented_fulfill_mtu() {
+        let mut dst = DstSink::default().fragmented(50, 8);
+        dst.send(Message::new(
+            Reliability::ReliableOrdered,
+            0,
+            Bytes::from_iter(std::iter::repeat(0xfe).take(50)),
+        ))
+        .await
+        .unwrap();
+        assert_eq!(dst.frame.buf.len(), 2);
+        let mut fragment = dst.frame.buf[0].fragment.unwrap();
+        let r = dst.frame.buf[0].flags.reliability.size();
+        assert_eq!(fragment.parted_size, 2);
+        assert_eq!(fragment.parted_id, 0);
+        assert_eq!(fragment.parted_index, 0);
+        assert_eq!(dst.frame.buf[0].size(), 50 - FRAME_SET_HEADER_SIZE);
+        assert_eq!(dst.frame.buf[0].body.len(), 50 - FRAME_SET_HEADER_SIZE - r - FRAGMENT_PART_SIZE);
+
+        fragment = dst.frame.buf[1].fragment.unwrap();
+        assert_eq!(fragment.parted_size, 2);
+        assert_eq!(fragment.parted_id, 0);
+        assert_eq!(fragment.parted_index, 1);
     }
 }

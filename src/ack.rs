@@ -1,14 +1,21 @@
-use std::collections::{BTreeMap, VecDeque};
-use std::sync::atomic::AtomicBool;
+use std::collections::VecDeque;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{ready, Context, Poll};
 
 use flume::{Receiver, Sender};
+use futures::{Stream, StreamExt};
 use log::trace;
-use minstant::Instant;
+use pin_project_lite::pin_project;
 
-use crate::packet::connected::{AckOrNack, Frame, Frames, Record};
-use crate::utils::priority_mpsc::{Receiver as PriorityReceiver, Sender as PrioritySender};
+use crate::packet::connected::{self, AckOrNack, Frame, FrameSet};
+use crate::resend_map::ResendMap;
+use crate::utils::priority_mpsc::{self, Receiver as PriorityReceiver, Sender as PrioritySender};
 use crate::utils::u24;
 use crate::RoleContext;
+
+/// Shared acknowledgement handler
+pub(crate) type SharedAck = Arc<Acknowledgement>;
 
 pub(crate) struct Acknowledgement {
     incoming_ack_tx: Sender<AckOrNack>,
@@ -23,12 +30,42 @@ pub(crate) struct Acknowledgement {
     outgoing_nack_tx: PrioritySender<u24>,
     outgoing_nack_rx: PriorityReceiver<u24>,
 
-    rb: AtomicBool,
-
     role: RoleContext,
 }
 
 impl Acknowledgement {
+    pub(crate) fn new_arc(role: RoleContext) -> SharedAck {
+        let (incoming_ack_tx, incoming_ack_rx) = flume::unbounded();
+        let (incoming_nack_tx, incoming_nack_rx) = flume::unbounded();
+
+        let (outgoing_ack_tx, outgoing_ack_rx) = priority_mpsc::unbounded();
+        let (outgoing_nack_tx, outgoing_nack_rx) = priority_mpsc::unbounded();
+        Arc::new(Self {
+            incoming_ack_tx,
+            incoming_ack_rx,
+            incoming_nack_tx,
+            incoming_nack_rx,
+            outgoing_ack_tx,
+            outgoing_ack_rx,
+            outgoing_nack_tx,
+            outgoing_nack_rx,
+            role,
+        })
+    }
+
+    pub(crate) fn filter_incoming_ack<F, S>(
+        self: SharedAck,
+        frame: F,
+    ) -> impl Stream<Item = FrameSet<S>>
+    where
+        F: Stream<Item = connected::Packet<S>>,
+    {
+        IncomingAckFilter {
+            frame,
+            ack: Arc::clone(&self),
+        }
+    }
+
     pub(crate) fn incoming_ack(&self, records: AckOrNack) {
         self.incoming_ack_tx.send(records).unwrap();
     }
@@ -45,66 +82,70 @@ impl Acknowledgement {
         self.outgoing_nack_tx.send(seq_num);
     }
 
-    pub(crate) fn filter_resending(
-        &self,
-        resending: &mut BTreeMap<u24, (Frames, Instant)>,
-        buffer: &mut VecDeque<Frame>,
-    ) {
+    // Clear all acknowledged frames
+    pub(crate) fn poll_ack(&self, resend: &mut ResendMap) {
         for ack in self.incoming_ack_rx.try_iter() {
             trace!(
                 "[{}] receive ack {ack:?}, total count: {}",
                 self.role,
                 ack.total_cnt()
             );
-            for record in ack.records {
-                match record {
-                    Record::Range(start, end) => {
-                        for i in start.to_u32()..end.to_u32() {
-                            // TODO: optimized for range remove for btree map
-                            resending.remove(&i.into());
-                        }
-                    }
-                    Record::Single(seq_num) => {
-                        resending.remove(&seq_num);
-                    }
-                }
-            }
+            resend.on_ack(ack);
         }
+    }
+
+    /// Push all missing frames into buffer
+    /// Notice this method should be called after serval invoking of [`Acknowledgement::poll_ack`].
+    /// Otherwise, some packets that do not need to be resent may be sent.
+    /// As for how many times to invoke [`Acknowledgement::poll_ack`] before this, it depends.
+    pub(crate) fn poll_resend(&self, resend: &mut ResendMap, buffer: &mut VecDeque<Frame>) {
         for nack in self.incoming_nack_rx.try_iter() {
             trace!(
                 "[{}] receive nack {nack:?}, total count: {}",
                 self.role,
                 nack.total_cnt()
             );
-            for record in nack.records {
-                match record {
-                    Record::Range(start, end) => {
-                        for i in start.to_u32()..end.to_u32() {
-                            if let Some((set, _)) = resending.remove(&i.into()) {
-                                buffer.extend(set);
-                            }
-                        }
-                    }
-                    Record::Single(seq_num) => {
-                        if let Some((set, _)) = resending.remove(&seq_num) {
-                            buffer.extend(set);
-                        }
-                    }
-                }
-            }
+            resend.on_nack_into(nack, buffer);
         }
     }
 
-    // Poll outgoing ack or nack with round robin
-    pub(crate) fn poll_outgoing(&self, mtu: u16) -> Option<AckOrNack> {
-        if self.rb.load(std::sync::atomic::Ordering::Relaxed) {
-            self.rb.store(false, std::sync::atomic::Ordering::Relaxed);
-            AckOrNack::extend_from(self.outgoing_ack_rx.recv_batch(), mtu)
-                .or_else(|| AckOrNack::extend_from(self.outgoing_nack_rx.recv_batch(), mtu))
-        } else {
-            self.rb.store(true, std::sync::atomic::Ordering::Relaxed);
-            AckOrNack::extend_from(self.outgoing_nack_rx.recv_batch(), mtu)
-                .or_else(|| AckOrNack::extend_from(self.outgoing_ack_rx.recv_batch(), mtu))
+    pub(crate) fn poll_outgoing_ack(&self, mtu: u16) -> Option<AckOrNack> {
+        AckOrNack::extend_from(self.outgoing_ack_rx.recv_batch(), mtu)
+    }
+
+    pub(crate) fn poll_outgoing_nack(&self, mtu: u16) -> Option<AckOrNack> {
+        AckOrNack::extend_from(self.outgoing_nack_rx.recv_batch(), mtu)
+    }
+}
+
+pin_project! {
+    // IncomingGuard delivers all acknowledgement packets into outgoing guard, mapping
+    // connected::Packet into FrameSet
+    pub(crate) struct IncomingAckFilter<F> {
+        #[pin]
+        frame: F,
+        ack: SharedAck
+    }
+}
+
+impl<F, S> Stream for IncomingAckFilter<F>
+where
+    F: Stream<Item = connected::Packet<S>>,
+{
+    type Item = FrameSet<S>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let mut this = self.project();
+
+        loop {
+            let Some(packet) = ready!(this.frame.poll_next_unpin(cx)) else {
+                return Poll::Ready(None);
+            };
+            match packet {
+                connected::Packet::FrameSet(frame_set) => return Poll::Ready(Some(frame_set)),
+                connected::Packet::Ack(records) => this.ack.incoming_ack(records),
+                connected::Packet::Nack(records) => this.ack.incoming_nack(records),
+            };
         }
     }
 }

@@ -77,6 +77,8 @@ where
     }
 }
 
+// Propagate sink for logged wrapper
+// Do not log error for sink as it already throws error to the user
 impl<F, T, E, Si> Sink<Si> for Log<F, T, E>
 where
     F: Sink<Si, Error = E>,

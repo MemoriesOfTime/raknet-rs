@@ -278,19 +278,20 @@ where
                 sent = false;
             }
 
+            // TODO: more efficient send buf
             let mut frames = vec![];
             let mut reliable = false;
 
             // TODO: implement sliding window congestion control to select a proper transmission
             // bandwidth
             let mut remain_mtu = this.peer.mtu as usize - FRAME_SET_HEADER_SIZE;
-            while let Some(frame) = this.buf.front() {
+            while let Some(frame) = this.buf.back() {
                 if remain_mtu >= frame.size() {
                     if frame.flags.reliability.is_reliable() {
                         reliable = true;
                     }
                     remain_mtu -= frame.size();
-                    frames.push(this.buf.pop_front().unwrap());
+                    frames.push(this.buf.pop_back().unwrap());
                     continue;
                 }
                 break;
@@ -340,7 +341,7 @@ where
 
     fn start_send(self: Pin<&mut Self>, frame: Frame) -> Result<(), Self::Error> {
         let this = self.project();
-        this.buf.push_back(frame);
+        this.buf.push_front(frame);
         // Always success
         Ok(())
     }

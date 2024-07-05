@@ -11,6 +11,9 @@ use crate::utils::{u24, BufExt, BufMutExt};
 
 pub(crate) type Frames<B = Bytes> = Vec<Frame<B>>;
 
+// Cheap slice of a frames vector to reduce heap allocation
+pub(crate) type FramesRef<'a, B = Bytes> = &'a [Frame<B>];
+
 pub(crate) type FramesMut = Frames<BytesMut>;
 
 pub(crate) type FrameMut = Frame<BytesMut>;
@@ -26,11 +29,12 @@ impl FrameSet<FramesMut> {
         let seq_num = read_buf!(buf, 3, buf.get_u24_le());
         let mut frames = vec![];
         let reader_buf_cap = buf.capacity();
-        let reader_buf_len = buf.len();
+        let reader_buf_len = buf.len(); // remaining
         while buf.has_remaining() {
-            // reader_buf_len < (reader_buf_cap / 2), then deeply copy all bytes from reader buffer
+            // reader_buf_len < reader_buf_cap * 50%, then deeply copy all bytes from reader buffer
             // instead of occupying reader buffer slots
-            frames.push(Frame::read(buf, reader_buf_len < (reader_buf_cap >> 1))?);
+            let deep_copy = reader_buf_len < (reader_buf_cap >> 1);
+            frames.push(Frame::read(buf, deep_copy)?);
         }
         if frames.is_empty() {
             return Err(CodecError::InvalidPacketLength("frame set"));
