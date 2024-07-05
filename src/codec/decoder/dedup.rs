@@ -5,9 +5,10 @@ use futures::{ready, Stream, StreamExt};
 use minitrace::local::LocalSpan;
 use pin_project_lite::pin_project;
 
+use crate::ack::SharedAck;
 use crate::errors::CodecError;
 use crate::packet::connected::{FrameSet, Frames};
-use crate::utils::{priority_mpsc, u24, BitVecQueue};
+use crate::utils::{u24, BitVecQueue};
 
 /// The deduplication window. For each connect, the maximum size is
 /// 2 ^ (8 * 3) / 8 / 1024 / 1024 = 2MB.
@@ -60,32 +61,24 @@ pin_project! {
         // Limit the maximum reliable_frame_index gap for a connection. 0 means no limit.
         max_gap: usize,
         window: DuplicateWindow,
-        outgoing_ack_tx: priority_mpsc::Sender<u24>,
+        ack: SharedAck,
     }
 }
 
 pub(crate) trait Deduplicated: Sized {
-    fn deduplicated(
-        self,
-        max_gap: usize,
-        outgoing_ack_tx: priority_mpsc::Sender<u24>,
-    ) -> Dedup<Self>;
+    fn deduplicated(self, max_gap: usize, ack: SharedAck) -> Dedup<Self>;
 }
 
 impl<F, B> Deduplicated for F
 where
     F: Stream<Item = Result<FrameSet<Frames<B>>, CodecError>>,
 {
-    fn deduplicated(
-        self,
-        max_gap: usize,
-        outgoing_ack_tx: priority_mpsc::Sender<u24>,
-    ) -> Dedup<Self> {
+    fn deduplicated(self, max_gap: usize, ack: SharedAck) -> Dedup<Self> {
         Dedup {
             frame: self,
             max_gap,
             window: DuplicateWindow::default(),
-            outgoing_ack_tx,
+            ack,
         }
     }
 }
@@ -125,7 +118,7 @@ where
                 return Poll::Ready(Some(Ok(frame_set)));
             }
             // all duplicated, send ack back
-            this.outgoing_ack_tx.send(frame_set.seq_num);
+            this.ack.outgoing_ack(frame_set.seq_num);
         }
     }
 }
@@ -141,6 +134,7 @@ mod test {
     use indexmap::IndexSet;
 
     use super::*;
+    use crate::ack::Acknowledgement;
     use crate::errors::CodecError;
     use crate::packet::connected::{Flags, Frame, FrameSet};
 
@@ -224,12 +218,11 @@ mod test {
             }
         };
         tokio::pin!(frame);
-        let (outgoing_ack_tx, _rx) = priority_mpsc::unbounded();
         let mut dedup = Dedup {
             frame: frame.map(Ok),
             max_gap: 100,
             window: DuplicateWindow::default(),
-            outgoing_ack_tx,
+            ack: Acknowledgement::new_arc(crate::RoleContext::Server),
         };
 
         assert_eq!(dedup.next().await.unwrap().unwrap(), frame_set(0..64));
@@ -253,12 +246,11 @@ mod test {
             }
         };
         tokio::pin!(frame);
-        let (outgoing_ack_tx, _rx) = priority_mpsc::unbounded();
         let mut dedup = Dedup {
             frame: frame.map(Ok),
             max_gap: 100,
             window: DuplicateWindow::default(),
-            outgoing_ack_tx,
+            ack: Acknowledgement::new_arc(crate::RoleContext::Server),
         };
         assert_eq!(dedup.next().await.unwrap().unwrap(), frame_set([0]));
         assert_eq!(dedup.next().await.unwrap().unwrap(), frame_set([101]));
@@ -278,12 +270,11 @@ mod test {
             }
         };
         tokio::pin!(frame);
-        let (outgoing_ack_tx, _rx) = priority_mpsc::unbounded();
         let mut dedup = Dedup {
             frame: frame.map(Ok),
             max_gap: 100,
             window: DuplicateWindow::default(),
-            outgoing_ack_tx,
+            ack: Acknowledgement::new_arc(crate::RoleContext::Server),
         };
         assert_eq!(
             dedup.next().await.unwrap().unwrap(),
@@ -314,12 +305,11 @@ mod test {
             }
         };
         tokio::pin!(frame);
-        let (outgoing_ack_tx, _rx) = priority_mpsc::unbounded();
         let mut dedup = Dedup {
             frame: frame.map(Ok),
             max_gap: scale,
             window: DuplicateWindow::default(),
-            outgoing_ack_tx,
+            ack: Acknowledgement::new_arc(crate::RoleContext::Server),
         };
         assert_eq!(dedup.next().await.unwrap().unwrap(), frame_set(idx1_set));
 

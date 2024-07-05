@@ -10,9 +10,10 @@ use lru::LruCache;
 use minitrace::local::LocalSpan;
 use pin_project_lite::pin_project;
 
+use crate::ack::SharedAck;
 use crate::errors::CodecError;
 use crate::packet::connected::{Fragment, Frame, FrameMut, FrameSet, FramesMut};
-use crate::utils::{priority_mpsc, u24};
+use crate::utils::u24;
 
 const DEFAULT_DEFRAGMENT_BUF_SIZE: usize = 512;
 
@@ -56,19 +57,13 @@ pin_project! {
         parts: LruCache<u16, BinaryHeap<FramePart>>,
         buffer: VecDeque<FrameSet<Frame>>,
         seq_num_read_index: u24,
-        outgoing_ack_tx: priority_mpsc::Sender<u24>,
-        outgoing_nack_tx: priority_mpsc::Sender<u24>,
+        ack: SharedAck,
     }
 }
 
 pub(crate) trait DeFragmented: Sized {
-    fn defragmented(
-        self,
-        limit_size: u32,
-        limit_parted: usize,
-        outgoing_ack_tx: priority_mpsc::Sender<u24>,
-        outgoing_nack_tx: priority_mpsc::Sender<u24>,
-    ) -> DeFragment<Self>;
+    fn defragmented(self, limit_size: u32, limit_parted: usize, ack: SharedAck)
+        -> DeFragment<Self>;
 }
 
 impl<F> DeFragmented for F
@@ -79,8 +74,7 @@ where
         self,
         limit_size: u32,
         limit_parted: usize,
-        outgoing_ack_tx: priority_mpsc::Sender<u24>,
-        outgoing_nack_tx: priority_mpsc::Sender<u24>,
+        ack: SharedAck,
     ) -> DeFragment<Self> {
         DeFragment {
             frame: self,
@@ -88,8 +82,7 @@ where
             parts: LruCache::new(NonZeroUsize::new(limit_parted).expect("limit_parted > 0")),
             buffer: VecDeque::with_capacity(DEFAULT_DEFRAGMENT_BUF_SIZE),
             seq_num_read_index: 0.into(),
-            outgoing_ack_tx,
-            outgoing_nack_tx,
+            ack,
         }
     }
 }
@@ -131,7 +124,7 @@ where
                     // promise that parted_index is always less than parted_size
                     if parted_index >= parted_size {
                         // perhaps network bit-flips
-                        this.outgoing_nack_tx.send(frame_set.seq_num);
+                        this.ack.outgoing_nack(frame_set.seq_num);
                         return Poll::Ready(Some(Err(CodecError::PartedFrame(format!(
                             "parted_index {} >= parted_size {}",
                             parted_index, parted_size
@@ -139,7 +132,7 @@ where
                     }
                     if *this.limit_size != 0 && parted_size > *this.limit_size {
                         // we discarded this packet and prevented the peer from resending it.
-                        this.outgoing_ack_tx.send(frame_set.seq_num);
+                        this.ack.outgoing_ack(frame_set.seq_num);
                         return Poll::Ready(Some(Err(CodecError::PartedFrame(format!(
                             "parted_size {} exceed limit_size {}",
                             parted_size, *this.limit_size
@@ -188,12 +181,12 @@ where
             }
 
             let seq_index = frame_set.seq_num;
-            this.outgoing_ack_tx.send(seq_index);
+            this.ack.outgoing_ack(seq_index);
             let pre_read_index = *this.seq_num_read_index;
             if pre_read_index <= seq_index {
                 *this.seq_num_read_index = seq_index + 1;
                 let nack = pre_read_index.to_u32()..seq_index.to_u32();
-                this.outgoing_nack_tx.send_batch(nack.map(u24::from));
+                this.ack.outgoing_nack_batch(nack.map(u24::from));
             }
         }
     }
@@ -211,9 +204,9 @@ mod test {
     use rand::seq::SliceRandom;
 
     use super::DeFragment;
+    use crate::ack::Acknowledgement;
     use crate::errors::CodecError;
     use crate::packet::connected::{Flags, Fragment, Frame, FrameSet, FramesMut};
-    use crate::utils::priority_mpsc;
 
     fn frame_set<'a, T: AsRef<str> + 'a>(
         idx: impl IntoIterator<Item = &'a (u32, u16, u32, T)>,
@@ -271,16 +264,13 @@ mod test {
         };
 
         tokio::pin!(frame);
-        let (outgoing_ack_tx, _outgoing_ack_rx) = priority_mpsc::unbounded();
-        let (outgoing_nack_tx, _outgoing_nack_rx) = priority_mpsc::unbounded();
         let mut frag = DeFragment {
             frame: frame.map(Ok),
             limit_size: 0,
             parts: LruCache::new(NonZeroUsize::new(512).expect("limit_parted > 0")),
             buffer: VecDeque::new(),
             seq_num_read_index: 0.into(),
-            outgoing_ack_tx,
-            outgoing_nack_tx,
+            ack: Acknowledgement::new_arc(crate::RoleContext::Server),
         };
 
         let set = frag.next().await.unwrap().unwrap();
@@ -306,16 +296,13 @@ mod test {
         };
 
         tokio::pin!(frame);
-        let (outgoing_ack_tx, _outgoing_ack_rx) = priority_mpsc::unbounded();
-        let (outgoing_nack_tx, _outgoing_nack_rx) = priority_mpsc::unbounded();
         let mut frag = DeFragment {
             frame: frame.map(Ok),
             limit_size: 20,
             parts: LruCache::new(NonZeroUsize::new(512).expect("limit_parted > 0")),
             buffer: VecDeque::new(),
             seq_num_read_index: 0.into(),
-            outgoing_ack_tx,
-            outgoing_nack_tx,
+            ack: Acknowledgement::new_arc(crate::RoleContext::Server),
         };
 
         assert!(matches!(
@@ -348,16 +335,13 @@ mod test {
         };
 
         tokio::pin!(frame);
-        let (outgoing_ack_tx, _outgoing_ack_rx) = priority_mpsc::unbounded();
-        let (outgoing_nack_tx, _outgoing_nack_rx) = priority_mpsc::unbounded();
         let mut frag = DeFragment {
             frame: frame.map(Ok),
             limit_size: 0,
             parts: LruCache::new(NonZeroUsize::new(2).expect("limit_parted > 0")),
             buffer: VecDeque::new(),
             seq_num_read_index: 0.into(),
-            outgoing_ack_tx,
-            outgoing_nack_tx,
+            ack: Acknowledgement::new_arc(crate::RoleContext::Server),
         };
 
         assert!(frag.next().await.is_none());
@@ -384,16 +368,13 @@ mod test {
         };
 
         tokio::pin!(frame);
-        let (outgoing_ack_tx, _outgoing_ack_rx) = priority_mpsc::unbounded();
-        let (outgoing_nack_tx, _outgoing_nack_rx) = priority_mpsc::unbounded();
         let mut frag = DeFragment {
             frame: frame.map(Ok),
             limit_size: 0,
             parts: LruCache::new(NonZeroUsize::new(2).expect("limit_parted > 0")),
             buffer: VecDeque::new(),
             seq_num_read_index: 0.into(),
-            outgoing_ack_tx,
-            outgoing_nack_tx,
+            ack: Acknowledgement::new_arc(crate::RoleContext::Server),
         };
 
         {
@@ -431,16 +412,13 @@ mod test {
         };
 
         tokio::pin!(frame);
-        let (outgoing_ack_tx, _outgoing_ack_rx) = priority_mpsc::unbounded();
-        let (outgoing_nack_tx, _outgoing_nack_rx) = priority_mpsc::unbounded();
         let mut frag = DeFragment {
             frame: frame.map(Ok),
             limit_size: 0,
             parts: LruCache::new(NonZeroUsize::new(1).expect("limit_parted > 0")),
             buffer: VecDeque::new(),
             seq_num_read_index: 0.into(),
-            outgoing_ack_tx,
-            outgoing_nack_tx,
+            ack: Acknowledgement::new_arc(crate::RoleContext::Server),
         };
 
         let set = frag.next().await.unwrap().unwrap();

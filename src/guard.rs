@@ -1,83 +1,19 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::VecDeque;
 use std::net::SocketAddr;
-use std::ops::Add;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
-use std::time::Duration;
 
-use flume::{Receiver, Sender};
-use futures::{Sink, Stream, StreamExt};
+use futures::Sink;
 use log::trace;
-use minstant::Instant;
 use pin_project_lite::pin_project;
 
+use crate::ack::SharedAck;
 use crate::errors::CodecError;
-use crate::packet::connected::{self, AckOrNack, Frame, FrameSet, Frames, FramesRef, Record};
+use crate::packet::connected::{self, Frame, FrameSet, FramesRef};
 use crate::packet::{Packet, FRAME_SET_HEADER_SIZE};
-use crate::utils::{priority_mpsc, u24};
+use crate::resend_map::ResendMap;
+use crate::utils::u24;
 use crate::{PeerContext, RoleContext};
-
-pin_project! {
-    // IncomingGuard delivers all acknowledgement packets into outgoing guard, mapping
-    // connected::Packet into FrameSet
-    pub(crate) struct IncomingGuard<F> {
-        #[pin]
-        frame: F,
-        ack_tx: Sender<AckOrNack>,
-        nack_tx: Sender<AckOrNack>,
-    }
-}
-
-pub(crate) trait HandleIncoming: Sized {
-    fn handle_incoming(
-        self,
-        ack_tx: Sender<AckOrNack>,
-        nack_tx: Sender<AckOrNack>,
-    ) -> IncomingGuard<Self>;
-}
-
-impl<F, S> HandleIncoming for F
-where
-    F: Stream<Item = connected::Packet<S>>,
-{
-    fn handle_incoming(
-        self,
-        ack_tx: Sender<AckOrNack>,
-        nack_tx: Sender<AckOrNack>,
-    ) -> IncomingGuard<Self> {
-        IncomingGuard {
-            frame: self,
-            ack_tx,
-            nack_tx,
-        }
-    }
-}
-
-impl<F, S> Stream for IncomingGuard<F>
-where
-    F: Stream<Item = connected::Packet<S>>,
-{
-    type Item = FrameSet<S>;
-
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let mut this = self.project();
-
-        loop {
-            let Some(packet) = ready!(this.frame.poll_next_unpin(cx)) else {
-                return Poll::Ready(None);
-            };
-            match packet {
-                connected::Packet::FrameSet(frame_set) => return Poll::Ready(Some(frame_set)),
-                connected::Packet::Ack(ack) => {
-                    this.ack_tx.send(ack).expect("ack_rx must not be dropped");
-                }
-                connected::Packet::Nack(nack) => {
-                    this.nack_tx.send(nack).expect("ack_rx must not be dropped");
-                }
-            };
-        }
-    }
-}
 
 pin_project! {
     // OutgoingGuard equips with Acknowledgement handler and packets buffer and provides
@@ -85,46 +21,35 @@ pin_project! {
     pub(crate) struct OutgoingGuard<F> {
         #[pin]
         frame: F,
-        incoming_ack_rx: Receiver<AckOrNack>,
-        incoming_nack_rx: Receiver<AckOrNack>,
-        outgoing_ack_rx: priority_mpsc::Receiver<u24>,
-        outgoing_nack_rx: priority_mpsc::Receiver<u24>,
+        ack: SharedAck,
         seq_num_write_index: u24,
         buf: VecDeque<Frame>,
         peer: PeerContext,
         role: RoleContext,
         cap: usize,
-        // ordered by seq_num
-        // TODO: use rbtree?
-        resending: BTreeMap<u24, (Frames, Instant)>,
+        resend: ResendMap,
     }
 }
 
-pub(crate) trait HandleOutgoingAck: Sized {
+pub(crate) trait HandleOutgoing: Sized {
     #[allow(clippy::too_many_arguments)]
     fn handle_outgoing(
         self,
-        incoming_ack_rx: Receiver<AckOrNack>,
-        incoming_nack_rx: Receiver<AckOrNack>,
-        outgoing_ack_rx: priority_mpsc::Receiver<u24>,
-        outgoing_nack_rx: priority_mpsc::Receiver<u24>,
+        ack: SharedAck,
         cap: usize,
         peer: PeerContext,
         role: RoleContext,
     ) -> OutgoingGuard<Self>;
 }
 
-impl<F> HandleOutgoingAck for F
+impl<F> HandleOutgoing for F
 where
     F:, /* for<'a> Sink<(Packet<FramesRef<'a>>, SocketAddr), Error = CodecError>,  // In order
          * for cargo clippy to work properly on high rank lifetime, this was commented out. */
 {
     fn handle_outgoing(
         self,
-        incoming_ack_rx: Receiver<AckOrNack>,
-        incoming_nack_rx: Receiver<AckOrNack>,
-        outgoing_ack_rx: priority_mpsc::Receiver<u24>,
-        outgoing_nack_rx: priority_mpsc::Receiver<u24>,
+        ack: SharedAck,
         cap: usize,
         peer: PeerContext,
         role: RoleContext,
@@ -132,115 +57,42 @@ where
         assert!(cap > 0, "cap must larger than 0");
         OutgoingGuard {
             frame: self,
-            incoming_ack_rx,
-            incoming_nack_rx,
-            outgoing_ack_rx,
-            outgoing_nack_rx,
+            ack,
             seq_num_write_index: 0.into(),
             buf: VecDeque::with_capacity(cap),
             peer,
             role,
             cap,
-            resending: BTreeMap::new(),
+            resend: ResendMap::new(),
         }
     }
 }
-
-// TODO: use adaptive RTO
-const RTO: Duration = Duration::from_millis(77);
 
 impl<F> OutgoingGuard<F>
 where
     F: for<'a> Sink<(Packet<FramesRef<'a>>, SocketAddr), Error = CodecError>,
 {
-    fn try_ack(self: Pin<&mut Self>) {
-        let this = self.project();
-        for ack in this.incoming_ack_rx.try_iter() {
-            trace!(
-                "[{}] receive ack {ack:?}, total count: {}",
-                this.role,
-                ack.total_cnt()
-            );
-            for record in ack.records {
-                match record {
-                    Record::Range(start, end) => {
-                        for i in start.to_u32()..end.to_u32() {
-                            // TODO: optimized for range remove for btree map
-                            this.resending.remove(&i.into());
-                        }
-                    }
-                    Record::Single(seq_num) => {
-                        this.resending.remove(&seq_num);
-                    }
-                }
-            }
-        }
-        for nack in this.incoming_nack_rx.try_iter() {
-            trace!(
-                "[{}] receive nack {nack:?}, total count: {}",
-                this.role,
-                nack.total_cnt()
-            );
-            for record in nack.records {
-                match record {
-                    Record::Range(start, end) => {
-                        for i in start.to_u32()..end.to_u32() {
-                            if let Some((set, _)) = this.resending.remove(&i.into()) {
-                                this.buf.extend(set);
-                            }
-                        }
-                    }
-                    Record::Single(seq_num) => {
-                        if let Some((set, _)) = this.resending.remove(&seq_num) {
-                            this.buf.extend(set);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    fn try_send_stales(self: Pin<&mut Self>) {
-        let this = self.project();
-
-        let now = Instant::now();
-        while let Some(entry) = this.resending.first_entry() {
-            // ordered by seq_num, the large seq_num has the large next_send
-            // TODO: is it a good optimization?
-            if now < entry.get().1 {
-                break;
-            }
-            trace!("[{}] resend stale frame set {}", this.role, entry.key());
-            let (set, _) = entry.remove();
-            this.buf.extend(set);
-        }
-    }
-
-    fn try_empty(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), CodecError>> {
-        // try to empty *_ack_rx and *_nack_rx buffer
-        self.as_mut().try_ack();
-        self.as_mut().try_send_stales();
-
+    fn try_empty(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), CodecError>> {
         let mut this = self.project();
 
-        ready!(this.frame.as_mut().poll_ready(cx))?;
+        // empty incoming buffer
+        this.ack.poll_ack(this.resend);
+        this.ack.poll_resend(this.resend, this.buf);
+        this.resend.poll_stales_into(this.buf);
 
+        ready!(this.frame.as_mut().poll_ready(cx))?;
         let mut sent = false;
 
-        while !this.outgoing_ack_rx.is_empty()
-            || !this.outgoing_nack_rx.is_empty()
-            || !this.buf.is_empty()
-        {
-            // TODO: Round-Robin
+        // TODO: Weighted Round-Robin
 
-            // 1st. sent the ack
+        // try empty outgoing buffer
+        while !this.ack.empty() || !this.buf.is_empty() {
+            // 1st. empty the ack
             if sent {
                 ready!(this.frame.as_mut().poll_ready(cx))?;
                 sent = false;
             }
-            if let Some(ack) =
-                AckOrNack::extend_from(this.outgoing_ack_rx.recv_batch(), this.peer.mtu)
-            {
+            if let Some(ack) = this.ack.poll_outgoing_ack(this.peer.mtu) {
                 trace!(
                     "[{}] send ack {ack:?}, total count: {}",
                     this.role,
@@ -253,14 +105,12 @@ where
                 sent = true;
             }
 
-            // 2nd. sent the nack
+            // 2nd. empty the nack
             if sent {
                 ready!(this.frame.as_mut().poll_ready(cx))?;
                 sent = false;
             }
-            if let Some(nack) =
-                AckOrNack::extend_from(this.outgoing_nack_rx.recv_batch(), this.peer.mtu)
-            {
+            if let Some(nack) = this.ack.poll_outgoing_nack(this.peer.mtu) {
                 trace!(
                     "[{}] send ack {nack:?}, total count: {}",
                     this.role,
@@ -273,7 +123,7 @@ where
                 sent = true;
             }
 
-            // 3rd. sent the frame_set
+            // 3rd. empty the frame_set
             if sent {
                 ready!(this.frame.as_mut().poll_ready(cx))?;
                 sent = false;
@@ -309,8 +159,7 @@ where
                 sent = true;
                 if reliable {
                     // keep for resending
-                    this.resending
-                        .insert(*this.seq_num_write_index, (frames, Instant::now().add(RTO)));
+                    this.resend.record(*this.seq_num_write_index, frames);
                 }
                 *this.seq_num_write_index += 1;
             }
@@ -349,21 +198,13 @@ where
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         ready!(self.as_mut().try_empty(cx))?;
-        debug_assert!(
-            self.buf.is_empty()
-                && self.outgoing_ack_rx.is_empty()
-                && self.outgoing_nack_rx.is_empty()
-        );
+        debug_assert!(self.buf.is_empty() && self.ack.empty());
         self.project().frame.poll_flush(cx)
     }
 
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         ready!(self.as_mut().try_empty(cx))?;
-        debug_assert!(
-            self.buf.is_empty()
-                && self.outgoing_ack_rx.is_empty()
-                && self.outgoing_nack_rx.is_empty()
-        );
+        debug_assert!(self.buf.is_empty() && self.ack.empty());
         self.project().frame.poll_close(cx)
     }
 }

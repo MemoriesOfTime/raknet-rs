@@ -8,15 +8,18 @@ mod encoder;
 #[cfg(feature = "tokio-udp")]
 pub(crate) mod tokio;
 
+use std::sync::Arc;
+
 use derive_builder::Builder;
 use futures::{Sink, Stream, StreamExt};
 use log::{debug, trace};
 
 use self::decoder::{DeFragmented, Deduplicated, FrameDecoded, Ordered};
 use self::encoder::{Fragmented, FrameEncoded};
+use crate::ack::SharedAck;
 use crate::errors::CodecError;
 use crate::packet::connected::{Frame, FrameBody, FrameSet, FramesMut};
-use crate::utils::{priority_mpsc, u24, Logged};
+use crate::utils::Logged;
 use crate::{Message, RoleContext};
 
 /// Codec config
@@ -55,8 +58,7 @@ pub(crate) trait Decoded {
     fn decoded(
         self,
         config: Config,
-        outgoing_ack_tx: priority_mpsc::Sender<u24>,
-        outgoing_nack_tx: priority_mpsc::Sender<u24>,
+        ack: SharedAck,
         role: RoleContext,
     ) -> impl Stream<Item = FrameBody>;
 }
@@ -68,18 +70,12 @@ where
     fn decoded(
         self,
         config: Config,
-        outgoing_ack_tx: priority_mpsc::Sender<u24>,
-        outgoing_nack_tx: priority_mpsc::Sender<u24>,
+        ack: SharedAck,
         role: RoleContext,
     ) -> impl Stream<Item = FrameBody> {
         self.map(Ok)
-            .deduplicated(config.max_dedup_gap, outgoing_ack_tx.clone())
-            .defragmented(
-                config.max_parted_size,
-                config.max_parted_count,
-                outgoing_ack_tx,
-                outgoing_nack_tx,
-            )
+            .deduplicated(config.max_dedup_gap, Arc::clone(&ack))
+            .defragmented(config.max_parted_size, config.max_parted_count, ack)
             .ordered(config.max_channels)
             .frame_decoded()
             .logged_all(
@@ -123,8 +119,8 @@ pub mod micro_bench {
     use rand::{Rng, SeedableRng};
 
     use super::{Config, Decoded, FrameSet, FramesMut, Stream};
+    use crate::ack::Acknowledgement;
     use crate::packet::connected::{Flags, Fragment, Frame, Ordered, Reliability};
-    use crate::utils::priority_mpsc;
     use crate::RoleContext;
 
     #[derive(derive_builder::Builder, Debug, Clone)]
@@ -261,15 +257,9 @@ pub mod micro_bench {
 
             let config = self.config;
             let data = self.data.clone();
-            let (outgoing_ack_tx, _outgoing_ack_rx) = priority_mpsc::unbounded();
-            let (outgoing_nack_tx, _outgoing_nack_rx) = priority_mpsc::unbounded();
+            let ack = Acknowledgement::new_arc(RoleContext::Server);
 
-            let stream = self.into_stream().decoded(
-                config,
-                outgoing_ack_tx,
-                outgoing_nack_tx,
-                RoleContext::Server,
-            );
+            let stream = self.into_stream().decoded(config, ack, RoleContext::Server);
             #[futures_async_stream::for_await]
             for res in stream {
                 let body = match res {
@@ -283,15 +273,9 @@ pub mod micro_bench {
         #[allow(clippy::semicolon_if_nothing_returned)]
         pub async fn bench_decoded(self) {
             let config = self.config;
-            let (outgoing_ack_tx, _outgoing_ack_rx) = priority_mpsc::unbounded();
-            let (outgoing_nack_tx, _outgoing_nack_rx) = priority_mpsc::unbounded();
+            let ack = Acknowledgement::new_arc(RoleContext::Server);
 
-            let stream = self.into_stream().decoded(
-                config,
-                outgoing_ack_tx,
-                outgoing_nack_tx,
-                RoleContext::Server,
-            );
+            let stream = self.into_stream().decoded(config, ack, RoleContext::Server);
             #[futures_async_stream::for_await]
             for _r in stream {}
         }

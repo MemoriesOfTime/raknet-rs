@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use minstant::Instant;
 
-use crate::packet::connected::{AckOrNack, Frame, FrameSet, Frames, Record};
+use crate::packet::connected::{AckOrNack, Frame, Frames, Record};
 use crate::utils::u24;
 
 // TODO: use RTTEstimator to get adaptive RTO
@@ -26,11 +26,11 @@ impl ResendMap {
         }
     }
 
-    pub(crate) fn record(&mut self, frame_set: FrameSet<Frames>) {
+    pub(crate) fn record(&mut self, seq_num: u24, frames: Frames) {
         self.map.insert(
-            frame_set.seq_num,
+            seq_num,
             ResendEntry {
-                frames: frame_set.set,
+                frames,
                 expired_at: Instant::now().add(RTO),
             },
         );

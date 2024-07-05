@@ -54,7 +54,7 @@ mod packet;
 /// Utils
 mod utils;
 
-/// Incoming/Outgoing guard
+/// Outgoing guard
 mod guard;
 
 /// Acknowledge handler

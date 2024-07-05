@@ -313,7 +313,10 @@ mod test {
         assert_eq!(fragment.parted_id, 0);
         assert_eq!(fragment.parted_index, 0);
         assert_eq!(dst.frame.buf[0].size(), 50 - FRAME_SET_HEADER_SIZE);
-        assert_eq!(dst.frame.buf[0].body.len(), 50 - FRAME_SET_HEADER_SIZE - r - FRAGMENT_PART_SIZE);
+        assert_eq!(
+            dst.frame.buf[0].body.len(),
+            50 - FRAME_SET_HEADER_SIZE - r - FRAGMENT_PART_SIZE
+        );
 
         fragment = dst.frame.buf[1].fragment.unwrap();
         assert_eq!(fragment.parted_size, 2);

@@ -54,7 +54,7 @@ impl Acknowledgement {
     }
 
     pub(crate) fn filter_incoming_ack<F, S>(
-        self: SharedAck,
+        self: &SharedAck,
         frame: F,
     ) -> impl Stream<Item = FrameSet<S>>
     where
@@ -62,7 +62,7 @@ impl Acknowledgement {
     {
         IncomingAckFilter {
             frame,
-            ack: Arc::clone(&self),
+            ack: Arc::clone(self),
         }
     }
 
@@ -80,6 +80,10 @@ impl Acknowledgement {
 
     pub(crate) fn outgoing_nack(&self, seq_num: u24) {
         self.outgoing_nack_tx.send(seq_num);
+    }
+
+    pub(crate) fn outgoing_nack_batch(&self, t: impl IntoIterator<Item = u24>) {
+        self.outgoing_nack_tx.send_batch(t);
     }
 
     // Clear all acknowledged frames
@@ -115,6 +119,11 @@ impl Acknowledgement {
 
     pub(crate) fn poll_outgoing_nack(&self, mtu: u16) -> Option<AckOrNack> {
         AckOrNack::extend_from(self.outgoing_nack_rx.recv_batch(), mtu)
+    }
+
+    // Return whether the outgoing buffer is empty
+    pub(crate) fn empty(&self) -> bool {
+        self.outgoing_ack_rx.is_empty() && self.outgoing_nack_rx.is_empty()
     }
 }
 

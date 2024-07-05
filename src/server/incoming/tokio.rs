@@ -13,17 +13,18 @@ use tokio::net::UdpSocket as TokioUdpSocket;
 use tokio_util::udp::UdpFramed;
 
 use super::{Config, MakeIncoming};
+use crate::ack::Acknowledgement;
 use crate::codec::tokio::Codec;
 use crate::codec::{Decoded, Encoded};
 use crate::errors::CodecError;
-use crate::guard::{HandleIncoming, HandleOutgoingAck};
+use crate::guard::HandleOutgoing;
 use crate::io::{IOImpl, IO};
 use crate::packet::connected::{self, Frames, FramesMut};
 use crate::packet::{unconnected, Packet};
 use crate::server::handler::offline;
 use crate::server::handler::offline::HandleOffline;
 use crate::server::handler::online::HandleOnline;
-use crate::utils::{priority_mpsc, Log, Logged, StreamExt};
+use crate::utils::{Log, Logged, StreamExt};
 use crate::RoleContext;
 
 type OfflineHandler = offline::OfflineHandler<
@@ -96,18 +97,11 @@ impl Stream for Incoming {
             router_tx.send(pack).unwrap();
             this.router.insert(peer.addr, router_tx);
 
-            let (incoming_ack_tx, incoming_ack_rx) = flume::unbounded();
-            let (incoming_nack_tx, incoming_nack_rx) = flume::unbounded();
-
-            let (outgoing_ack_tx, outgoing_ack_rx) = priority_mpsc::unbounded();
-            let (outgoing_nack_tx, outgoing_nack_rx) = priority_mpsc::unbounded();
+            let ack = Acknowledgement::new_arc(RoleContext::Server);
 
             let write = UdpFramed::new(Arc::clone(this.socket), Codec)
                 .handle_outgoing(
-                    incoming_ack_rx,
-                    incoming_nack_rx,
-                    outgoing_ack_rx,
-                    outgoing_nack_rx,
+                    Arc::clone(&ack),
                     this.config.send_buf_cap,
                     peer.clone(),
                     RoleContext::Server,
@@ -120,13 +114,11 @@ impl Stream for Incoming {
                 },
             );
 
-            let io = router_rx
-                .into_stream()
-                .handle_incoming(incoming_ack_tx, incoming_nack_tx)
+            let io = ack
+                .filter_incoming_ack(router_rx.into_stream())
                 .decoded(
                     this.config.codec_config(),
-                    outgoing_ack_tx,
-                    outgoing_nack_tx,
+                    Arc::clone(&ack),
                     RoleContext::Server,
                 )
                 .handle_online(
