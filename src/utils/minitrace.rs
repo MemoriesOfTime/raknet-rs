@@ -4,40 +4,8 @@ use std::task::{Context, Poll};
 
 use futures::{Sink, Stream};
 use minitrace::collector::SpanContext;
-use minitrace::local::{LocalParentGuard, LocalSpan};
 use minitrace::Span;
 use pin_project_lite::pin_project;
-
-/// Make different spans. Different spans may have different behaviors.
-pub(crate) trait MakeSpan {
-    fn make(name: impl Into<Cow<'static, str>>) -> Self;
-
-    // Whether to set local parent
-    fn try_set_local_parent(&self) -> Option<LocalParentGuard>;
-}
-
-// Thread safe span
-impl MakeSpan for Span {
-    fn make(name: impl Into<Cow<'static, str>>) -> Self {
-        Span::root(name, SpanContext::random())
-    }
-
-    fn try_set_local_parent(&self) -> Option<LocalParentGuard> {
-        Some(self.set_local_parent())
-    }
-}
-
-// Single thread span
-impl MakeSpan for LocalSpan {
-    fn make(name: impl Into<Cow<'static, str>>) -> Self {
-        LocalSpan::enter_with_local_parent(name)
-    }
-
-    fn try_set_local_parent(&self) -> Option<LocalParentGuard> {
-        // You must set the local parent before the local span starts
-        None
-    }
-}
 
 pub(crate) trait StreamExt: Stream + Sized {
     /// It starts a span at every time an item is generating from the stream, and the span will end
@@ -51,11 +19,11 @@ pub(crate) trait StreamExt: Stream + Sized {
     ///                           [----codec children spans----]
     ///
     /// ------------------------- timeline ------------------------------>>>
-    fn enter_on_item<S: MakeSpan, O: Fn(S) -> S>(
+    fn enter_on_item<O: Fn(Span) -> Span>(
         self,
         name: impl Into<Cow<'static, str>>,
         opts: O,
-    ) -> EnterOnItem<Self, S, O> {
+    ) -> EnterOnItem<Self, O> {
         EnterOnItem {
             inner: self,
             name: name.into(),
@@ -68,31 +36,29 @@ pub(crate) trait StreamExt: Stream + Sized {
 impl<S: Stream> StreamExt for S {}
 
 pin_project! {
-    pub(crate) struct EnterOnItem<T, S, O> {
+    pub(crate) struct EnterOnItem<T, O> {
         #[pin]
         inner: T,
         name: Cow<'static, str>,
-        span: Option<S>,
+        span: Option<Span>,
         opts: O,
     }
 }
 
-impl<T, S, O> Stream for EnterOnItem<T, S, O>
+impl<T, O> Stream for EnterOnItem<T, O>
 where
     T: Stream,
-    S: MakeSpan,
-    O: Fn(S) -> S,
+    O: Fn(Span) -> Span,
 {
     type Item = T::Item;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.project();
-        let span = this
-            .span
-            .get_or_insert_with(|| (this.opts)(S::make(this.name.clone())));
-        let _guard = span.try_set_local_parent();
+        let span = this.span.get_or_insert_with(|| {
+            (this.opts)(Span::root(this.name.clone(), SpanContext::random()))
+        });
+        let _guard = span.set_local_parent();
         let res = this.inner.poll_next(cx);
-
         match res {
             r @ Poll::Pending => r,
             other => {
@@ -104,12 +70,14 @@ where
     }
 }
 
+// TODO: implement ConsoleTreeCollector here
+
 // Propagate Sink trait to inner stream
-impl<T, I, S, O> Sink<I> for EnterOnItem<T, S, O>
+// TODO: remove sink propagation when IO is splitted
+impl<T, I, O> Sink<I> for EnterOnItem<T, O>
 where
     T: Sink<I>,
-    S: MakeSpan,
-    O: Fn(S) -> S,
+    O: Fn(Span) -> Span,
 {
     type Error = T::Error;
 

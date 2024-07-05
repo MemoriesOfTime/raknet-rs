@@ -7,7 +7,6 @@ use std::task::{ready, Context, Poll};
 use flume::{Receiver, Sender};
 use futures::{SinkExt, Stream};
 use log::{debug, error, info};
-use minitrace::Span;
 use pin_project_lite::pin_project;
 use tokio::net::UdpSocket as TokioUdpSocket;
 use tokio_util::udp::UdpFramed;
@@ -128,7 +127,7 @@ impl Stream for Incoming {
                     this.config.sever_guid,
                     this.drop_notifier.clone(),
                 )
-                .enter_on_item::<Span, _>("io", move |span| {
+                .enter_on_item("io", move |span| {
                     span.with_properties(|| {
                         [
                             ("addr", peer.addr.to_string()),

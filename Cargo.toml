@@ -46,7 +46,7 @@ tokio-macros = { git = "https://github.com/tokio-rs/tokio.git", rev = "833ee027d
 [features]
 default = ["tokio-udp"]
 tokio-udp = ["dep:tokio-util", "dep:tokio"]
-rt-single = []
+# rt-single = []
 
 [[bench]]
 name = "micro"
