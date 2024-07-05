@@ -1,8 +1,11 @@
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use bytes::Bytes;
 use futures::{Sink, Stream};
+use minitrace::collector::TraceId;
+use parking_lot::Mutex;
 use pin_project_lite::pin_project;
 
 use crate::errors::Error;
@@ -21,6 +24,9 @@ pub trait IO:
 
     fn set_default_order_channel(&mut self, order_channel: u8);
     fn get_default_order_channel(&self) -> u8;
+
+    /// Get the last `trace_id` after polling Bytes form it, used for end to end tracing
+    fn last_trace_id(&self) -> Option<TraceId>;
 }
 
 pin_project! {
@@ -30,6 +36,7 @@ pin_project! {
         io: IO,
         default_reliability: Reliability,
         default_order_channel: u8,
+        last_trace_id: Option<Arc<Mutex<Option<TraceId>>>>,
     }
 }
 
@@ -42,6 +49,16 @@ where
             io,
             default_reliability: Reliability::ReliableOrdered,
             default_order_channel: 0,
+            last_trace_id: None,
+        }
+    }
+
+    pub(crate) fn new_with_trace(io: IO, last_trace_id: Arc<Mutex<Option<TraceId>>>) -> Self {
+        IOImpl {
+            io,
+            default_reliability: Reliability::ReliableOrdered,
+            default_order_channel: 0,
+            last_trace_id: Some(last_trace_id),
         }
     }
 }
@@ -122,5 +139,13 @@ where
 
     fn get_default_order_channel(&self) -> u8 {
         self.default_order_channel
+    }
+
+    /// Get the last `trace_id` after polling Bytes form it, used for end to end tracing
+    fn last_trace_id(&self) -> Option<TraceId> {
+        if let Some(ref last_trace_id) = self.last_trace_id {
+            return *last_trace_id.lock();
+        }
+        None
     }
 }

@@ -7,6 +7,8 @@ use std::task::{ready, Context, Poll};
 use flume::{Receiver, Sender};
 use futures::{SinkExt, Stream};
 use log::{debug, error, info};
+use minitrace::collector::SpanContext;
+use parking_lot::lock_api::Mutex;
 use pin_project_lite::pin_project;
 use tokio::net::UdpSocket as TokioUdpSocket;
 use tokio_util::udp::UdpFramed;
@@ -113,6 +115,8 @@ impl Stream for Incoming {
                 },
             );
 
+            let last_trace_id = Arc::new(Mutex::new(None));
+            let last_trace_id_clone = Arc::clone(&last_trace_id);
             let io = ack
                 .filter_incoming_ack(router_rx.into_stream())
                 .decoded(
@@ -128,6 +132,8 @@ impl Stream for Incoming {
                     this.drop_notifier.clone(),
                 )
                 .enter_on_item("io", move |span| {
+                    *last_trace_id_clone.lock() =
+                        SpanContext::from_span(&span).map(|ctx| ctx.trace_id);
                     span.with_properties(|| {
                         [
                             ("addr", peer.addr.to_string()),
@@ -136,7 +142,7 @@ impl Stream for Incoming {
                     })
                 });
 
-            return Poll::Ready(Some(IOImpl::new(io)));
+            return Poll::Ready(Some(IOImpl::new_with_trace(io, last_trace_id)));
         }
     }
 }

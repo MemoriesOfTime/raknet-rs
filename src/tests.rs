@@ -11,6 +11,7 @@ use parking_lot::Mutex;
 use tokio::net::UdpSocket;
 
 use crate::client::{self, ConnectTo};
+use crate::io::IO;
 use crate::server::{self, MakeIncoming};
 
 #[allow(clippy::type_complexity)]
@@ -120,6 +121,7 @@ async fn test_tokio_udp_works() {
                                 info!("client closed connection");
                                 break;
                             }
+                            info!("last trace id: {:?}", (*io).last_trace_id());
                         }
                         _ = ticker.tick() => {
                             SinkExt::<Bytes>::flush(&mut io).await.unwrap();
