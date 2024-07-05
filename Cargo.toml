@@ -14,17 +14,15 @@ keywords = ["raknet", "network", "udp"]
 
 [dependencies]
 bytes = "1"
-derive_builder = "0.20"
 flume = "0.11"
 futures = "0.3"
 futures-async-stream = "0.2"
 log = "0.4"
 lru = "0.12"
 minitrace = { version = "0.6" }
-minstant = "0.1"
 parking_lot = "0.12"
 pin-project-lite = "0.2"
-rand = { version = "0.8", optional = true }
+rand = { version = "0.8" }
 thiserror = "1"
 tokio = { version = "1", features = ["io-util", "macros"], optional = true }
 tokio-util = { version = "0.7", features = [
@@ -38,7 +36,6 @@ criterion = { version = "0.5", features = ["async_futures", "async_tokio"] }
 env_logger = "0.11"
 indexmap = "2"
 minitrace = { version = "0.6", features = ["enable"] }
-rand = "0.8"
 reqwest = "0.12"
 tokio = { version = "1", features = ["full"] }
 
@@ -48,7 +45,6 @@ tokio-macros = { git = "https://github.com/tokio-rs/tokio.git", rev = "833ee027d
 
 [features]
 default = ["tokio-udp"]
-micro-bench = ["dep:rand"]
 tokio-udp = ["dep:tokio-util", "dep:tokio"]
 rt-single = []
 

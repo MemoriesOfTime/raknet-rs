@@ -13,16 +13,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let local_addr = socket.local_addr()?;
     println!("[server] proxy server listening on {local_addr}");
     let mut incoming = socket.make_incoming(
-        server::ConfigBuilder::default()
+        server::Config::new()
             .send_buf_cap(1024)
             .sever_guid(114514)
-            .advertisement(Bytes::from_static(b"Hello, I am proxy server"))
+            .advertisement(&b"Hello, I am proxy server"[..])
             .min_mtu(500)
             .max_mtu(1400)
             .support_version(vec![9, 11, 13])
-            .max_pending(64)
-            .build()
-            .unwrap(),
+            .max_pending(64),
     );
 
     tokio::spawn(async move {
@@ -63,13 +61,11 @@ async fn client(addr: SocketAddr, name: &str) -> Result<(), Box<dyn Error>> {
     let mut conn = socket
         .connect_to(
             addr,
-            client::ConfigBuilder::default()
+            client::Config::new()
                 .send_buf_cap(1024)
                 .mtu(1000)
                 .client_guid(1919810)
-                .protocol_version(11)
-                .build()
-                .unwrap(),
+                .protocol_version(11),
         )
         .await?;
     conn.send(Bytes::from_static(b"Hello, Anyone there?"))

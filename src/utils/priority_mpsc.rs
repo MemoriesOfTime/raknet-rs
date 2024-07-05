@@ -1,4 +1,4 @@
-#![allow(unused)]
+#![allow(dead_code)] // TODO: remove this line
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
@@ -96,7 +96,6 @@ impl<T: Ord> Receiver<T> {
 
 #[cfg(test)]
 mod test {
-    use std::sync::atomic::AtomicBool;
     use std::time::Duration;
 
     use super::unbounded;
@@ -120,7 +119,7 @@ mod test {
     fn test_reception_will_block_read() {
         let (sender, receiver) = unbounded();
         sender.send_batch(0..5);
-        let mut reception = receiver.recv_batch();
+        let reception = receiver.recv_batch();
         let handler = std::thread::spawn(move || {
             if !sender.is_empty() {
                 panic!("check empty should be after reception");
@@ -130,14 +129,14 @@ mod test {
         std::thread::sleep(Duration::from_millis(50));
         let v = reception.take(5).collect::<Vec<_>>();
         assert_eq!(v, vec![0, 1, 2, 3, 4]);
-        handler.join();
+        let _ = handler.join();
     }
 
     #[test]
     fn test_no_hidden_drop() {
         let (sender, receiver) = unbounded();
         sender.send_batch(0..5);
-        let mut reception = receiver.recv_batch();
+        let reception = receiver.recv_batch();
         let v1 = reception.take(2).collect::<Vec<_>>();
         assert_eq!(v1, vec![0, 1]);
         assert_eq!(receiver.recv(), Some(2));
@@ -149,7 +148,7 @@ mod test {
     // https://github.com/Amanieu/parking_lot/issues/44
     //
     // > Generally the intended behavior on panic is to simply release any locks while unwinding.
-    // 
+    //
     // #[test]
     // fn test_lock_poisoning() {
     //     let (sender, receiver) = unbounded();
@@ -166,8 +165,8 @@ mod test {
     fn test_lock_panic_release() {
         let (sender, receiver) = unbounded();
         sender.send_batch(0..5);
-        std::thread::spawn(move || {
-            let mut reception = receiver.recv_batch();
+        let _ = std::thread::spawn(move || {
+            let mut _reception = receiver.recv_batch();
             panic!("awsl");
         })
         .join();

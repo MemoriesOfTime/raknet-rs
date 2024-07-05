@@ -36,15 +36,15 @@ where
     }
 }
 
-#[derive(Debug, Clone, derive_builder::Builder)]
+#[derive(Debug, Clone)]
 pub(crate) struct Config {
-    sever_guid: u64,
-    advertisement: Bytes,
-    min_mtu: u16,
-    max_mtu: u16,
+    pub(crate) sever_guid: u64,
+    pub(crate) advertisement: Bytes,
+    pub(crate) min_mtu: u16,
+    pub(crate) max_mtu: u16,
     // Supported raknet versions, sorted
-    support_version: Vec<u8>,
-    max_pending: usize,
+    pub(crate) support_version: Vec<u8>,
+    pub(crate) max_pending: usize,
 }
 
 enum OfflineState {

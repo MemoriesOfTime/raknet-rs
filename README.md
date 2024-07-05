@@ -46,13 +46,11 @@ use futures::{SinkExt, StreamExt};
 use raknet_rs::server::{self, MakeIncoming};
 
 let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await?;
-let config = server::ConfigBuilder::default()
+let config = server::Config::new()
     .send_buf_cap(1024)
     .sever_guid(114514)
-    .advertisement(Bytes::from_static(b"Hello, I am server"))
+    .advertisement(&b"Hello, I am server"[..])
     ...
-    .build()
-    .unwrap();
 let mut incoming = socket.make_incoming(config);
 let mut io = incoming.next().await.unwrap();
 let data: Bytes = io.next().await.unwrap();
@@ -69,12 +67,10 @@ use futures::{SinkExt, StreamExt};
 use raknet_rs::client::{self, ConnectTo};
 
 let socket = tokio::net::UdpSocket::bind("0.0.0.0:0").await?;
-let config = client::ConfigBuilder::default()
+let config = client::Config::new()
     .send_buf_cap(1024)
     .client_guid(1919810)
     ...
-    .build()
-    .unwrap();
 let mut conn = socket.connect_to(<addr>, config).await?;
 conn.send(Bytes::from_static(b"Hello, Anyone there?"))
     .await?;

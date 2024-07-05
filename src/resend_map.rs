@@ -1,8 +1,6 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::ops::Add;
-use std::time::Duration;
-
-use minstant::Instant;
+use std::time::{Duration, Instant};
 
 use crate::packet::connected::{AckOrNack, Frame, Frames, Record};
 use crate::utils::u24;

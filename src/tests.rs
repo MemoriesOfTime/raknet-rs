@@ -112,16 +112,14 @@ async fn test_tokio_udp_works() {
     let _guard = test_trace_log_setup();
 
     let echo_server = async {
-        let config = server::ConfigBuilder::default()
+        let config = server::Config::new()
             .send_buf_cap(1024)
             .sever_guid(1919810)
-            .advertisement(Bytes::from_static(b"123456"))
+            .advertisement(&b"123456"[..])
             .max_mtu(1500)
             .min_mtu(510)
             .max_pending(1024)
-            .support_version(vec![9, 11, 13])
-            .build()
-            .unwrap();
+            .support_version(vec![9, 11, 13]);
         let mut incoming = UdpSocket::bind("0.0.0.0:19132")
             .await
             .unwrap()
@@ -153,13 +151,11 @@ async fn test_tokio_udp_works() {
     tokio::spawn(echo_server);
 
     let client = async {
-        let config = client::ConfigBuilder::default()
+        let config = client::Config::new()
             .send_buf_cap(1024)
             .mtu(1000)
             .client_guid(114514)
-            .protocol_version(11)
-            .build()
-            .unwrap();
+            .protocol_version(11);
         let mut io = UdpSocket::bind("0.0.0.0:0")
             .await
             .unwrap()

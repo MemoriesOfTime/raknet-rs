@@ -10,11 +10,11 @@ use crate::errors::{CodecError, Error};
 use crate::packet::connected::{self, Frames, FramesMut};
 use crate::packet::{unconnected, Packet};
 
-#[derive(Debug, Clone, Copy, derive_builder::Builder)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct Config {
-    mtu: u16,
-    client_guid: u64,
-    protocol_version: u8,
+    pub(crate) mtu: u16,
+    pub(crate) client_guid: u64,
+    pub(crate) protocol_version: u8,
 }
 
 pub(crate) trait HandleOffline: Sized {

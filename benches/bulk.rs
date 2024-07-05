@@ -77,13 +77,11 @@ fn configure_bencher(
         let sock = TokioUdpSocket::bind("0.0.0.0:0").await.unwrap();
         sock.connect_to(
             server_addr,
-            client::ConfigBuilder::default()
+            client::Config::default()
                 .send_buf_cap(1024)
                 .mtu(1400)
                 .client_guid(1919810)
-                .protocol_version(11)
-                .build()
-                .unwrap(),
+                .protocol_version(11),
         )
         .await
         .unwrap()
@@ -129,16 +127,14 @@ fn spawn_server() -> SocketAddr {
     let sock = rt().block_on(async { TokioUdpSocket::bind("127.0.0.1:0").await.unwrap() });
     let server_addr = sock.local_addr().unwrap();
     rt().spawn(async move {
-        let config = server::ConfigBuilder::default()
+        let config = server::Config::new()
             .send_buf_cap(1024)
             .sever_guid(114514)
-            .advertisement(Bytes::from_static(b"Hello, I am proxy server"))
+            .advertisement(&b"Hello, I am proxy server"[..])
             .min_mtu(500)
             .max_mtu(1400)
             .support_version(vec![9, 11, 13])
-            .max_pending(1024)
-            .build()
-            .unwrap();
+            .max_pending(1024);
         let mut incoming = sock.make_incoming(config);
         while let Some(io) = incoming.next().await {
             tokio::spawn(async move {
