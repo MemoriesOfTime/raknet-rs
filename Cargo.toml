@@ -47,13 +47,14 @@ tokio-macros = { git = "https://github.com/tokio-rs/tokio.git", rev = "833ee027d
 default = ["tokio-udp"]
 tokio-udp = ["dep:tokio-util", "dep:tokio"]
 micro-bench = []
-# rt-single = []
 
+# TODO: move bench marks to a separate crate cz it maybe slow to compile with minitrace enabled at [dev-dependencies]
+# Or there is some workaround avaliable: https://github.com/rust-lang/cargo/issues/3126
 [[bench]]
 name = "micro"
 harness = false
 required-features = ["micro-bench"]
-# Not available currently
+# TODO: Not available currently
 # [[bench]]
 # name = "bulk"
 # harness = false

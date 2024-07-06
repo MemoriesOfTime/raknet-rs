@@ -60,6 +60,9 @@ mod guard;
 /// Acknowledge handler
 mod ack;
 
+/// Estimators
+mod estimator;
+
 /// Resend map
 mod resend_map;
 

@@ -119,7 +119,7 @@ impl Stream for Incoming {
             let last_trace_id_clone = Arc::clone(&last_trace_id);
             let io = ack
                 .filter_incoming_ack(router_rx.into_stream())
-                .decoded(
+                .frame_decoded(
                     this.config.codec_config(),
                     Arc::clone(&ack),
                     RoleContext::Server,

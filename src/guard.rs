@@ -44,8 +44,7 @@ pub(crate) trait HandleOutgoing: Sized {
 
 impl<F> HandleOutgoing for F
 where
-    F:, /* for<'a> Sink<(Packet<FramesRef<'a>>, SocketAddr), Error = CodecError>,  // In order
-         * for cargo clippy to work properly on high rank lifetime, this was commented out. */
+    F: for<'a> Sink<(Packet<FramesRef<'a>>, SocketAddr), Error = CodecError>,
 {
     fn handle_outgoing(
         self,

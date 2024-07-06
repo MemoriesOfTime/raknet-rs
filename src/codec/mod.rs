@@ -52,7 +52,7 @@ impl Default for Config {
 }
 
 pub(crate) trait Decoded {
-    fn decoded(
+    fn frame_decoded(
         self,
         config: Config,
         ack: SharedAck,
@@ -64,7 +64,7 @@ impl<F> Decoded for F
 where
     F: Stream<Item = FrameSet<FramesMut>>,
 {
-    fn decoded(
+    fn frame_decoded(
         self,
         config: Config,
         ack: SharedAck,

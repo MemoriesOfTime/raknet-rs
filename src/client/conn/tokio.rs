@@ -59,7 +59,7 @@ impl ConnectTo for TokioUdpSocket {
 
         let io = ack
             .filter_incoming_ack(incoming)
-            .decoded(config.codec_config(), Arc::clone(&ack), RoleContext::Client)
+            .frame_decoded(config.codec_config(), Arc::clone(&ack), RoleContext::Client)
             .handle_online(write, addr, config.client_guid)
             .await?;
 
