@@ -162,7 +162,7 @@ where
         self.project().frame.poll_flush(cx)
     }
 
-    // FIXME: wrong implementation
+    // FIXME: wrong implementation, should be placed in other place
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         let mut this = self.project();
         let mut frame = this.frame.as_mut();

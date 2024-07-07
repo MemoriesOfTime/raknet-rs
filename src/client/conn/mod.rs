@@ -1,9 +1,9 @@
 use std::net::ToSocketAddrs;
 
 use super::handler::offline;
-use crate::codec;
 use crate::errors::Error;
 use crate::io::IO;
+use crate::{codec, RoleContext};
 
 /// Connection implementation by using tokio's UDP framework
 #[cfg(feature = "tokio-udp")]
@@ -126,6 +126,12 @@ impl Config {
             max_parted_size: self.max_parted_size,
             max_channels: self.max_channels,
             max_dedup_gap: self.max_dedup_gap,
+        }
+    }
+
+    fn client_role(&self) -> RoleContext {
+        RoleContext::Client {
+            guid: self.client_guid,
         }
     }
 }

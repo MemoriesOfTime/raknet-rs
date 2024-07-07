@@ -15,8 +15,8 @@ use log::{debug, trace};
 
 use self::decoder::{DeFragmented, Deduplicated, FrameDecoded, Ordered};
 use self::encoder::{Fragmented, FrameEncoded};
-use crate::ack::SharedAck;
 use crate::errors::CodecError;
+use crate::link::SharedLink;
 use crate::packet::connected::{Frame, FrameBody, FrameSet, FramesMut};
 use crate::utils::Logged;
 use crate::{Message, RoleContext};
@@ -55,7 +55,7 @@ pub(crate) trait Decoded {
     fn frame_decoded(
         self,
         config: Config,
-        ack: SharedAck,
+        link: SharedLink,
         role: RoleContext,
     ) -> impl Stream<Item = FrameBody>;
 }
@@ -67,12 +67,12 @@ where
     fn frame_decoded(
         self,
         config: Config,
-        ack: SharedAck,
+        link: SharedLink,
         role: RoleContext,
     ) -> impl Stream<Item = FrameBody> {
         self.map(Ok)
-            .deduplicated(config.max_dedup_gap, Arc::clone(&ack))
-            .defragmented(config.max_parted_size, config.max_parted_count, ack)
+            .deduplicated(config.max_dedup_gap, Arc::clone(&link))
+            .defragmented(config.max_parted_size, config.max_parted_count, link)
             .ordered(config.max_channels)
             .frame_decoded()
             .logged_all(
@@ -91,6 +91,7 @@ pub(crate) trait Encoded {
         self,
         mtu: u16,
         config: Config,
+        link: SharedLink,
     ) -> impl Sink<Message, Error = CodecError> + Sink<FrameBody, Error = CodecError>;
 }
 
@@ -102,8 +103,10 @@ where
         self,
         mtu: u16,
         config: Config,
+        link: SharedLink,
     ) -> impl Sink<Message, Error = CodecError> + Sink<FrameBody, Error = CodecError> {
-        self.fragmented(mtu, config.max_channels).frame_encoded()
+        self.fragmented(mtu, config.max_channels)
+            .frame_encoded(link)
     }
 }
 
@@ -116,7 +119,7 @@ pub mod micro_bench {
     use rand::{Rng, SeedableRng};
 
     use super::{Config, Decoded, FrameSet, FramesMut, Stream};
-    use crate::ack::Acknowledgement;
+    use crate::link::TransferLink;
     use crate::packet::connected::{Flags, Fragment, Frame, Ordered, Reliability};
     use crate::RoleContext;
 

@@ -4,9 +4,29 @@ use crate::errors::CodecError;
 use crate::packet::read_buf;
 use crate::utils::{u24, BufExt, BufMutExt};
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(PartialEq, Clone)]
 pub(crate) struct AckOrNack {
     pub(crate) records: Vec<Record>,
+}
+
+impl std::fmt::Debug for AckOrNack {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut records = String::new();
+        for record in &self.records {
+            match record {
+                Record::Range(start, end) => {
+                    records += &format!("{}-{},", start, end);
+                }
+                Record::Single(idx) => {
+                    records += &format!("{},", idx);
+                }
+            }
+        }
+        if !records.is_empty() {
+            records.pop();
+        }
+        write!(f, "AckOrNack({})", records)
+    }
 }
 
 impl AckOrNack {
@@ -98,7 +118,7 @@ impl AckOrNack {
 const RECORD_RANGE: u8 = 0;
 const RECORD_SINGLE: u8 = 1;
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(PartialEq, Clone)]
 pub(crate) enum Record {
     Range(u24, u24),
     Single(u24),

@@ -2,8 +2,8 @@ use bytes::{Buf, Bytes};
 use futures::Stream;
 
 use super::handler::offline;
-use crate::codec;
 use crate::io::IO;
+use crate::{codec, RoleContext};
 
 /// Incoming implementation by using tokio's UDP framework
 #[cfg(feature = "tokio-udp")]
@@ -168,6 +168,12 @@ impl Config {
             max_parted_size: self.max_parted_size,
             max_channels: self.max_channels,
             max_dedup_gap: self.max_dedup_gap,
+        }
+    }
+
+    fn server_role(&self) -> RoleContext {
+        RoleContext::Server {
+            guid: self.sever_guid,
         }
     }
 }

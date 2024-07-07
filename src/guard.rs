@@ -7,8 +7,8 @@ use futures::Sink;
 use log::trace;
 use pin_project_lite::pin_project;
 
-use crate::ack::SharedAck;
 use crate::errors::CodecError;
+use crate::link::SharedLink;
 use crate::packet::connected::{self, Frame, FrameSet, FramesRef};
 use crate::packet::{Packet, FRAME_SET_HEADER_SIZE};
 use crate::resend_map::ResendMap;
@@ -21,7 +21,7 @@ pin_project! {
     pub(crate) struct OutgoingGuard<F> {
         #[pin]
         frame: F,
-        ack: SharedAck,
+        link: SharedLink,
         seq_num_write_index: u24,
         buf: VecDeque<Frame>,
         peer: PeerContext,
@@ -32,10 +32,9 @@ pin_project! {
 }
 
 pub(crate) trait HandleOutgoing: Sized {
-    #[allow(clippy::too_many_arguments)]
     fn handle_outgoing(
         self,
-        ack: SharedAck,
+        link: SharedLink,
         cap: usize,
         peer: PeerContext,
         role: RoleContext,
@@ -48,7 +47,7 @@ where
 {
     fn handle_outgoing(
         self,
-        ack: SharedAck,
+        link: SharedLink,
         cap: usize,
         peer: PeerContext,
         role: RoleContext,
@@ -56,7 +55,7 @@ where
         assert!(cap > 0, "cap must larger than 0");
         OutgoingGuard {
             frame: self,
-            ack,
+            link,
             seq_num_write_index: 0.into(),
             buf: VecDeque::with_capacity(cap),
             peer,
@@ -75,8 +74,8 @@ where
         let mut this = self.project();
 
         // empty incoming buffer
-        this.ack.poll_ack(this.resend);
-        this.ack.poll_resend(this.resend, this.buf);
+        this.link.poll_ack(this.resend);
+        this.link.poll_resend(this.resend, this.buf);
         this.resend.poll_stales_into(this.buf);
 
         ready!(this.frame.as_mut().poll_ready(cx))?;
@@ -85,13 +84,13 @@ where
         // TODO: Weighted Round-Robin
 
         // try empty outgoing buffer
-        while !this.ack.empty() || !this.buf.is_empty() {
+        while !this.link.flush_empty() || !this.buf.is_empty() {
             // 1st. empty the ack
             if sent {
                 ready!(this.frame.as_mut().poll_ready(cx))?;
                 sent = false;
             }
-            if let Some(ack) = this.ack.poll_outgoing_ack(this.peer.mtu) {
+            if let Some(ack) = this.link.poll_outgoing_ack(this.peer.mtu) {
                 trace!(
                     "[{}] send ack {ack:?}, total count: {}",
                     this.role,
@@ -109,7 +108,7 @@ where
                 ready!(this.frame.as_mut().poll_ready(cx))?;
                 sent = false;
             }
-            if let Some(nack) = this.ack.poll_outgoing_nack(this.peer.mtu) {
+            if let Some(nack) = this.link.poll_outgoing_nack(this.peer.mtu) {
                 trace!(
                     "[{}] send ack {nack:?}, total count: {}",
                     this.role,
@@ -122,7 +121,19 @@ where
                 sent = true;
             }
 
-            // 3rd. empty the frame_set
+            // 3rd. empty the unconnected packets
+            if sent {
+                ready!(this.frame.as_mut().poll_ready(cx))?;
+                sent = false;
+            }
+            if let Some(packet) = this.link.poll_unconnected() {
+                this.frame
+                    .as_mut()
+                    .start_send((Packet::Unconnected(packet), this.peer.addr))?;
+                sent = true;
+            }
+
+            // 4th. empty the frame set
             if sent {
                 ready!(this.frame.as_mut().poll_ready(cx))?;
                 sent = false;
@@ -197,13 +208,13 @@ where
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         ready!(self.as_mut().try_empty(cx))?;
-        debug_assert!(self.buf.is_empty() && self.ack.empty());
+        debug_assert!(self.buf.is_empty() && self.link.flush_empty());
         self.project().frame.poll_flush(cx)
     }
 
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         ready!(self.as_mut().try_empty(cx))?;
-        debug_assert!(self.buf.is_empty() && self.ack.empty());
+        debug_assert!(self.buf.is_empty() && self.link.flush_empty());
         self.project().frame.poll_close(cx)
     }
 }

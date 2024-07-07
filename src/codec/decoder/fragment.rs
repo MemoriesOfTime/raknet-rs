@@ -10,8 +10,8 @@ use lru::LruCache;
 use minitrace::{Event, Span};
 use pin_project_lite::pin_project;
 
-use crate::ack::SharedAck;
 use crate::errors::CodecError;
+use crate::link::SharedLink;
 use crate::packet::connected::{Fragment, Frame, FrameMut, FrameSet, FramesMut};
 use crate::utils::u24;
 
@@ -56,14 +56,19 @@ pin_project! {
         // users sending a large number of parted IDs.
         parts: LruCache<u16, BinaryHeap<FramePart>>,
         buffer: VecDeque<FrameSet<Frame>>,
-        seq_num_read_index: u24,
-        ack: SharedAck,
+        // maximum sequence number wish to be read
+        max_seq_num_read: u24,
+        link: SharedLink,
     }
 }
 
 pub(crate) trait DeFragmented: Sized {
-    fn defragmented(self, limit_size: u32, limit_parted: usize, ack: SharedAck)
-        -> DeFragment<Self>;
+    fn defragmented(
+        self,
+        limit_size: u32,
+        limit_parted: usize,
+        link: SharedLink,
+    ) -> DeFragment<Self>;
 }
 
 impl<F> DeFragmented for F
@@ -74,15 +79,15 @@ where
         self,
         limit_size: u32,
         limit_parted: usize,
-        ack: SharedAck,
+        link: SharedLink,
     ) -> DeFragment<Self> {
         DeFragment {
             frame: self,
             limit_size,
             parts: LruCache::new(NonZeroUsize::new(limit_parted).expect("limit_parted > 0")),
             buffer: VecDeque::with_capacity(DEFAULT_DEFRAGMENT_BUF_SIZE),
-            seq_num_read_index: 0.into(),
-            ack,
+            max_seq_num_read: 0.into(),
+            link,
         }
     }
 }
@@ -130,7 +135,7 @@ where
                     // promise that parted_index is always less than parted_size
                     if parted_index >= parted_size {
                         // perhaps network bit-flips
-                        this.ack.outgoing_nack(frame_set.seq_num);
+                        this.link.outgoing_nack(frame_set.seq_num);
                         let err = format!(
                             "parted_index {} >= parted_size {}",
                             parted_index, parted_size
@@ -140,7 +145,7 @@ where
                     }
                     if *this.limit_size != 0 && parted_size > *this.limit_size {
                         // we discarded this packet and prevented the peer from resending it.
-                        this.ack.outgoing_ack(frame_set.seq_num);
+                        this.link.outgoing_ack(frame_set.seq_num);
                         let err = format!(
                             "parted_size {} exceed limit_size {}",
                             parted_size, *this.limit_size
@@ -190,12 +195,14 @@ where
             }
 
             let seq_index = frame_set.seq_num;
-            this.ack.outgoing_ack(seq_index);
-            let pre_read_index = *this.seq_num_read_index;
-            if pre_read_index <= seq_index {
-                *this.seq_num_read_index = seq_index + 1;
-                let nack = pre_read_index.to_u32()..seq_index.to_u32();
-                this.ack.outgoing_nack_batch(nack.map(u24::from));
+            this.link.outgoing_ack(seq_index);
+            let pre_max = *this.max_seq_num_read;
+            if pre_max <= seq_index {
+                *this.max_seq_num_read = seq_index + 1;
+                let nack = pre_max.to_u32()..seq_index.to_u32();
+                if !nack.is_empty() {
+                    this.link.outgoing_nack_batch(nack.map(u24::from));
+                }
             }
         }
     }
@@ -213,8 +220,8 @@ mod test {
     use rand::seq::SliceRandom;
 
     use super::DeFragment;
-    use crate::ack::Acknowledgement;
     use crate::errors::CodecError;
+    use crate::link::TransferLink;
     use crate::packet::connected::{Flags, Fragment, Frame, FrameSet, FramesMut};
 
     fn frame_set<'a, T: AsRef<str> + 'a>(
@@ -278,8 +285,8 @@ mod test {
             limit_size: 0,
             parts: LruCache::new(NonZeroUsize::new(512).expect("limit_parted > 0")),
             buffer: VecDeque::new(),
-            seq_num_read_index: 0.into(),
-            ack: Acknowledgement::new_arc(crate::RoleContext::Server),
+            max_seq_num_read: 0.into(),
+            link: TransferLink::new_arc(crate::RoleContext::test_server()),
         };
 
         let set = frag.next().await.unwrap().unwrap();
@@ -310,8 +317,8 @@ mod test {
             limit_size: 20,
             parts: LruCache::new(NonZeroUsize::new(512).expect("limit_parted > 0")),
             buffer: VecDeque::new(),
-            seq_num_read_index: 0.into(),
-            ack: Acknowledgement::new_arc(crate::RoleContext::Server),
+            max_seq_num_read: 0.into(),
+            link: TransferLink::new_arc(crate::RoleContext::test_server()),
         };
 
         assert!(matches!(
@@ -349,8 +356,8 @@ mod test {
             limit_size: 0,
             parts: LruCache::new(NonZeroUsize::new(2).expect("limit_parted > 0")),
             buffer: VecDeque::new(),
-            seq_num_read_index: 0.into(),
-            ack: Acknowledgement::new_arc(crate::RoleContext::Server),
+            max_seq_num_read: 0.into(),
+            link: TransferLink::new_arc(crate::RoleContext::test_server()),
         };
 
         assert!(frag.next().await.is_none());
@@ -382,8 +389,8 @@ mod test {
             limit_size: 0,
             parts: LruCache::new(NonZeroUsize::new(2).expect("limit_parted > 0")),
             buffer: VecDeque::new(),
-            seq_num_read_index: 0.into(),
-            ack: Acknowledgement::new_arc(crate::RoleContext::Server),
+            max_seq_num_read: 0.into(),
+            link: TransferLink::new_arc(crate::RoleContext::test_server()),
         };
 
         {
@@ -426,8 +433,8 @@ mod test {
             limit_size: 0,
             parts: LruCache::new(NonZeroUsize::new(1).expect("limit_parted > 0")),
             buffer: VecDeque::new(),
-            seq_num_read_index: 0.into(),
-            ack: Acknowledgement::new_arc(crate::RoleContext::Server),
+            max_seq_num_read: 0.into(),
+            link: TransferLink::new_arc(crate::RoleContext::test_server()),
         };
 
         let set = frag.next().await.unwrap().unwrap();

@@ -57,8 +57,8 @@ mod utils;
 /// Outgoing guard
 mod guard;
 
-/// Acknowledge handler
-mod ack;
+/// Transfer link
+mod link;
 
 /// Estimators
 mod estimator;
@@ -93,15 +93,38 @@ use packet::connected::Reliability;
 
 #[derive(Debug, Clone, Copy)]
 enum RoleContext {
-    Client,
-    Server,
+    Client { guid: u64 },
+    Server { guid: u64 },
+}
+
+impl RoleContext {
+    fn get_guid(&self) -> u64 {
+        match self {
+            RoleContext::Client { guid } => *guid,
+            RoleContext::Server { guid } => *guid,
+        }
+    }
+
+    #[cfg(test)]
+    fn test_server() -> Self {
+        // There is always a server
+        RoleContext::Server { guid: 0 }
+    }
+
+    #[cfg(test)]
+    fn test_client() -> Self {
+        // Multiple clients
+        RoleContext::Client {
+            guid: rand::random(),
+        }
+    }
 }
 
 impl std::fmt::Display for RoleContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            RoleContext::Client => write!(f, "client"),
-            RoleContext::Server => write!(f, "server"),
+            RoleContext::Client { guid } => write!(f, "client({guid})"),
+            RoleContext::Server { guid } => write!(f, "server({guid})"),
         }
     }
 }

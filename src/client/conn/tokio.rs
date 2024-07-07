@@ -7,7 +7,6 @@ use tokio::net::UdpSocket as TokioUdpSocket;
 use tokio_util::udp::UdpFramed;
 
 use super::ConnectTo;
-use crate::ack::Acknowledgement;
 use crate::client::handler::offline::HandleOffline;
 use crate::client::handler::online::HandleOnline;
 use crate::codec::tokio::Codec;
@@ -15,8 +14,9 @@ use crate::codec::{Decoded, Encoded};
 use crate::errors::Error;
 use crate::guard::HandleOutgoing;
 use crate::io::{IOImpl, IO};
+use crate::link::TransferLink;
 use crate::utils::Logged;
-use crate::{PeerContext, RoleContext};
+use crate::PeerContext;
 
 impl ConnectTo for TokioUdpSocket {
     async fn connect_to(
@@ -36,7 +36,7 @@ impl ConnectTo for TokioUdpSocket {
             return Err(io::Error::new(io::ErrorKind::AddrNotAvailable, "invalid address").into());
         };
 
-        let ack = Acknowledgement::new_arc(RoleContext::Client);
+        let ack = TransferLink::new_arc(config.client_role());
 
         let write = UdpFramed::new(Arc::clone(&socket), Codec)
             .handle_outgoing(
@@ -46,9 +46,9 @@ impl ConnectTo for TokioUdpSocket {
                     addr,
                     mtu: config.mtu,
                 },
-                RoleContext::Client,
+                config.client_role(),
             )
-            .frame_encoded(config.mtu, config.codec_config());
+            .frame_encoded(config.mtu, config.codec_config(), Arc::clone(&ack));
 
         let incoming = UdpFramed::new(socket, Codec)
             .logged_err(|err| {
@@ -59,7 +59,11 @@ impl ConnectTo for TokioUdpSocket {
 
         let io = ack
             .filter_incoming_ack(incoming)
-            .frame_decoded(config.codec_config(), Arc::clone(&ack), RoleContext::Client)
+            .frame_decoded(
+                config.codec_config(),
+                Arc::clone(&ack),
+                config.client_role(),
+            )
             .handle_online(write, addr, config.client_guid)
             .await?;
 

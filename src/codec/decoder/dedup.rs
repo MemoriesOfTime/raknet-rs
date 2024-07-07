@@ -5,8 +5,8 @@ use futures::{ready, Stream, StreamExt};
 use minitrace::{Event, Span};
 use pin_project_lite::pin_project;
 
-use crate::ack::SharedAck;
 use crate::errors::CodecError;
+use crate::link::SharedLink;
 use crate::packet::connected::{FrameSet, Frames};
 use crate::utils::{u24, BitVecQueue};
 
@@ -61,24 +61,24 @@ pin_project! {
         // Limit the maximum reliable_frame_index gap for a connection. 0 means no limit.
         max_gap: usize,
         window: DuplicateWindow,
-        ack: SharedAck,
+        link: SharedLink,
     }
 }
 
 pub(crate) trait Deduplicated: Sized {
-    fn deduplicated(self, max_gap: usize, ack: SharedAck) -> Dedup<Self>;
+    fn deduplicated(self, max_gap: usize, link: SharedLink) -> Dedup<Self>;
 }
 
 impl<F, B> Deduplicated for F
 where
     F: Stream<Item = Result<FrameSet<Frames<B>>, CodecError>>,
 {
-    fn deduplicated(self, max_gap: usize, ack: SharedAck) -> Dedup<Self> {
+    fn deduplicated(self, max_gap: usize, link: SharedLink) -> Dedup<Self> {
         Dedup {
             frame: self,
             max_gap,
             window: DuplicateWindow::default(),
-            ack,
+            link,
         }
     }
 }
@@ -130,7 +130,7 @@ where
                 return Poll::Ready(Some(Ok(frame_set)));
             }
             // all duplicated, send ack back
-            this.ack.outgoing_ack(frame_set.seq_num);
+            this.link.outgoing_ack(frame_set.seq_num);
         }
     }
 }
@@ -145,8 +145,8 @@ mod test {
     use indexmap::IndexSet;
 
     use super::*;
-    use crate::ack::Acknowledgement;
     use crate::errors::CodecError;
+    use crate::link::TransferLink;
     use crate::packet::connected::{Flags, Frame, FrameSet};
 
     #[test]
@@ -233,7 +233,7 @@ mod test {
             frame: frame.map(Ok),
             max_gap: 100,
             window: DuplicateWindow::default(),
-            ack: Acknowledgement::new_arc(crate::RoleContext::Server),
+            link: TransferLink::new_arc(crate::RoleContext::test_server()),
         };
 
         assert_eq!(dedup.next().await.unwrap().unwrap(), frame_set(0..64));
@@ -261,7 +261,7 @@ mod test {
             frame: frame.map(Ok),
             max_gap: 100,
             window: DuplicateWindow::default(),
-            ack: Acknowledgement::new_arc(crate::RoleContext::Server),
+            link: TransferLink::new_arc(crate::RoleContext::test_server()),
         };
         assert_eq!(dedup.next().await.unwrap().unwrap(), frame_set([0]));
         assert_eq!(dedup.next().await.unwrap().unwrap(), frame_set([101]));
@@ -285,7 +285,7 @@ mod test {
             frame: frame.map(Ok),
             max_gap: 100,
             window: DuplicateWindow::default(),
-            ack: Acknowledgement::new_arc(crate::RoleContext::Server),
+            link: TransferLink::new_arc(crate::RoleContext::test_server()),
         };
         assert_eq!(
             dedup.next().await.unwrap().unwrap(),
@@ -320,7 +320,7 @@ mod test {
             frame: frame.map(Ok),
             max_gap: scale,
             window: DuplicateWindow::default(),
-            ack: Acknowledgement::new_arc(crate::RoleContext::Server),
+            link: TransferLink::new_arc(crate::RoleContext::test_server()),
         };
         assert_eq!(dedup.next().await.unwrap().unwrap(), frame_set(idx1_set));
 

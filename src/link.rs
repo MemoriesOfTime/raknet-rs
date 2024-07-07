@@ -8,16 +8,19 @@ use futures::{Stream, StreamExt};
 use log::trace;
 use pin_project_lite::pin_project;
 
-use crate::packet::connected::{self, AckOrNack, Frame, FrameSet};
+use crate::packet::connected::{self, AckOrNack, Frame, FrameBody, FrameSet};
+use crate::packet::unconnected;
 use crate::resend_map::ResendMap;
 use crate::utils::priority_mpsc::{self, Receiver as PriorityReceiver, Sender as PrioritySender};
 use crate::utils::u24;
 use crate::RoleContext;
 
-/// Shared acknowledgement handler
-pub(crate) type SharedAck = Arc<Acknowledgement>;
+/// Shared link between stream and sink
+pub(crate) type SharedLink = Arc<TransferLink>;
 
-pub(crate) struct Acknowledgement {
+/// Transfer data and task between stream and sink.
+/// It is thread-safe under immutable reference
+pub(crate) struct TransferLink {
     incoming_ack_tx: Sender<AckOrNack>,
     incoming_ack_rx: Receiver<AckOrNack>,
 
@@ -32,16 +35,26 @@ pub(crate) struct Acknowledgement {
     outgoing_nack_tx: PrioritySender<u24>,
     outgoing_nack_rx: PriorityReceiver<u24>,
 
+    unconnected_tx: Sender<unconnected::Packet>,
+    unconnected_rx: Receiver<unconnected::Packet>,
+
+    frame_body_tx: Sender<FrameBody>,
+    frame_body_rx: Receiver<FrameBody>,
+
     role: RoleContext,
 }
 
-impl Acknowledgement {
-    pub(crate) fn new_arc(role: RoleContext) -> SharedAck {
+impl TransferLink {
+    pub(crate) fn new_arc(role: RoleContext) -> SharedLink {
         let (incoming_ack_tx, incoming_ack_rx) = flume::unbounded();
         let (incoming_nack_tx, incoming_nack_rx) = flume::unbounded();
 
         let (outgoing_ack_tx, outgoing_ack_rx) = priority_mpsc::unbounded();
         let (outgoing_nack_tx, outgoing_nack_rx) = priority_mpsc::unbounded();
+
+        let (unconnected_tx, unconnected_rx) = flume::unbounded();
+        let (frame_body_tx, frame_body_rx) = flume::unbounded();
+
         Arc::new(Self {
             incoming_ack_tx,
             incoming_ack_rx,
@@ -51,12 +64,16 @@ impl Acknowledgement {
             outgoing_ack_rx,
             outgoing_nack_tx,
             outgoing_nack_rx,
+            unconnected_tx,
+            unconnected_rx,
+            frame_body_tx,
+            frame_body_rx,
             role,
         })
     }
 
     pub(crate) fn filter_incoming_ack<F, S>(
-        self: &SharedAck,
+        self: &SharedLink,
         frame: F,
     ) -> impl Stream<Item = FrameSet<S>>
     where
@@ -64,7 +81,7 @@ impl Acknowledgement {
     {
         IncomingAckFilter {
             frame,
-            ack: Arc::clone(self),
+            link: Arc::clone(self),
         }
     }
 
@@ -86,6 +103,14 @@ impl Acknowledgement {
 
     pub(crate) fn outgoing_nack_batch(&self, t: impl IntoIterator<Item = u24>) {
         self.outgoing_nack_tx.send_batch(t);
+    }
+
+    pub(crate) fn send_unconnected(&self, packet: unconnected::Packet) {
+        self.unconnected_tx.send(packet).unwrap();
+    }
+
+    pub(crate) fn send_frame_body(&self, body: FrameBody) {
+        self.frame_body_tx.send(body).unwrap();
     }
 
     // Clear all acknowledged frames
@@ -123,19 +148,34 @@ impl Acknowledgement {
         AckOrNack::extend_from(self.outgoing_nack_rx.recv_batch(), mtu)
     }
 
-    // Return whether the outgoing buffer is empty
-    pub(crate) fn empty(&self) -> bool {
-        self.outgoing_ack_rx.is_empty() && self.outgoing_nack_rx.is_empty()
+    pub(crate) fn poll_unconnected(&self) -> Option<unconnected::Packet> {
+        self.unconnected_rx.try_recv().ok()
+    }
+
+    pub(crate) fn poll_frame_body(&self) -> Option<FrameBody> {
+        self.frame_body_rx.try_recv().ok()
+    }
+
+    // Return whether the flush buffer is empty
+    pub(crate) fn flush_empty(&self) -> bool {
+        self.outgoing_ack_rx.is_empty()
+            && self.outgoing_nack_rx.is_empty()
+            && self.unconnected_rx.is_empty()
+    }
+
+    /// Return whether the frame body buffer is empty
+    pub(crate) fn frame_body_empty(&self) -> bool {
+        self.frame_body_rx.is_empty()
     }
 }
 
 pin_project! {
-    // IncomingGuard delivers all acknowledgement packets into outgoing guard, mapping
+    // IncomingAckFilter delivers all acknowledgement packets into transfer link, mapping
     // connected::Packet into FrameSet
     pub(crate) struct IncomingAckFilter<F> {
         #[pin]
         frame: F,
-        ack: SharedAck
+        link: SharedLink
     }
 }
 
@@ -154,8 +194,8 @@ where
             };
             match packet {
                 connected::Packet::FrameSet(frame_set) => return Poll::Ready(Some(frame_set)),
-                connected::Packet::Ack(records) => this.ack.incoming_ack(records),
-                connected::Packet::Nack(records) => this.ack.incoming_nack(records),
+                connected::Packet::Ack(records) => this.link.incoming_ack(records),
+                connected::Packet::Nack(records) => this.link.incoming_nack(records),
             };
         }
     }

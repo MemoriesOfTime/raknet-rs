@@ -14,19 +14,18 @@ use tokio::net::UdpSocket as TokioUdpSocket;
 use tokio_util::udp::UdpFramed;
 
 use super::{Config, MakeIncoming};
-use crate::ack::Acknowledgement;
 use crate::codec::tokio::Codec;
 use crate::codec::{Decoded, Encoded};
 use crate::errors::CodecError;
 use crate::guard::HandleOutgoing;
 use crate::io::{IOImpl, IO};
+use crate::link::TransferLink;
 use crate::packet::connected::{self, Frames, FramesMut};
 use crate::packet::{unconnected, Packet};
 use crate::server::handler::offline;
 use crate::server::handler::offline::HandleOffline;
 use crate::server::handler::online::HandleOnline;
 use crate::utils::{Log, Logged, StreamExt};
-use crate::RoleContext;
 
 type OfflineHandler = offline::OfflineHandler<
     Log<UdpFramed<Codec, Arc<TokioUdpSocket>>, (Packet<FramesMut>, SocketAddr), CodecError>,
@@ -98,16 +97,16 @@ impl Stream for Incoming {
             router_tx.send(pack).unwrap();
             this.router.insert(peer.addr, router_tx);
 
-            let ack = Acknowledgement::new_arc(RoleContext::Server);
+            let ack = TransferLink::new_arc(this.config.server_role());
 
             let write = UdpFramed::new(Arc::clone(this.socket), Codec)
                 .handle_outgoing(
                     Arc::clone(&ack),
                     this.config.send_buf_cap,
                     peer.clone(),
-                    RoleContext::Server,
+                    this.config.server_role(),
                 )
-                .frame_encoded(peer.mtu, this.config.codec_config());
+                .frame_encoded(peer.mtu, this.config.codec_config(), Arc::clone(&ack));
 
             let raw_write = UdpFramed::new(Arc::clone(this.socket), Codec).with(
                 move |input: unconnected::Packet| async move {
@@ -122,7 +121,7 @@ impl Stream for Incoming {
                 .frame_decoded(
                     this.config.codec_config(),
                     Arc::clone(&ack),
-                    RoleContext::Server,
+                    this.config.server_role(),
                 )
                 .handle_online(
                     write,
