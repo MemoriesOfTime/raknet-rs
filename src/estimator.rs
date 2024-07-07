@@ -1,3 +1,5 @@
+#![allow(dead_code)] // TODO: Remove this line after implementing the code snippet
+
 use std::cmp;
 use std::time::Duration;
 

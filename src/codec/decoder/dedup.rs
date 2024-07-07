@@ -261,7 +261,7 @@ mod test {
             frame: frame.map(Ok),
             max_gap: 100,
             window: DuplicateWindow::default(),
-            link: TransferLink::new_arc(crate::RoleContext::test_server()),
+            link: TransferLink::new_arc(crate::RoleContext::test_client()),
         };
         assert_eq!(dedup.next().await.unwrap().unwrap(), frame_set([0]));
         assert_eq!(dedup.next().await.unwrap().unwrap(), frame_set([101]));
@@ -285,7 +285,7 @@ mod test {
             frame: frame.map(Ok),
             max_gap: 100,
             window: DuplicateWindow::default(),
-            link: TransferLink::new_arc(crate::RoleContext::test_server()),
+            link: TransferLink::new_arc(crate::RoleContext::test_client()),
         };
         assert_eq!(
             dedup.next().await.unwrap().unwrap(),

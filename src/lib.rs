@@ -98,20 +98,13 @@ enum RoleContext {
 }
 
 impl RoleContext {
-    fn get_guid(&self) -> u64 {
-        match self {
-            RoleContext::Client { guid } => *guid,
-            RoleContext::Server { guid } => *guid,
-        }
-    }
-
-    #[cfg(test)]
+    #[cfg(any(test, feature = "micro-bench"))]
     fn test_server() -> Self {
         // There is always a server
         RoleContext::Server { guid: 0 }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "micro-bench"))]
     fn test_client() -> Self {
         // Multiple clients
         RoleContext::Client {

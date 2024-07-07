@@ -244,9 +244,11 @@ pub mod micro_bench {
 
             let config = self.config;
             let data = self.data.clone();
-            let ack = Acknowledgement::new_arc(RoleContext::Server);
+            let link = TransferLink::new_arc(RoleContext::test_server());
 
-            let stream = self.into_stream().decoded(config, ack, RoleContext::Server);
+            let stream = self
+                .into_stream()
+                .frame_decoded(config, link, RoleContext::test_client());
             #[futures_async_stream::for_await]
             for res in stream {
                 let body = match res {
@@ -260,9 +262,11 @@ pub mod micro_bench {
         #[allow(clippy::semicolon_if_nothing_returned)]
         pub async fn bench_decoded(self) {
             let config = self.config;
-            let ack = Acknowledgement::new_arc(RoleContext::Server);
+            let link = TransferLink::new_arc(RoleContext::test_client());
 
-            let stream = self.into_stream().decoded(config, ack, RoleContext::Server);
+            let stream = self
+                .into_stream()
+                .frame_decoded(config, link, RoleContext::test_server());
             #[futures_async_stream::for_await]
             for _r in stream {}
         }
