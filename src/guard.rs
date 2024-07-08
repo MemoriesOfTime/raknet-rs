@@ -216,6 +216,7 @@ where
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         ready!(self.as_mut().try_empty(cx))?;
         debug_assert!(self.buf.is_empty() && self.link.flush_empty());
+        // TODO: wait resend buffer empty
         self.project().frame.poll_close(cx)
     }
 }

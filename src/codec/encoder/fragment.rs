@@ -1,14 +1,14 @@
 use std::cmp::min;
 use std::pin::Pin;
-use std::task::{ready, Context, Poll};
+use std::task::{Context, Poll};
 
-use bytes::{Buf, Bytes};
+use bytes::Buf;
 use futures::Sink;
 use pin_project_lite::pin_project;
 
 use crate::errors::CodecError;
 use crate::packet::connected::{self, Flags, Frame, Ordered, Reliability};
-use crate::packet::{PackType, FRAGMENT_PART_SIZE, FRAME_SET_HEADER_SIZE};
+use crate::packet::{FRAGMENT_PART_SIZE, FRAME_SET_HEADER_SIZE};
 use crate::utils::u24;
 use crate::Message;
 
@@ -142,7 +142,9 @@ where
                 frame.body.len() <= max_len,
                 "split failed, the frame body is too large"
             );
-            // FIXME: poll_ready is not ensured before start_send
+            // FIXME: poll_ready is not ensured before start_send. But it is ok because the next
+            // layer has buffer(ie. next_frame.start_send will always return Ok, and never mess up
+            // data)
             this.frame.as_mut().start_send(frame)?;
         }
 
@@ -162,32 +164,14 @@ where
         self.project().frame.poll_flush(cx)
     }
 
-    // FIXME: wrong implementation, should be placed in other place
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        let mut this = self.project();
-        let mut frame = this.frame.as_mut();
-        ready!(frame.as_mut().poll_ready(cx))?;
-
-        let reliable_frame_index = Some(*this.reliable_write_index);
-        *this.reliable_write_index += 1;
-
-        // send `DisconnectNotification`
-        frame.as_mut().start_send(Frame {
-            flags: Flags::new(Reliability::Reliable, false),
-            reliable_frame_index,
-            seq_frame_index: None,
-            ordered: None,
-            fragment: None,
-            body: Bytes::from_static(&[PackType::DisconnectNotification as u8]),
-        })?;
-
-        ready!(frame.as_mut().poll_flush(cx))?;
-        frame.as_mut().poll_close(cx)
+        self.project().frame.poll_close(cx)
     }
 }
 
 #[cfg(test)]
 mod test {
+    use bytes::Bytes;
     use connected::Frames;
     use futures::SinkExt;
 
@@ -273,23 +257,15 @@ mod test {
         ))
         .await
         .unwrap();
-        // 1
-        dst.close().await.unwrap();
 
         assert_eq!(dst.order_write_index[0].to_u32(), 1);
         assert_eq!(dst.order_write_index[1].to_u32(), 1);
-        assert_eq!(dst.reliable_write_index.to_u32(), 8);
+        assert_eq!(dst.reliable_write_index.to_u32(), 7);
 
-        assert_eq!(dst.frame.buf.len(), 7);
+        assert_eq!(dst.frame.buf.len(), 6);
         // adjusted
         assert_eq!(dst.frame.buf[4].flags.reliability, Reliability::Reliable);
         assert_eq!(dst.frame.buf[5].flags.reliability, Reliability::Reliable);
-
-        // closed
-        assert_eq!(
-            dst.frame.buf[6].body,
-            Bytes::from_static(&[PackType::DisconnectNotification as u8])
-        );
     }
 
     #[tokio::test]

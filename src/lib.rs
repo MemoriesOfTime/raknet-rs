@@ -57,6 +57,9 @@ mod utils;
 /// Outgoing guard
 mod guard;
 
+/// Connection state
+mod state;
+
 /// Transfer link
 mod link;
 

@@ -41,9 +41,7 @@ fn encode(body: FrameBody) -> Message {
         FrameBody::ConnectionRequest { .. } => Reliability::ReliableOrdered,
         FrameBody::ConnectionRequestAccepted { .. } => Reliability::Reliable,
         FrameBody::NewIncomingConnection { .. } => Reliability::ReliableOrdered,
-        FrameBody::DisconnectNotification => {
-            panic!("you should not send DisconnectNotification, use .poll_close(cx) instead")
-        }
+        FrameBody::DisconnectNotification => Reliability::Reliable,
         FrameBody::DetectLostConnections => Reliability::Reliable,
         FrameBody::User(_) => {
             panic!("you should not send user packet into FrameEncoder, please send `Message`")
