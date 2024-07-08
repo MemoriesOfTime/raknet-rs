@@ -71,7 +71,7 @@ where
         ready!(this.frame.as_mut().poll_ready(cx))?;
 
         // frame is now ready to send
-        while let Some(body) = this.link.poll_frame_body() {
+        for body in this.link.poll_frame_body() {
             this.frame.as_mut().start_send(encode(body))?;
             // ready for next frame
             ready!(this.frame.as_mut().poll_ready(cx))?;

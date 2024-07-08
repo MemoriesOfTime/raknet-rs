@@ -148,12 +148,12 @@ impl TransferLink {
         AckOrNack::extend_from(self.outgoing_nack_rx.recv_batch(), mtu)
     }
 
-    pub(crate) fn poll_unconnected(&self) -> Option<unconnected::Packet> {
-        self.unconnected_rx.try_recv().ok()
+    pub(crate) fn poll_unconnected(&self) -> impl Iterator<Item = unconnected::Packet> + '_ {
+        self.unconnected_rx.try_iter()
     }
 
-    pub(crate) fn poll_frame_body(&self) -> Option<FrameBody> {
-        self.frame_body_rx.try_recv().ok()
+    pub(crate) fn poll_frame_body(&self) -> impl Iterator<Item = FrameBody> + '_ {
+        self.frame_body_rx.try_iter()
     }
 
     // Return whether the flush buffer is empty

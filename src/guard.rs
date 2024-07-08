@@ -126,7 +126,8 @@ where
                 ready!(this.frame.as_mut().poll_ready(cx))?;
                 sent = false;
             }
-            if let Some(packet) = this.link.poll_unconnected() {
+            // only poll one packet each time
+            if let Some(packet) = this.link.poll_unconnected().next() {
                 this.frame
                     .as_mut()
                     .start_send((Packet::Unconnected(packet), this.peer.addr))?;
