@@ -70,12 +70,15 @@ impl<F> OutgoingGuard<F>
 where
     F: for<'a> Sink<(Packet<FramesRef<'a>>, SocketAddr), Error = CodecError>,
 {
+    /// Try to empty the outgoing buffer
     fn try_empty(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), CodecError>> {
         let mut this = self.project();
 
         // empty incoming buffer
         this.link.poll_ack(this.resend);
         this.link.poll_resend(this.resend, this.buf);
+
+        // poll stale frames into buffer
         this.resend.poll_stales_into(this.buf);
 
         ready!(this.frame.as_mut().poll_ready(cx))?;
@@ -128,6 +131,11 @@ where
             }
             // only poll one packet each time
             if let Some(packet) = this.link.poll_unconnected().next() {
+                trace!(
+                    "[{}] send unconnected packet, type: {:?}",
+                    this.role,
+                    packet.pack_type()
+                );
                 this.frame
                     .as_mut()
                     .start_send((Packet::Unconnected(packet), this.peer.addr))?;
@@ -159,6 +167,13 @@ where
                 break;
             }
             if !frames.is_empty() {
+                trace!(
+                    "[{}] send frame set, seq_num: {}, reliable: {}, frame count: {}",
+                    this.role,
+                    *this.seq_num_write_index,
+                    reliable,
+                    frames.len(),
+                );
                 let frame_set = FrameSet {
                     seq_num: *this.seq_num_write_index,
                     set: &frames[..],
@@ -214,9 +229,13 @@ where
     }
 
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        ready!(self.as_mut().try_empty(cx))?;
-        debug_assert!(self.buf.is_empty() && self.link.flush_empty());
-        // TODO: wait resend buffer empty
+        // insure all frames are sent
+        // TODO: resend with a proper threshold or timeout here
+        while !self.resend.is_empty() {
+            ready!(self.as_mut().try_empty(cx))?;
+            debug_assert!(self.buf.is_empty() && self.link.flush_empty());
+            ready!(self.resend.poll_wait(cx));
+        }
         self.project().frame.poll_close(cx)
     }
 }

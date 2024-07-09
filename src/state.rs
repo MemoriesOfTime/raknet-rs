@@ -1,16 +1,17 @@
 //! State management for the connection.
+//! Reflect the operation in the APIs of Sink and Stream when the connection stops.
 
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
-use futures::Sink;
+use futures::{Sink, Stream};
 use pin_project_lite::pin_project;
 
 use crate::errors::{CodecError, Error};
 use crate::packet::connected::FrameBody;
 use crate::Message;
 
-enum State {
+enum OutgoingState {
     // before sending DisconnectNotification
     Connecting,
     FinWait,
@@ -20,41 +21,67 @@ enum State {
     Closed,
 }
 
-impl State {
+enum IncomingState {
+    Connecting,
+    Closed,
+}
+
+impl OutgoingState {
     #[inline(always)]
     fn before_finish(&self) -> bool {
-        matches!(self, State::Connecting | State::FinWait)
+        matches!(self, OutgoingState::Connecting | OutgoingState::FinWait)
     }
 }
 
 pin_project! {
-    pub(crate) struct StateManager<F> {
+    pub(crate) struct StateManager<F, S> {
         #[pin]
         frame: F,
-        state: State,
+        state: S,
     }
 }
 
-pub(crate) trait StateManage: Sized {
-    /// Manage the state of the connection.
+pub(crate) trait OutgoingStateManage: Sized {
+    /// Manage the outgoing state of the connection.
     /// Take a sink of `FrameBody` and `Message` and return a sink of `FrameBody` and `Message`,
     /// mapping the `CodecError` to the `Error`.
-    fn manage_state(self) -> impl Sink<FrameBody, Error = Error> + Sink<Message, Error = Error>;
+    fn manage_outgoing_state(
+        self,
+    ) -> impl Sink<FrameBody, Error = Error> + Sink<Message, Error = Error>;
 }
 
-impl<F> StateManage for F
+impl<F> OutgoingStateManage for F
 where
     F: Sink<FrameBody, Error = CodecError> + Sink<Message, Error = CodecError>,
 {
-    fn manage_state(self) -> impl Sink<FrameBody, Error = Error> + Sink<Message, Error = Error> {
+    fn manage_outgoing_state(
+        self,
+    ) -> impl Sink<FrameBody, Error = Error> + Sink<Message, Error = Error> {
         StateManager {
             frame: self,
-            state: State::Connecting,
+            state: OutgoingState::Connecting,
         }
     }
 }
 
-impl<F> Sink<FrameBody> for StateManager<F>
+pub(crate) trait IncomingStateManage: Sized {
+    /// Manage the incoming state of the connection.
+    fn manage_incoming_state(self) -> impl Stream<Item = FrameBody>;
+}
+
+impl<F> IncomingStateManage for F
+where
+    F: Stream<Item = FrameBody>,
+{
+    fn manage_incoming_state(self) -> impl Stream<Item = FrameBody> {
+        StateManager {
+            frame: self,
+            state: IncomingState::Connecting,
+        }
+    }
+}
+
+impl<F> Sink<FrameBody> for StateManager<F, OutgoingState>
 where
     F: Sink<FrameBody, Error = CodecError>,
 {
@@ -83,35 +110,35 @@ where
 
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         let mut this = self.project();
-        if matches!(this.state, State::Closed) {
+        if matches!(this.state, OutgoingState::Closed) {
             return Poll::Ready(Err(Error::ConnectionClosed));
         }
         loop {
             match this.state {
-                State::Connecting | State::FinWait => {
-                    *this.state = State::FinWait;
+                OutgoingState::Connecting | OutgoingState::FinWait => {
+                    *this.state = OutgoingState::FinWait;
                     ready!(this.frame.as_mut().poll_ready(cx)?);
 
                     this.frame
                         .as_mut()
                         .start_send(FrameBody::DisconnectNotification)?;
-                    *this.state = State::Fin;
+                    *this.state = OutgoingState::Fin;
                 }
-                State::Fin => {
+                OutgoingState::Fin => {
                     ready!(this.frame.as_mut().poll_flush(cx)?);
-                    *this.state = State::CloseWait;
+                    *this.state = OutgoingState::CloseWait;
                 }
-                State::CloseWait => {
+                OutgoingState::CloseWait => {
                     ready!(this.frame.as_mut().poll_close(cx)?);
-                    *this.state = State::Closed;
+                    *this.state = OutgoingState::Closed;
                 }
-                State::Closed => return Poll::Ready(Ok(())),
+                OutgoingState::Closed => return Poll::Ready(Ok(())),
             }
         }
     }
 }
 
-impl<F> Sink<Message> for StateManager<F>
+impl<F> Sink<Message> for StateManager<F, OutgoingState>
 where
     F: Sink<FrameBody, Error = CodecError> + Sink<Message, Error = CodecError>,
 {
@@ -135,10 +162,32 @@ where
     }
 }
 
+impl<F> Stream for StateManager<F, IncomingState>
+where
+    F: Stream<Item = FrameBody>,
+{
+    type Item = FrameBody;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let mut this = self.project();
+        if matches!(this.state, IncomingState::Closed) {
+            return Poll::Ready(None);
+        }
+        let Some(body) = ready!(this.frame.as_mut().poll_next(cx)) else {
+            // this is weird, UDP will not be closed by the remote, but we regard it as closed
+            *this.state = IncomingState::Closed;
+            return Poll::Ready(None);
+        };
+        if matches!(body, FrameBody::DisconnectNotification) {
+            *this.state = IncomingState::Closed;
+            return Poll::Ready(None);
+        }
+        Poll::Ready(Some(body))
+    }
+}
+
 #[cfg(test)]
 mod test {
-    // TODO: test
-
     use std::pin::Pin;
     use std::task::{Context, Poll};
 
@@ -216,7 +265,7 @@ mod test {
     async fn test_goodbye_works() {
         let mut goodbye = super::StateManager {
             frame: DstSink::default(),
-            state: crate::state::State::Connecting,
+            state: crate::state::OutgoingState::Connecting,
         };
         SinkExt::<FrameBody>::close(&mut goodbye).await.unwrap();
         assert_eq!(goodbye.frame.buf.len(), 1);

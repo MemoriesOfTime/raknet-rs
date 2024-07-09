@@ -66,6 +66,10 @@ where
         cx: &mut Context<'_>,
     ) -> Poll<Result<(), CodecError>> {
         let mut this = self.project();
+        if this.link.frame_body_empty() {
+            return Poll::Ready(Ok(()));
+        }
+        
         ready!(this.frame.as_mut().poll_ready(cx))?;
 
         // frame is now ready to send

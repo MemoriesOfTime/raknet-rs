@@ -57,7 +57,7 @@ mod utils;
 /// Outgoing guard
 mod guard;
 
-/// Connection state
+/// Sink & Stream state
 mod state;
 
 /// Transfer link

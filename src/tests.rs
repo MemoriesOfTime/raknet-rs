@@ -182,7 +182,6 @@ async fn test_tokio_udp_works() {
             Bytes::from_iter(repeat(0xfe).take(4096))
         );
         SinkExt::<Bytes>::close(&mut io).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(50)).await;
     };
 
     tokio::spawn(client).await.unwrap();
