@@ -86,7 +86,7 @@ pub(crate) fn test_trace_log_setup() -> TestTraceLogGuard {
         reporter,
         minitrace::collector::Config::default().report_before_root_finish(true),
     );
-    env_logger::init();
+    let _ignore = env_logger::try_init();
     TestTraceLogGuard { spans }
 }
 

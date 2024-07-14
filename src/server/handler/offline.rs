@@ -12,7 +12,7 @@ use pin_project_lite::pin_project;
 use crate::errors::CodecError;
 use crate::packet::connected::{Frames, FramesMut};
 use crate::packet::{connected, unconnected, Packet};
-use crate::PeerContext;
+use crate::{PeerContext, RoleContext};
 
 pub(crate) trait HandleOffline: Sized {
     fn handle_offline(self, config: Config) -> OfflineHandler<Self>;
@@ -29,6 +29,9 @@ where
             pending: lru::LruCache::new(
                 NonZeroUsize::new(config.max_pending).expect("max_pending > 0"),
             ),
+            role: RoleContext::Server {
+                guid: config.sever_guid,
+            },
             config,
             connected: HashMap::new(),
             state: OfflineState::Listening,
@@ -62,7 +65,8 @@ pin_project! {
         // Half-connected queue
         pending: lru::LruCache<SocketAddr, u8>,
         connected: HashMap<SocketAddr, PeerContext>,
-        state: OfflineState
+        state: OfflineState,
+        role: RoleContext,
     }
 }
 
@@ -115,12 +119,12 @@ where
                 OfflineState::Listening => {}
                 OfflineState::SendingPrepare(pack) => {
                     if let Err(err) = ready!(this.frame.as_mut().poll_ready(cx)) {
-                        error!("[server] send error: {err}");
+                        error!("[{}] send error: {err}", this.role);
                         *this.state = OfflineState::Listening;
                         continue;
                     }
                     if let Err(err) = this.frame.as_mut().start_send(pack.take().unwrap()) {
-                        error!("[server] send error: {err}");
+                        error!("[{}] send error: {err}", this.role);
                         *this.state = OfflineState::Listening;
                         continue;
                     }
@@ -129,7 +133,7 @@ where
                 }
                 OfflineState::SendingFlush => {
                     if let Err(err) = ready!(this.frame.as_mut().poll_flush(cx)) {
-                        error!("[server] send error: {err}");
+                        error!("[{}] send error: {err}", this.role);
                     }
                     *this.state = OfflineState::Listening;
                 }
@@ -146,7 +150,8 @@ where
                         return Poll::Ready(Some((pack, peer.clone())));
                     }
                     debug!(
-                        "[server] ignore connected packet {:?} from unconnected client {addr}",
+                        "[{}] ignore connected packet {:?} from unconnected client {addr}",
+                        this.role,
                         pack.pack_type()
                     );
                     // TODO: Send DETECT_LOST_CONNECTION ?
@@ -177,6 +182,10 @@ where
                         .binary_search(&protocol_version)
                         .is_err()
                     {
+                        debug!(
+                            "[{}] received incompatible version({protocol_version}) from {addr}",
+                            this.role
+                        );
                         *this.state = OfflineState::SendingPrepare(Some((
                             Self::make_incompatible_version(this.config),
                             addr,
@@ -184,9 +193,15 @@ where
                         continue;
                     }
                     if this.pending.put(addr, protocol_version).is_some() {
-                        debug!("[server] received duplicate open connection request 1 from {addr}");
+                        debug!(
+                            "[{}] received duplicate open connection request 1 from {addr}",
+                            this.role
+                        );
                     } else {
-                        debug!("[server] received open connection request 1 from {addr}");
+                        debug!(
+                            "[{}] received open connection request 1 from {addr}",
+                            this.role,
+                        );
                     }
                     // max_mtu >= final_mtu >= min_mtu
                     let final_mtu = mtu.clamp(this.config.min_mtu, this.config.max_mtu);
@@ -199,14 +214,17 @@ where
                 }
                 unconnected::Packet::OpenConnectionRequest2 { mtu, .. } => {
                     if this.pending.pop(&addr).is_none() {
-                        debug!("[server] received open connection request 2 from {addr} without open connection request 1");
+                        debug!("[{}] received open connection request 2 from {addr} without open connection request 1", this.role);
                         *this.state = OfflineState::SendingPrepare(Some((
                             Self::make_incompatible_version(this.config),
                             addr,
                         )));
                         continue;
                     }
-                    debug!("[server] received open connection request 2 from {addr}");
+                    debug!(
+                        "[{}] received open connection request 2 from {addr}",
+                        this.role
+                    );
                     // client should adjust the mtu
                     if mtu < this.config.min_mtu
                         || mtu > this.config.max_mtu
@@ -229,7 +247,8 @@ where
                 }
                 _ => {
                     warn!(
-                        "received a package({:?}) that should not be received on the server.",
+                        "[{}] received a package({:?}) that should not be received on the server.",
+                        this.role,
                         pack.pack_type()
                     );
                     continue;
@@ -248,8 +267,10 @@ mod test {
     use futures::StreamExt;
 
     use super::*;
+    use crate::tests::test_trace_log_setup;
 
     struct TestCase {
+        addr: SocketAddr,
         source: VecDeque<Packet<FramesMut>>,
         dst: Vec<Packet<Frames>>,
     }
@@ -258,9 +279,8 @@ mod test {
         type Item = (Packet<FramesMut>, SocketAddr);
 
         fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-            let addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
             if let Some(pack) = self.source.pop_front() {
-                return Poll::Ready(Some((pack, addr)));
+                return Poll::Ready(Some((pack, self.addr)));
             }
             Poll::Ready(None)
         }
@@ -301,7 +321,11 @@ mod test {
 
     #[tokio::test]
     async fn test_offline_handshake_works() {
+        let _guard = test_trace_log_setup();
+
+        let client_addr = "0.0.0.1:1".parse().unwrap();
         let test_case = TestCase {
+            addr: client_addr,
             source: vec![
                 unconnected::Packet::UnconnectedPing {
                     send_timestamp: 0,
@@ -365,7 +389,7 @@ mod test {
                 unconnected::Packet::OpenConnectionReply2 {
                     magic: (),
                     server_guid: 1919810,
-                    client_address: "0.0.0.0:0".parse().unwrap(),
+                    client_address: client_addr,
                     mtu: 1000,
                     encryption_enabled: false
                 },
@@ -378,7 +402,10 @@ mod test {
 
     #[tokio::test]
     async fn test_offline_reject_unconnected_packet() {
+        let _guard = test_trace_log_setup();
+
         let test_case = TestCase {
+            addr: "0.0.0.2:1".parse().unwrap(),
             source: vec![Packet::Connected(connected::Packet::FrameSet(FrameSet {
                 seq_num: 0.into(),
                 set: Frames::new(),
@@ -410,9 +437,12 @@ mod test {
 
     #[tokio::test]
     async fn test_offline_reject_wrong_connect_flow() {
+        let _guard = test_trace_log_setup();
+
         let test_cases = [
             (
                 TestCase {
+                    addr: "0.0.0.3:1".parse().unwrap(),
                     // wrong order
                     source: vec![
                         unconnected::Packet::OpenConnectionRequest2 {
@@ -448,7 +478,8 @@ mod test {
             ),
             (
                 TestCase {
-                    // wrong proto version
+                    addr: "0.0.0.4:1".parse().unwrap(),
+                    // wrong protocol version
                     source: vec![unconnected::Packet::OpenConnectionRequest1 {
                         magic: (),
                         protocol_version: 100,
@@ -469,6 +500,7 @@ mod test {
             ),
             (
                 TestCase {
+                    addr: "0.0.0.5:1".parse().unwrap(),
                     // already connected
                     source: vec![
                         unconnected::Packet::OpenConnectionRequest1 {
@@ -509,7 +541,7 @@ mod test {
                     Packet::Unconnected(unconnected::Packet::OpenConnectionReply2 {
                         magic: (),
                         server_guid: 1919810,
-                        client_address: "0.0.0.0:0".parse().unwrap(),
+                        client_address: "0.0.0.5:1".parse().unwrap(),
                         mtu: 1000,
                         encryption_enabled: false, // must set to false
                     }),
@@ -527,6 +559,7 @@ mod test {
             ),
             (
                 TestCase {
+                    addr: "0.0.0.6:1".parse().unwrap(),
                     // disjoint mtu
                     source: vec![
                         unconnected::Packet::OpenConnectionRequest1 {

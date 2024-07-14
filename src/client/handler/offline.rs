@@ -9,6 +9,7 @@ use pin_project_lite::pin_project;
 use crate::errors::{CodecError, Error};
 use crate::packet::connected::{self, Frames, FramesMut};
 use crate::packet::{unconnected, Packet};
+use crate::RoleContext;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Config {
@@ -37,6 +38,9 @@ where
                 },
             )),
             server_addr,
+            role: RoleContext::Client {
+                guid: config.client_guid,
+            },
             config,
         }
     }
@@ -48,6 +52,7 @@ pin_project! {
         state: State,
         server_addr: SocketAddr,
         config: Config,
+        role: RoleContext,
     }
 }
 
@@ -74,19 +79,22 @@ where
                 State::SendOpenConnectionRequest1(pack) => {
                     if let Err(err) = ready!(frame.poll_ready_unpin(cx)) {
                         debug!(
-                            "[client] SendingOpenConnectionRequest1 poll_ready error: {err}, retrying"
+                            "[{}] SendingOpenConnectionRequest1 poll_ready error: {err}, retrying",
+                            this.role
                         );
                         continue;
                     }
                     if let Err(err) = frame.start_send_unpin((pack.clone(), *this.server_addr)) {
                         debug!(
-                            "[client] SendingOpenConnectionRequest1 start_send error: {err}, retrying"
+                            "[{}] SendingOpenConnectionRequest1 start_send error: {err}, retrying",
+                            this.role
                         );
                         continue;
                     }
                     if let Err(err) = ready!(frame.poll_flush_unpin(cx)) {
                         debug!(
-                            "[client] SendingOpenConnectionRequest1 poll_flush error: {err}, retrying"
+                            "[{}] SendingOpenConnectionRequest1 poll_flush error: {err}, retrying",
+                            this.role
                         );
                         continue;
                     }
@@ -116,19 +124,22 @@ where
                 State::SendOpenConnectionRequest2(pack) => {
                     if let Err(err) = ready!(frame.poll_ready_unpin(cx)) {
                         debug!(
-                            "[client] SendOpenConnectionRequest2 poll_ready error: {err}, retrying"
+                            "[{}] SendOpenConnectionRequest2 poll_ready error: {err}, retrying",
+                            this.role
                         );
                         continue;
                     }
                     if let Err(err) = frame.start_send_unpin((pack.clone(), *this.server_addr)) {
                         debug!(
-                            "[client] SendOpenConnectionRequest2 start_send error: {err}, retrying"
+                            "[{}] SendOpenConnectionRequest2 start_send error: {err}, retrying",
+                            this.role
                         );
                         continue;
                     }
                     if let Err(err) = ready!(frame.poll_flush_unpin(cx)) {
                         debug!(
-                            "[client] SendOpenConnectionRequest2 poll_flush error: {err}, retrying"
+                            "[{}] SendOpenConnectionRequest2 poll_flush error: {err}, retrying",
+                            this.role
                         );
                         continue;
                     }

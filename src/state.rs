@@ -5,6 +5,7 @@ use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
 use futures::{Sink, Stream};
+use log::warn;
 use pin_project_lite::pin_project;
 
 use crate::errors::{CodecError, Error};
@@ -175,6 +176,7 @@ where
         }
         let Some(body) = ready!(this.frame.as_mut().poll_next(cx)) else {
             // this is weird, UDP will not be closed by the remote, but we regard it as closed
+            warn!("Connection closed by the remote");
             *this.state = IncomingState::Closed;
             return Poll::Ready(None);
         };
