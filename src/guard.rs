@@ -75,11 +75,11 @@ where
         let mut this = self.project();
 
         // empty incoming buffer
-        this.link.poll_ack(this.resend);
-        this.link.poll_resend(this.resend, this.buf);
+        this.link.process_ack(this.resend);
+        this.link.process_resend(this.resend, this.buf);
 
         // poll stale frames into buffer
-        this.resend.poll_stales_into(this.buf);
+        this.resend.process_stales(this.buf);
 
         ready!(this.frame.as_mut().poll_ready(cx))?;
         let mut sent = false;
@@ -93,7 +93,7 @@ where
                 ready!(this.frame.as_mut().poll_ready(cx))?;
                 sent = false;
             }
-            if let Some(ack) = this.link.poll_outgoing_ack(this.peer.mtu) {
+            if let Some(ack) = this.link.process_outgoing_ack(this.peer.mtu) {
                 trace!(
                     "[{}] send ack {ack:?}, total count: {}",
                     this.role,
@@ -111,7 +111,7 @@ where
                 ready!(this.frame.as_mut().poll_ready(cx))?;
                 sent = false;
             }
-            if let Some(nack) = this.link.poll_outgoing_nack(this.peer.mtu) {
+            if let Some(nack) = this.link.process_outgoing_nack(this.peer.mtu) {
                 trace!(
                     "[{}] send ack {nack:?}, total count: {}",
                     this.role,
@@ -130,7 +130,7 @@ where
                 sent = false;
             }
             // only poll one packet each time
-            if let Some(packet) = this.link.poll_unconnected().next() {
+            if let Some(packet) = this.link.process_unconnected().next() {
                 trace!(
                     "[{}] send unconnected packet, type: {:?}",
                     this.role,

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
@@ -12,29 +12,30 @@ use crate::utils::u24;
 const RTO: Duration = Duration::from_millis(77);
 
 struct ResendEntry {
-    frames: Frames,
+    frames: Option<Frames>,
     expired_at: Instant,
 }
 
 pub(crate) struct ResendMap {
-    map: BTreeMap<u24, ResendEntry>,
+    map: HashMap<u24, ResendEntry>,
     waker: Arc<Mutex<Option<Waker>>>,
+    last_record_expired_at: Instant,
 }
 
 impl ResendMap {
     pub(crate) fn new() -> Self {
         Self {
-            map: BTreeMap::new(),
+            map: HashMap::new(),
             waker: Arc::new(Mutex::new(None)),
+            last_record_expired_at: Instant::now(),
         }
-        // TODO: spawn a thread to wake up the task when the entry is expired
     }
 
     pub(crate) fn record(&mut self, seq_num: u24, frames: Frames) {
         self.map.insert(
             seq_num,
             ResendEntry {
-                frames,
+                frames: Some(frames),
                 expired_at: Instant::now() + RTO,
             },
         );
@@ -44,7 +45,6 @@ impl ResendMap {
         for record in ack.records {
             match record {
                 Record::Range(start, end) => {
-                    // TODO: optimized for range remove for sorted map
                     for i in start.to_u32()..=end.to_u32() {
                         self.map.remove(&i.into());
                     }
@@ -62,30 +62,39 @@ impl ResendMap {
                 Record::Range(start, end) => {
                     for i in start.to_u32()..=end.to_u32() {
                         if let Some(entry) = self.map.remove(&i.into()) {
-                            buffer.extend(entry.frames);
+                            buffer.extend(entry.frames.unwrap());
                         }
                     }
                 }
                 Record::Single(seq_num) => {
                     if let Some(entry) = self.map.remove(&seq_num) {
-                        buffer.extend(entry.frames);
+                        buffer.extend(entry.frames.unwrap());
                     }
                 }
             }
         }
     }
 
-    /// `poll_stales_into` polls stale frames into buffer and remove the expired entries
-    pub(crate) fn poll_stales_into(&mut self, buffer: &mut VecDeque<Frame>) {
+    /// `process_stales` collect all stale frames into buffer and remove the expired entries
+    pub(crate) fn process_stales(&mut self, buffer: &mut VecDeque<Frame>) {
         let now = Instant::now();
-        while let Some(entry) = self.map.first_entry() {
-            // ordered by seq_num, the large seq_num has the large next_send
-            // TODO: is it a good optimization?
-            if now < entry.get().expired_at {
-                break;
-            }
-            buffer.extend(entry.remove().frames);
+        if now < self.last_record_expired_at {
+            // probably no stale entries
+            return;
         }
+        // find the first expired_at larger than now
+        let mut min_expired_at = now + RTO;
+        self.map.retain(|_, entry| {
+            if entry.expired_at <= now {
+                buffer.extend(entry.frames.take().unwrap());
+                false
+            } else {
+                min_expired_at = min_expired_at.min(entry.expired_at);
+                true
+            }
+        });
+        debug_assert!(min_expired_at > now);
+        self.last_record_expired_at = min_expired_at;
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -94,22 +103,21 @@ impl ResendMap {
 
     /// `poll_wait` suspends the task when the resend map needs to wait for the next resend
     pub(crate) fn poll_wait(&self, cx: &mut Context<'_>) -> Poll<()> {
-        // TODO: optimize this code
+        let wait;
+        if let Some((_, entry)) = self.map.iter().min_by_key(|(_, entry)| entry.expired_at) {
+            wait = entry.expired_at.saturating_duration_since(Instant::now());
+        } else {
+            return Poll::Ready(());
+        }
+        if wait.is_zero() {
+            return Poll::Ready(());
+        }
 
         let old_waker = self.waker.lock().replace(cx.waker().clone());
         // wake up the old waker if the task is moved
         if let Some(old_waker) = old_waker {
             old_waker.wake();
         }
-
-        let Some((_, entry)) = self.map.first_key_value() else {
-            return Poll::Ready(());
-        };
-        let wait = entry.expired_at.saturating_duration_since(Instant::now());
-        if wait.is_zero() {
-            return Poll::Ready(());
-        }
-
         let waker_ref = self.waker.clone();
 
         // TODO: I know this is stupid, we should spawn a daemon thread to wake up the task. But
@@ -202,7 +210,7 @@ mod test {
         std::thread::sleep(TEST_RTO);
         map.record(3.into(), vec![]);
         let mut buffer = VecDeque::default();
-        map.poll_stales_into(&mut buffer);
+        map.process_stales(&mut buffer);
         assert_eq!(map.map.len(), 1);
     }
 
@@ -222,11 +230,11 @@ mod test {
         let res = map.poll_wait(&mut Context::from_waker(Waker::noop()));
         assert!(matches!(res, Poll::Ready(_)));
 
-        map.poll_stales_into(&mut buffer);
+        map.process_stales(&mut buffer);
         assert_eq!(map.map.len(), 3);
 
         std::future::poll_fn(|cx| map.poll_wait(cx)).await;
-        map.poll_stales_into(&mut buffer);
+        map.process_stales(&mut buffer);
         assert!(map.map.len() < 3);
     }
 }

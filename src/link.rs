@@ -114,7 +114,7 @@ impl TransferLink {
     }
 
     // Clear all acknowledged frames
-    pub(crate) fn poll_ack(&self, resend: &mut ResendMap) {
+    pub(crate) fn process_ack(&self, resend: &mut ResendMap) {
         for ack in self.incoming_ack_rx.try_iter() {
             trace!(
                 "[{}] receive ack {ack:?}, total count: {}",
@@ -126,10 +126,10 @@ impl TransferLink {
     }
 
     /// Push all missing frames into buffer
-    /// Notice this method should be called after serval invoking of [`Acknowledgement::poll_ack`].
+    /// Notice this method should be called after serval invoking of [`Acknowledgement::process_ack`].
     /// Otherwise, some packets that do not need to be resent may be sent.
-    /// As for how many times to invoke [`Acknowledgement::poll_ack`] before this, it depends.
-    pub(crate) fn poll_resend(&self, resend: &mut ResendMap, buffer: &mut VecDeque<Frame>) {
+    /// As for how many times to invoke [`Acknowledgement::process_ack`] before this, it depends.
+    pub(crate) fn process_resend(&self, resend: &mut ResendMap, buffer: &mut VecDeque<Frame>) {
         for nack in self.incoming_nack_rx.try_iter() {
             trace!(
                 "[{}] receive nack {nack:?}, total count: {}",
@@ -140,19 +140,19 @@ impl TransferLink {
         }
     }
 
-    pub(crate) fn poll_outgoing_ack(&self, mtu: u16) -> Option<AckOrNack> {
+    pub(crate) fn process_outgoing_ack(&self, mtu: u16) -> Option<AckOrNack> {
         AckOrNack::extend_from(self.outgoing_ack_rx.recv_batch(), mtu)
     }
 
-    pub(crate) fn poll_outgoing_nack(&self, mtu: u16) -> Option<AckOrNack> {
+    pub(crate) fn process_outgoing_nack(&self, mtu: u16) -> Option<AckOrNack> {
         AckOrNack::extend_from(self.outgoing_nack_rx.recv_batch(), mtu)
     }
 
-    pub(crate) fn poll_unconnected(&self) -> impl Iterator<Item = unconnected::Packet> + '_ {
+    pub(crate) fn process_unconnected(&self) -> impl Iterator<Item = unconnected::Packet> + '_ {
         self.unconnected_rx.try_iter()
     }
 
-    pub(crate) fn poll_frame_body(&self) -> impl Iterator<Item = FrameBody> + '_ {
+    pub(crate) fn process_frame_body(&self) -> impl Iterator<Item = FrameBody> + '_ {
         self.frame_body_rx.try_iter()
     }
 

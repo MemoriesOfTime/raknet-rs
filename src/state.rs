@@ -130,6 +130,7 @@ where
                     *this.state = OutgoingState::CloseWait;
                 }
                 OutgoingState::CloseWait => {
+                    // is this like TCP?
                     ready!(this.frame.as_mut().poll_close(cx)?);
                     *this.state = OutgoingState::Closed;
                 }
