@@ -3,6 +3,7 @@ use std::net::ToSocketAddrs;
 use std::sync::Arc;
 
 use log::debug;
+use minitrace::Span;
 use tokio::net::UdpSocket as TokioUdpSocket;
 use tokio_util::udp::UdpFramed;
 
@@ -15,7 +16,7 @@ use crate::errors::Error;
 use crate::guard::HandleOutgoing;
 use crate::io::{IOImpl, IO};
 use crate::link::TransferLink;
-use crate::utils::Logged;
+use crate::utils::{Logged, StreamExt};
 use crate::PeerContext;
 
 impl ConnectTo for TokioUdpSocket {
@@ -65,7 +66,8 @@ impl ConnectTo for TokioUdpSocket {
                 config.client_role(),
             )
             .handle_online(write, addr, config.client_guid)
-            .await?;
+            .await?
+            .enter_on_item(Span::noop);
 
         Ok(IOImpl::new(io))
     }

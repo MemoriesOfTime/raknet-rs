@@ -59,6 +59,7 @@ pin_project! {
         // maximum sequence number wish to be read
         max_seq_num_read: u24,
         link: SharedLink,
+        span: Option<Span>,
     }
 }
 
@@ -88,6 +89,7 @@ where
             buffer: VecDeque::with_capacity(DEFAULT_DEFRAGMENT_BUF_SIZE),
             max_seq_num_read: 0.into(),
             link,
+            span: None,
         }
     }
 }
@@ -100,31 +102,23 @@ where
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
-        let mut span: Option<Span> = None;
-
         loop {
             // empty buffer
             if let Some(frame_set) = this.buffer.pop_front() {
+                this.span.take();
                 return Poll::Ready(Some(Ok(frame_set)));
-            }
-
-            if let Some(mut old_span) = span.take() {
-                // cancel the old span as there is no frame yielded
-                old_span.cancel();
             }
             let Some(frame_set) = ready!(this.frame.poll_next_unpin(cx)?) else {
                 return Poll::Ready(None);
             };
-            // start a new span
-            span.replace(
+            this.span.get_or_insert_with(|| {
                 Span::enter_with_local_parent("codec.defragment").with_properties(|| {
                     [
                         ("frame_set_size", frame_set.set.len().to_string()),
                         ("frame_seq_num", frame_set.seq_num.to_string()),
                     ]
-                }),
-            );
-
+                })
+            });
             for frame in frame_set.set {
                 if let Some(Fragment {
                     parted_size,
@@ -140,7 +134,7 @@ where
                             "parted_index {} >= parted_size {}",
                             parted_index, parted_size
                         );
-                        Event::add_to_parent(err.clone(), &span.unwrap(), || []);
+                        Event::add_to_parent(err.clone(), this.span.as_ref().unwrap(), || []);
                         return Poll::Ready(Some(Err(CodecError::PartedFrame(err))));
                     }
                     if *this.limit_size != 0 && parted_size > *this.limit_size {
@@ -150,7 +144,7 @@ where
                             "parted_size {} exceed limit_size {}",
                             parted_size, *this.limit_size
                         );
-                        Event::add_to_parent(err.clone(), &span.unwrap(), || []);
+                        Event::add_to_parent(err.clone(), this.span.as_ref().unwrap(), || []);
                         return Poll::Ready(Some(Err(CodecError::PartedFrame(err))));
                     }
                     let frames_queue = this.parts.get_or_insert_mut(parted_id, || {
@@ -210,16 +204,12 @@ where
 
 #[cfg(test)]
 mod test {
-    use std::collections::VecDeque;
-    use std::num::NonZeroUsize;
-
     use bytes::BytesMut;
     use futures::StreamExt;
     use futures_async_stream::stream;
-    use lru::LruCache;
     use rand::seq::SliceRandom;
 
-    use super::DeFragment;
+    use super::*;
     use crate::errors::CodecError;
     use crate::link::TransferLink;
     use crate::packet::connected::{Flags, Fragment, Frame, FrameSet, FramesMut};
@@ -280,15 +270,11 @@ mod test {
         };
 
         tokio::pin!(frame);
-        let mut frag = DeFragment {
-            frame: frame.map(Ok),
-            limit_size: 0,
-            parts: LruCache::new(NonZeroUsize::new(512).expect("limit_parted > 0")),
-            buffer: VecDeque::new(),
-            max_seq_num_read: 0.into(),
-            link: TransferLink::new_arc(crate::RoleContext::test_server()),
-        };
-
+        let mut frag = frame.map(Ok).defragmented(
+            0,
+            512,
+            TransferLink::new_arc(crate::RoleContext::test_server()),
+        );
         let set = frag.next().await.unwrap().unwrap();
 
         // frames should be merged
@@ -310,27 +296,20 @@ mod test {
                 yield frame_set([&(22, 7, 6, "h")]);
             }
         };
-
         tokio::pin!(frame);
-        let mut frag = DeFragment {
-            frame: frame.map(Ok),
-            limit_size: 20,
-            parts: LruCache::new(NonZeroUsize::new(512).expect("limit_parted > 0")),
-            buffer: VecDeque::new(),
-            max_seq_num_read: 0.into(),
-            link: TransferLink::new_arc(crate::RoleContext::test_server()),
-        };
-
+        let mut frag = frame.map(Ok).defragmented(
+            20,
+            512,
+            TransferLink::new_arc(crate::RoleContext::test_server()),
+        );
         assert!(matches!(
             frag.next().await.unwrap(),
             Err(CodecError::PartedFrame(..))
         ));
-
         assert!(matches!(
             frag.next().await.unwrap(),
             Err(CodecError::PartedFrame(..))
         ));
-
         assert!(frag.next().await.is_none());
     }
 
@@ -351,17 +330,12 @@ mod test {
         };
 
         tokio::pin!(frame);
-        let mut frag = DeFragment {
-            frame: frame.map(Ok),
-            limit_size: 0,
-            parts: LruCache::new(NonZeroUsize::new(2).expect("limit_parted > 0")),
-            buffer: VecDeque::new(),
-            max_seq_num_read: 0.into(),
-            link: TransferLink::new_arc(crate::RoleContext::test_server()),
-        };
-
+        let mut frag = frame.map(Ok).defragmented(
+            0,
+            2,
+            TransferLink::new_arc(crate::RoleContext::test_server()),
+        );
         assert!(frag.next().await.is_none());
-
         assert_eq!(frag.parts.len(), 2);
         assert_eq!(frag.parts.peek(&0).unwrap().len(), 2);
         assert_eq!(frag.parts.peek(&2).unwrap().len(), 2);
@@ -384,14 +358,11 @@ mod test {
         };
 
         tokio::pin!(frame);
-        let mut frag = DeFragment {
-            frame: frame.map(Ok),
-            limit_size: 0,
-            parts: LruCache::new(NonZeroUsize::new(2).expect("limit_parted > 0")),
-            buffer: VecDeque::new(),
-            max_seq_num_read: 0.into(),
-            link: TransferLink::new_arc(crate::RoleContext::test_server()),
-        };
+        let mut frag = frame.map(Ok).defragmented(
+            0,
+            2,
+            TransferLink::new_arc(crate::RoleContext::test_server()),
+        );
 
         {
             let set = frag.next().await.unwrap().unwrap();
@@ -428,14 +399,11 @@ mod test {
         };
 
         tokio::pin!(frame);
-        let mut frag = DeFragment {
-            frame: frame.map(Ok),
-            limit_size: 0,
-            parts: LruCache::new(NonZeroUsize::new(1).expect("limit_parted > 0")),
-            buffer: VecDeque::new(),
-            max_seq_num_read: 0.into(),
-            link: TransferLink::new_arc(crate::RoleContext::test_server()),
-        };
+        let mut frag = frame.map(Ok).defragmented(
+            0,
+            1,
+            TransferLink::new_arc(crate::RoleContext::test_server()),
+        );
 
         let set = frag.next().await.unwrap().unwrap();
         assert_eq!(

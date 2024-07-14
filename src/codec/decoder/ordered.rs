@@ -36,6 +36,7 @@ pin_project! {
         // Max ordered channel that will be used in detailed protocol
         max_channels: usize,
         ordering: Vec<Ordering<B>>,
+        span: Option<Span>,
     }
 }
 
@@ -60,6 +61,7 @@ where
             ordering: std::iter::repeat_with(Ordering::default)
                 .take(max_channels)
                 .collect(),
+            span: None,
         }
     }
 }
@@ -72,8 +74,6 @@ where
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
-        let mut span: Option<Span> = None;
-
         loop {
             // empty each channel in order
             for channel in 0..*this.max_channels {
@@ -84,23 +84,18 @@ where
                 // check if we could read next
                 if let Some(next) = ordering.map.remove(&ordering.read) {
                     ordering.read += 1;
+                    this.span.take();
                     return Poll::Ready(Some(Ok(next)));
                 }
             }
 
-            if let Some(mut old_span) = span.take() {
-                // cancel the old span as there is no frame yielded
-                old_span.cancel();
-            }
             let Some(frame_set) = ready!(this.frame.poll_next_unpin(cx)?) else {
                 return Poll::Ready(None);
             };
-            // start a new span
-            span.replace(
+            this.span.get_or_insert_with(|| {
                 Span::enter_with_local_parent("codec.reorder")
-                    .with_properties(|| [("frame_seq_num", frame_set.seq_num.to_string())]),
-            );
-
+                    .with_properties(|| [("frame_seq_num", frame_set.seq_num.to_string())])
+            });
             if let Some(connected::Ordered {
                 frame_index,
                 channel,
@@ -109,7 +104,7 @@ where
                 let channel = usize::from(channel);
                 if channel >= *this.max_channels {
                     let err = format!("channel {} >= max_channels {}", channel, *this.max_channels);
-                    Event::add_to_parent(err.clone(), &span.unwrap(), || []);
+                    Event::add_to_parent(err.clone(), this.span.as_ref().unwrap(), || []);
                     return Poll::Ready(Some(Err(CodecError::OrderedFrame(err))));
                 }
                 let ordering = this
@@ -136,9 +131,9 @@ mod test {
     use futures::StreamExt;
     use futures_async_stream::stream;
 
-    use super::*;
+    use super::Ordered;
     use crate::errors::CodecError;
-    use crate::packet::connected::{Flags, Frame, FrameSet, Ordered};
+    use crate::packet::connected::{Flags, Frame, FrameSet, Ordered as OrderedFlag};
 
     fn frame_sets(idx: impl IntoIterator<Item = (u8, u32)>) -> Vec<FrameSet<Frame>> {
         idx.into_iter()
@@ -148,7 +143,7 @@ mod test {
                     flags: Flags::parse(0b011_11100),
                     reliable_frame_index: None,
                     seq_frame_index: None,
-                    ordered: Some(Ordered {
+                    ordered: Some(OrderedFlag {
                         frame_index: frame_index.into(),
                         channel,
                     }),
@@ -172,13 +167,7 @@ mod test {
             }
         };
         tokio::pin!(frame);
-
-        let mut ordered = Order {
-            frame: frame.map(Ok),
-            max_channels: 10,
-            ordering: std::iter::repeat_with(Ordering::default).take(10).collect(),
-        };
-
+        let mut ordered = frame.map(Ok).ordered(10);
         let cmp_sets = frame_sets([(0, 0), (0, 1), (0, 2), (0, 3), (0, 4)]).into_iter();
         for next in cmp_sets {
             assert_eq!(ordered.next().await.unwrap().unwrap(), next);
@@ -198,13 +187,7 @@ mod test {
             }
         };
         tokio::pin!(frame);
-
-        let mut ordered = Order {
-            frame: frame.map(Ok),
-            max_channels: 10,
-            ordering: std::iter::repeat_with(Ordering::default).take(10).collect(),
-        };
-
+        let mut ordered = frame.map(Ok).ordered(10);
         assert!(matches!(
             ordered.next().await.unwrap().unwrap_err(),
             CodecError::OrderedFrame(_)

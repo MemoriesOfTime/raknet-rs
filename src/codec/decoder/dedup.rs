@@ -62,6 +62,7 @@ pin_project! {
         max_gap: usize,
         window: DuplicateWindow,
         link: SharedLink,
+        span: Option<Span>,
     }
 }
 
@@ -79,6 +80,7 @@ where
             max_gap,
             window: DuplicateWindow::default(),
             link,
+            span: None,
         }
     }
 }
@@ -91,27 +93,22 @@ where
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
-        let mut span: Option<Span> = None;
         loop {
-            if let Some(mut old_span) = span.take() {
-                // cancel the old span as there is no frame yielded
-                old_span.cancel();
-            }
             let Some(mut frame_set) = ready!(this.frame.poll_next_unpin(cx)?) else {
                 return Poll::Ready(None);
             };
-            span.replace(
+            this.span.get_or_insert_with(|| {
                 Span::enter_with_local_parent("codec.deduplication").with_properties(|| {
                     [
                         ("frame_set_size", frame_set.set.len().to_string()),
                         ("frame_seq_num", frame_set.seq_num.to_string()),
                     ]
-                }),
-            );
+                })
+            });
             if *this.max_gap != 0 && this.window.received_status.len() > *this.max_gap {
                 Event::add_to_parent(
                     format!("dedup gap exceed {}", *this.max_gap),
-                    &span.unwrap(),
+                    this.span.as_ref().unwrap(),
                     || [],
                 );
                 return Poll::Ready(Some(Err(CodecError::DedupExceed(
@@ -127,6 +124,7 @@ where
                 !this.window.duplicate(reliable_frame_index)
             });
             if !frame_set.set.is_empty() {
+                this.span.take();
                 return Poll::Ready(Some(Ok(frame_set)));
             }
             // all duplicated, send ack back
@@ -229,12 +227,10 @@ mod test {
             }
         };
         tokio::pin!(frame);
-        let mut dedup = Dedup {
-            frame: frame.map(Ok),
-            max_gap: 100,
-            window: DuplicateWindow::default(),
-            link: TransferLink::new_arc(crate::RoleContext::test_server()),
-        };
+        let mut dedup = frame.map(Ok).deduplicated(
+            100,
+            TransferLink::new_arc(crate::RoleContext::test_server()),
+        );
 
         assert_eq!(dedup.next().await.unwrap().unwrap(), frame_set(0..64));
         assert_eq!(
@@ -257,12 +253,10 @@ mod test {
             }
         };
         tokio::pin!(frame);
-        let mut dedup = Dedup {
-            frame: frame.map(Ok),
-            max_gap: 100,
-            window: DuplicateWindow::default(),
-            link: TransferLink::new_arc(crate::RoleContext::test_client()),
-        };
+        let mut dedup = frame.map(Ok).deduplicated(
+            100,
+            TransferLink::new_arc(crate::RoleContext::test_client()),
+        );
         assert_eq!(dedup.next().await.unwrap().unwrap(), frame_set([0]));
         assert_eq!(dedup.next().await.unwrap().unwrap(), frame_set([101]));
         assert!(matches!(
@@ -281,12 +275,10 @@ mod test {
             }
         };
         tokio::pin!(frame);
-        let mut dedup = Dedup {
-            frame: frame.map(Ok),
-            max_gap: 100,
-            window: DuplicateWindow::default(),
-            link: TransferLink::new_arc(crate::RoleContext::test_client()),
-        };
+        let mut dedup = frame.map(Ok).deduplicated(
+            100,
+            TransferLink::new_arc(crate::RoleContext::test_client()),
+        );
         assert_eq!(
             dedup.next().await.unwrap().unwrap(),
             frame_set([0, 1, 2, 3])
@@ -316,12 +308,10 @@ mod test {
             }
         };
         tokio::pin!(frame);
-        let mut dedup = Dedup {
-            frame: frame.map(Ok),
-            max_gap: scale,
-            window: DuplicateWindow::default(),
-            link: TransferLink::new_arc(crate::RoleContext::test_server()),
-        };
+        let mut dedup = frame.map(Ok).deduplicated(
+            scale,
+            TransferLink::new_arc(crate::RoleContext::test_server()),
+        );
         assert_eq!(dedup.next().await.unwrap().unwrap(), frame_set(idx1_set));
 
         if diff.is_empty() {

@@ -1,15 +1,14 @@
 use std::pin::Pin;
-use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use bytes::Bytes;
 use futures::{Sink, Stream};
 use minitrace::collector::TraceId;
-use parking_lot::Mutex;
 use pin_project_lite::pin_project;
 
 use crate::errors::Error;
 use crate::packet::connected::Reliability;
+use crate::utils::TraceInfo;
 use crate::Message;
 
 /// The basic operation for each connection
@@ -36,29 +35,18 @@ pin_project! {
         io: IO,
         default_reliability: Reliability,
         default_order_channel: u8,
-        last_trace_id: Option<Arc<Mutex<Option<TraceId>>>>,
     }
 }
 
 impl<IO> IOImpl<IO>
 where
-    IO: Stream<Item = Bytes> + Sink<Message, Error = Error> + Send,
+    IO: Stream<Item = Bytes> + Sink<Message, Error = Error> + TraceInfo + Send,
 {
     pub(crate) fn new(io: IO) -> Self {
         IOImpl {
             io,
             default_reliability: Reliability::ReliableOrdered,
             default_order_channel: 0,
-            last_trace_id: None,
-        }
-    }
-
-    pub(crate) fn new_with_trace(io: IO, last_trace_id: Arc<Mutex<Option<TraceId>>>) -> Self {
-        IOImpl {
-            io,
-            default_reliability: Reliability::ReliableOrdered,
-            default_order_channel: 0,
-            last_trace_id: Some(last_trace_id),
         }
     }
 }
@@ -123,7 +111,7 @@ where
 
 impl<IO> crate::io::IO for IOImpl<IO>
 where
-    IO: Sink<Message, Error = Error> + Stream<Item = Bytes> + Send,
+    IO: Sink<Message, Error = Error> + Stream<Item = Bytes> + TraceInfo + Send,
 {
     fn set_default_reliability(&mut self, reliability: Reliability) {
         self.default_reliability = reliability;
@@ -143,9 +131,6 @@ where
 
     /// Get the last `trace_id` after polling Bytes form it, used for end to end tracing
     fn last_trace_id(&self) -> Option<TraceId> {
-        if let Some(ref last_trace_id) = self.last_trace_id {
-            return *last_trace_id.lock();
-        }
-        None
+        self.io.get_last_trace_id()
     }
 }

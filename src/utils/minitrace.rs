@@ -1,11 +1,15 @@
-use std::borrow::Cow;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use futures::{Sink, Stream};
-use minitrace::collector::SpanContext;
+use minitrace::collector::{SpanContext, TraceId};
 use minitrace::Span;
 use pin_project_lite::pin_project;
+
+/// Trace info extension for io
+pub(crate) trait TraceInfo {
+    fn get_last_trace_id(&self) -> Option<TraceId>;
+}
 
 pub(crate) trait StreamExt: Stream + Sized {
     /// It starts a span at every time an item is generating from the stream, and the span will end
@@ -19,16 +23,12 @@ pub(crate) trait StreamExt: Stream + Sized {
     ///                           [----codec children spans----]
     ///
     /// ------------------------- timeline ------------------------------>>>
-    fn enter_on_item<O: Fn(Span) -> Span>(
-        self,
-        name: impl Into<Cow<'static, str>>,
-        opts: O,
-    ) -> EnterOnItem<Self, O> {
+    fn enter_on_item<O: Fn() -> Span>(self, span_fn: O) -> EnterOnItem<Self, O> {
         EnterOnItem {
             inner: self,
-            name: name.into(),
             span: None,
-            opts,
+            last_trace_id: None,
+            span_fn,
         }
     }
 }
@@ -39,34 +39,40 @@ pin_project! {
     pub(crate) struct EnterOnItem<T, O> {
         #[pin]
         inner: T,
-        name: Cow<'static, str>,
         span: Option<Span>,
-        opts: O,
+        last_trace_id: Option<TraceId>,
+        span_fn: O,
     }
 }
 
 impl<T, O> Stream for EnterOnItem<T, O>
 where
     T: Stream,
-    O: Fn(Span) -> Span,
+    O: Fn() -> Span,
 {
     type Item = T::Item;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.project();
-        let span = this.span.get_or_insert_with(|| {
-            (this.opts)(Span::root(this.name.clone(), SpanContext::random()))
-        });
-        let _guard = span.set_local_parent();
+        let span = this.span.get_or_insert_with(this.span_fn);
+        *this.last_trace_id = SpanContext::from_span(span).map(|ctx| ctx.trace_id);
+        let guard = span.set_local_parent(); // set the span as the local thread parent for every poll_next call
         let res = this.inner.poll_next(cx);
         match res {
-            r @ Poll::Pending => r,
+            r @ Poll::Pending => r, // guard is dropped here before the task is moved
             other => {
+                drop(guard);
                 // ready for produce a result
                 this.span.take();
                 other
             }
         }
+    }
+}
+
+impl<T, O> TraceInfo for EnterOnItem<T, O> {
+    fn get_last_trace_id(&self) -> Option<TraceId> {
+        self.last_trace_id
     }
 }
 
@@ -77,7 +83,7 @@ where
 impl<T, I, O> Sink<I> for EnterOnItem<T, O>
 where
     T: Sink<I>,
-    O: Fn(Span) -> Span,
+    O: Fn() -> Span,
 {
     type Error = T::Error;
 

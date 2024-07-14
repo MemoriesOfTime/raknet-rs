@@ -8,7 +8,7 @@ use flume::{Receiver, Sender};
 use futures::{SinkExt, Stream};
 use log::{debug, error, info};
 use minitrace::collector::SpanContext;
-use parking_lot::lock_api::Mutex;
+use minitrace::Span;
 use pin_project_lite::pin_project;
 use tokio::net::UdpSocket as TokioUdpSocket;
 use tokio_util::udp::UdpFramed;
@@ -114,8 +114,6 @@ impl Stream for Incoming {
                 },
             );
 
-            let last_trace_id = Arc::new(Mutex::new(None));
-            let last_trace_id_clone = Arc::clone(&last_trace_id);
             let io = ack
                 .filter_incoming_ack(router_rx.into_stream())
                 .frame_decoded(
@@ -130,10 +128,8 @@ impl Stream for Incoming {
                     this.config.sever_guid,
                     this.drop_notifier.clone(),
                 )
-                .enter_on_item("io", move |span| {
-                    *last_trace_id_clone.lock() =
-                        SpanContext::from_span(&span).map(|ctx| ctx.trace_id);
-                    span.with_properties(|| {
+                .enter_on_item(move || {
+                    Span::root("conn", SpanContext::random()).with_properties(|| {
                         [
                             ("addr", peer.addr.to_string()),
                             ("mtu", peer.mtu.to_string()),
@@ -141,7 +137,7 @@ impl Stream for Incoming {
                     })
                 });
 
-            return Poll::Ready(Some(IOImpl::new_with_trace(io, last_trace_id)));
+            return Poll::Ready(Some(IOImpl::new(io)));
         }
     }
 }
