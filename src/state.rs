@@ -1,11 +1,12 @@
 //! State management for the connection.
+//! Perform the 4-ways handshake for the connection close.
 //! Reflect the operation in the APIs of Sink and Stream when the connection stops.
 
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
 use futures::{Sink, Stream};
-use log::warn;
+use log::{debug, warn};
 use pin_project_lite::pin_project;
 
 use crate::errors::{CodecError, Error};
@@ -15,10 +16,10 @@ use crate::Message;
 enum OutgoingState {
     // before sending DisconnectNotification
     Connecting,
+    FirstCloseWait,
     FinWait,
     // after sending DisconnectNotification
-    Fin,
-    CloseWait,
+    SecondCloseWait,
     Closed,
 }
 
@@ -30,7 +31,10 @@ enum IncomingState {
 impl OutgoingState {
     #[inline(always)]
     fn before_finish(&self) -> bool {
-        matches!(self, OutgoingState::Connecting | OutgoingState::FinWait)
+        matches!(
+            self,
+            OutgoingState::Connecting | OutgoingState::FirstCloseWait | OutgoingState::FinWait
+        )
     }
 }
 
@@ -67,6 +71,14 @@ where
 
 pub(crate) trait IncomingStateManage: Sized {
     /// Manage the incoming state of the connection.
+    ///
+    /// It will yield None when it receives the `DisconnectNotification`. And will continue to
+    /// return None in the following.
+    ///
+    /// You have to repeatedly `poll_next` after receiving `DisconnectNotification` from
+    /// the peer. This will ensure that the ack you sent to acknowledge the `DisconnectNotification`
+    /// can be received by the the peer (i.e. ensuring that the the peer's `poll_close` call
+    /// returns successfully).
     fn manage_incoming_state(self) -> impl Stream<Item = FrameBody>;
 }
 
@@ -103,7 +115,7 @@ where
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        if !self.state.before_finish() {
+        if matches!(self.state, OutgoingState::Closed) {
             return Poll::Ready(Err(Error::ConnectionClosed));
         }
         self.project().frame.poll_flush(cx).map_err(Into::into)
@@ -116,21 +128,24 @@ where
         }
         loop {
             match this.state {
-                OutgoingState::Connecting | OutgoingState::FinWait => {
+                OutgoingState::Connecting => {
+                    *this.state = OutgoingState::FirstCloseWait;
+                }
+                OutgoingState::FirstCloseWait => {
+                    // first wait all stales packets to receive by the peer
+                    ready!(this.frame.as_mut().poll_close(cx)?);
                     *this.state = OutgoingState::FinWait;
+                }
+                OutgoingState::FinWait => {
+                    // then send the DisconnectNotification
                     ready!(this.frame.as_mut().poll_ready(cx)?);
-
                     this.frame
                         .as_mut()
                         .start_send(FrameBody::DisconnectNotification)?;
-                    *this.state = OutgoingState::Fin;
+                    *this.state = OutgoingState::SecondCloseWait;
                 }
-                OutgoingState::Fin => {
-                    ready!(this.frame.as_mut().poll_flush(cx)?);
-                    *this.state = OutgoingState::CloseWait;
-                }
-                OutgoingState::CloseWait => {
-                    // is this like TCP?
+                OutgoingState::SecondCloseWait => {
+                    // second wait the DisconnectNotification to receive by the peer
                     ready!(this.frame.as_mut().poll_close(cx)?);
                     *this.state = OutgoingState::Closed;
                 }
@@ -173,15 +188,22 @@ where
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
         if matches!(this.state, IncomingState::Closed) {
+            debug!("state closed, poll_next to deliver ack");
+            // Poll the frame even if the state is closed to because the peer can send the
+            // DisconnectNotification as it did not receive ack.
+            // This will trigger the ack of the DisconnectNotification to be delivered.
+            let _ = this.frame.as_mut().poll_next(cx); // ignore pending
             return Poll::Ready(None);
         }
         let Some(body) = ready!(this.frame.as_mut().poll_next(cx)) else {
-            // this is weird, UDP will not be closed by the remote, but we regard it as closed
-            warn!("Connection closed by the remote");
+            // This happens when the incoming router is dropped on server side.
+            // On client side, the connection cannot be closed by UDP, this is unreachable.
+            warn!("Router dropped");
             *this.state = IncomingState::Closed;
             return Poll::Ready(None);
         };
         if matches!(body, FrameBody::DisconnectNotification) {
+            // The peer no longer sends any data.
             *this.state = IncomingState::Closed;
             return Poll::Ready(None);
         }

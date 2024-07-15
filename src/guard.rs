@@ -229,11 +229,12 @@ where
     }
 
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        // insure all frames are sent
-        // TODO: resend with a proper threshold or timeout here
+        // insure all frames are received by the peer
+        // TODO: resend with a proper threshold or timeout here instead of infinite waiting
         while !self.resend.is_empty() {
             ready!(self.as_mut().try_empty(cx))?;
             debug_assert!(self.buf.is_empty() && self.link.flush_empty());
+            // wait for the next resend
             ready!(self.resend.poll_wait(cx));
         }
         self.project().frame.poll_close(cx)

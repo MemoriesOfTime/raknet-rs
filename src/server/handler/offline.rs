@@ -150,11 +150,10 @@ where
                         return Poll::Ready(Some((pack, peer.clone())));
                     }
                     debug!(
-                        "[{}] ignore connected packet {:?} from unconnected client {addr}",
+                        "[{}] ignore packet {:?} from unconnected client {addr}",
                         this.role,
                         pack.pack_type()
                     );
-                    // TODO: Send DETECT_LOST_CONNECTION ?
                     *this.state = OfflineState::SendingPrepare(Some((
                         Self::make_connection_request_failed(this.config),
                         addr,

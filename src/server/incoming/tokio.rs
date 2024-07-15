@@ -5,8 +5,8 @@ use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 
 use flume::{Receiver, Sender};
-use futures::{SinkExt, Stream};
-use log::{debug, error, info};
+use futures::Stream;
+use log::{debug, error};
 use minitrace::collector::SpanContext;
 use minitrace::Span;
 use pin_project_lite::pin_project;
@@ -18,13 +18,14 @@ use crate::codec::tokio::Codec;
 use crate::codec::{Decoded, Encoded};
 use crate::errors::CodecError;
 use crate::guard::HandleOutgoing;
-use crate::io::{IOImpl, IO};
+use crate::io::{SplittedIO, IO};
 use crate::link::TransferLink;
-use crate::packet::connected::{self, Frames, FramesMut};
-use crate::packet::{unconnected, Packet};
+use crate::packet::connected::{self, FramesMut};
+use crate::packet::Packet;
 use crate::server::handler::offline;
 use crate::server::handler::offline::HandleOffline;
 use crate::server::handler::online::HandleOnline;
+use crate::state::{IncomingStateManage, OutgoingStateManage};
 use crate::utils::{Log, Logged, StreamExt};
 
 type OfflineHandler = offline::OfflineHandler<
@@ -60,7 +61,7 @@ impl MakeIncoming for TokioUdpSocket {
         Incoming {
             offline: UdpFramed::new(Arc::clone(&socket), Codec)
                 .logged_err(|err| {
-                    debug!("[server] got codec error: {err} when decode offline frames");
+                    debug!("codec error: {err} when decode offline frames");
                 })
                 .handle_offline(config.offline_config()),
             socket,
@@ -85,49 +86,38 @@ impl Stream for Incoming {
             };
             if let Some(router_tx) = this.router.get_mut(&peer.addr) {
                 if router_tx.send(pack).is_err() {
-                    error!("[server] connection was dropped before closed");
+                    error!("connection was dropped before closed");
                     this.router.remove(&peer.addr);
                     this.offline.as_mut().disconnect(&peer.addr);
                 }
                 continue;
             }
-            info!("[server] new incoming from {}", peer.addr);
 
             let (router_tx, router_rx) = flume::unbounded();
             router_tx.send(pack).unwrap();
             this.router.insert(peer.addr, router_tx);
 
-            let ack = TransferLink::new_arc(this.config.server_role());
+            let link = TransferLink::new_arc(this.config.server_role());
 
-            let write = UdpFramed::new(Arc::clone(this.socket), Codec)
+            let dst = UdpFramed::new(Arc::clone(this.socket), Codec)
                 .handle_outgoing(
-                    Arc::clone(&ack),
+                    Arc::clone(&link),
                     this.config.send_buf_cap,
                     peer.clone(),
                     this.config.server_role(),
                 )
-                .frame_encoded(peer.mtu, this.config.codec_config(), Arc::clone(&ack));
+                .frame_encoded(peer.mtu, this.config.codec_config(), Arc::clone(&link))
+                .manage_outgoing_state();
 
-            let raw_write = UdpFramed::new(Arc::clone(this.socket), Codec).with(
-                move |input: unconnected::Packet| async move {
-                    Ok((Packet::<Frames>::Unconnected(input), peer.addr))
-                },
-            );
-
-            let io = ack
+            let src = link
                 .filter_incoming_ack(router_rx.into_stream())
                 .frame_decoded(
                     this.config.codec_config(),
-                    Arc::clone(&ack),
+                    Arc::clone(&link),
                     this.config.server_role(),
                 )
-                .handle_online(
-                    write,
-                    raw_write,
-                    peer.addr,
-                    this.config.sever_guid,
-                    this.drop_notifier.clone(),
-                )
+                .manage_incoming_state()
+                .handle_online(this.config.sever_guid, peer.addr, Arc::clone(&link))
                 .enter_on_item(move || {
                     Span::root("conn", SpanContext::random()).with_properties(|| {
                         [
@@ -137,7 +127,7 @@ impl Stream for Incoming {
                     })
                 });
 
-            return Poll::Ready(Some(IOImpl::new(io)));
+            return Poll::Ready(Some(SplittedIO::new(src, dst)));
         }
     }
 }

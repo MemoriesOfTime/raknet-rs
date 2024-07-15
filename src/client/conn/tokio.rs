@@ -14,7 +14,7 @@ use crate::codec::tokio::Codec;
 use crate::codec::{Decoded, Encoded};
 use crate::errors::Error;
 use crate::guard::HandleOutgoing;
-use crate::io::{IOImpl, IO};
+use crate::io::{MergedIO, IO};
 use crate::link::TransferLink;
 use crate::utils::{Logged, StreamExt};
 use crate::PeerContext;
@@ -69,6 +69,6 @@ impl ConnectTo for TokioUdpSocket {
             .await?
             .enter_on_item(Span::noop);
 
-        Ok(IOImpl::new(io))
+        Ok(MergedIO::new(io))
     }
 }
