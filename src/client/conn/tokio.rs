@@ -14,9 +14,10 @@ use crate::codec::tokio::Codec;
 use crate::codec::{Decoded, Encoded};
 use crate::errors::Error;
 use crate::guard::HandleOutgoing;
-use crate::io::{MergedIO, IO};
+use crate::io::{SplittedIO, IO};
 use crate::link::TransferLink;
-use crate::utils::{Logged, StreamExt};
+use crate::state::{IncomingStateManage, OutgoingStateManage};
+use crate::utils::{Logged, TraceStreamExt};
 use crate::PeerContext;
 
 impl ConnectTo for TokioUdpSocket {
@@ -39,7 +40,7 @@ impl ConnectTo for TokioUdpSocket {
 
         let ack = TransferLink::new_arc(config.client_role());
 
-        let write = UdpFramed::new(Arc::clone(&socket), Codec)
+        let dst = UdpFramed::new(Arc::clone(&socket), Codec)
             .handle_outgoing(
                 Arc::clone(&ack),
                 config.send_buf_cap,
@@ -49,26 +50,27 @@ impl ConnectTo for TokioUdpSocket {
                 },
                 config.client_role(),
             )
-            .frame_encoded(config.mtu, config.codec_config(), Arc::clone(&ack));
+            .frame_encoded(config.mtu, config.codec_config(), Arc::clone(&ack))
+            .manage_outgoing_state();
 
         let incoming = UdpFramed::new(socket, Codec)
             .logged_err(|err| {
-                debug!("[client] got codec error: {err} when decode offline frames");
+                debug!("codec error: {err} when decode offline frames");
             })
             .handle_offline(addr, config.offline_config())
             .await?;
 
-        let io = ack
+        let src = ack
             .filter_incoming_ack(incoming)
             .frame_decoded(
                 config.codec_config(),
                 Arc::clone(&ack),
                 config.client_role(),
             )
-            .handle_online(write, addr, config.client_guid)
-            .await?
+            .manage_incoming_state()
+            .handle_online(addr, config.client_guid, Arc::clone(&ack))
             .enter_on_item(Span::noop);
 
-        Ok(MergedIO::new(io))
+        Ok(SplittedIO::new(src, dst))
     }
 }

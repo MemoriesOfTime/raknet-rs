@@ -11,7 +11,7 @@ pub(crate) trait TraceInfo {
     fn get_last_trace_id(&self) -> Option<TraceId>;
 }
 
-pub(crate) trait StreamExt: Stream + Sized {
+pub(crate) trait TraceStreamExt: Stream + Sized {
     /// It starts a span at every time an item is generating from the stream, and the span will end
     /// when an option yield from the stream. So it could be used to track the span from last
     /// reception to the current reception of each packet .
@@ -33,7 +33,7 @@ pub(crate) trait StreamExt: Stream + Sized {
     }
 }
 
-impl<S: Stream> StreamExt for S {}
+impl<S: Stream> TraceStreamExt for S {}
 
 pin_project! {
     pub(crate) struct EnterOnItem<T, O> {

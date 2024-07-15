@@ -26,112 +26,9 @@ pub trait IO:
 
     /// Get the last `trace_id` after polling Bytes form it, used for end to end tracing
     fn last_trace_id(&self) -> Option<TraceId>;
-}
 
-pin_project! {
-    pub(crate) struct MergedIO<IO> {
-        #[pin]
-        io: IO,
-        default_reliability: Reliability,
-        default_order_channel: u8,
-    }
-}
-
-impl<IO> MergedIO<IO>
-where
-    IO: Stream<Item = Bytes> + Sink<Message, Error = Error> + TraceInfo + Send,
-{
-    pub(crate) fn new(io: IO) -> Self {
-        MergedIO {
-            io,
-            default_reliability: Reliability::ReliableOrdered,
-            default_order_channel: 0,
-        }
-    }
-}
-
-impl<IO> Stream for MergedIO<IO>
-where
-    IO: Stream<Item = Bytes>,
-{
-    type Item = Bytes;
-
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.project().io.poll_next(cx)
-    }
-}
-
-impl<IO> Sink<Bytes> for MergedIO<IO>
-where
-    IO: Sink<Message, Error = Error>,
-{
-    type Error = Error;
-
-    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Sink::<Message>::poll_ready(self, cx)
-    }
-
-    fn start_send(self: Pin<&mut Self>, item: Bytes) -> Result<(), Self::Error> {
-        let msg = Message::new(self.default_reliability, self.default_order_channel, item);
-        Sink::<Message>::start_send(self, msg)
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Sink::<Message>::poll_flush(self, cx)
-    }
-
-    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Sink::<Message>::poll_close(self, cx)
-    }
-}
-
-impl<IO> Sink<Message> for MergedIO<IO>
-where
-    IO: Sink<Message, Error = Error>,
-{
-    type Error = Error;
-
-    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.project().io.poll_ready(cx)
-    }
-
-    fn start_send(self: Pin<&mut Self>, item: Message) -> Result<(), Self::Error> {
-        self.project().io.start_send(item)
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.project().io.poll_flush(cx)
-    }
-
-    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.project().io.poll_close(cx)
-    }
-}
-
-impl<IO> crate::io::IO for MergedIO<IO>
-where
-    IO: Sink<Message, Error = Error> + Stream<Item = Bytes> + TraceInfo + Send,
-{
-    fn set_default_reliability(&mut self, reliability: Reliability) {
-        self.default_reliability = reliability;
-    }
-
-    fn get_default_reliability(&self) -> Reliability {
-        self.default_reliability
-    }
-
-    fn set_default_order_channel(&mut self, order_channel: u8) {
-        self.default_order_channel = order_channel;
-    }
-
-    fn get_default_order_channel(&self) -> u8 {
-        self.default_order_channel
-    }
-
-    /// Get the last `trace_id` after polling Bytes form it, used for end to end tracing
-    fn last_trace_id(&self) -> Option<TraceId> {
-        self.io.get_last_trace_id()
-    }
+    /// Split into a Stream and a Sink
+    fn split(self) -> (impl Stream<Item = Bytes>, impl Sink<Message, Error = Error>);
 }
 
 pin_project! {
@@ -242,5 +139,9 @@ where
     /// Get the last `trace_id` after polling Bytes form it, used for end to end tracing
     fn last_trace_id(&self) -> Option<TraceId> {
         self.src.get_last_trace_id()
+    }
+
+    fn split(self) -> (impl Stream<Item = Bytes>, impl Sink<Message, Error = Error>) {
+        (self.src, self.dst)
     }
 }

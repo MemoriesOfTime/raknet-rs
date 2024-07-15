@@ -126,9 +126,10 @@ impl TransferLink {
     }
 
     /// Push all missing frames into buffer
-    /// Notice this method should be called after serval invoking of [`Acknowledgement::process_ack`].
-    /// Otherwise, some packets that do not need to be resent may be sent.
-    /// As for how many times to invoke [`Acknowledgement::process_ack`] before this, it depends.
+    /// Notice this method should be called after serval invoking of
+    /// [`Acknowledgement::process_ack`]. Otherwise, some packets that do not need to be resent
+    /// may be sent. As for how many times to invoke [`Acknowledgement::process_ack`] before
+    /// this, it depends.
     pub(crate) fn process_resend(&self, resend: &mut ResendMap, buffer: &mut VecDeque<Frame>) {
         for nack in self.incoming_nack_rx.try_iter() {
             trace!(

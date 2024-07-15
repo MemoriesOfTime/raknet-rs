@@ -119,10 +119,17 @@ where
                         *this.state = HandshakeState::Connected;
                         continue;
                     }
-                    debug!(
-                        "[{}] ignore packet {body:?} on WaitNewIncomingConn",
-                        this.role
-                    );
+                    // FIXME: it is wrong, client should finish handshake before sending user data
+                    // currently, the client's handshake is lazy, so user data may be sent before
+                    match body {
+                        FrameBody::User(data) => return Poll::Ready(Some(data)),
+                        _ => {
+                            debug!(
+                                "[{}] ignore packet {body:?} on WaitNewIncomingConn",
+                                this.role
+                            );
+                        }
+                    }
                 }
                 HandshakeState::Connected => {
                     let Some(body) = ready!(this.frame.as_mut().poll_next(cx)) else {

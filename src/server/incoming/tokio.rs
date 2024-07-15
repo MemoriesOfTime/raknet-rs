@@ -26,7 +26,7 @@ use crate::server::handler::offline;
 use crate::server::handler::offline::HandleOffline;
 use crate::server::handler::online::HandleOnline;
 use crate::state::{IncomingStateManage, OutgoingStateManage};
-use crate::utils::{Log, Logged, StreamExt};
+use crate::utils::{Log, Logged, TraceStreamExt};
 
 type OfflineHandler = offline::OfflineHandler<
     Log<UdpFramed<Codec, Arc<TokioUdpSocket>>, (Packet<FramesMut>, SocketAddr), CodecError>,

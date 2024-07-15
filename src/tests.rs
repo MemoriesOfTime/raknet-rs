@@ -114,13 +114,8 @@ async fn test_tokio_udp_works() {
                 let mut ticker = tokio::time::interval(Duration::from_millis(10));
                 loop {
                     tokio::select! {
-                        res = io.next() => {
-                            if let Some(data) = res {
-                                io.send(data).await.unwrap();
-                            } else {
-                                info!("client closed connection");
-                                break;
-                            }
+                        Some(data) = io.next() => {
+                            io.send(data).await.unwrap();
                             info!("last trace id: {:?}", (*io).last_trace_id());
                         }
                         _ = ticker.tick() => {
@@ -181,7 +176,6 @@ async fn test_tokio_udp_works() {
             io.next().await.unwrap(),
             Bytes::from_iter(repeat(0xfe).take(4096))
         );
-        SinkExt::<Bytes>::close(&mut io).await.unwrap();
     };
 
     tokio::spawn(client).await.unwrap();
