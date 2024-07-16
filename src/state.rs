@@ -6,7 +6,7 @@ use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
 use futures::{Sink, Stream};
-use log::{debug, warn};
+use log::warn;
 use pin_project_lite::pin_project;
 
 use crate::errors::{CodecError, Error};
@@ -115,9 +115,7 @@ where
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        if matches!(self.state, OutgoingState::Closed) {
-            return Poll::Ready(Err(Error::ConnectionClosed));
-        }
+        // flush is allowed after the connection is closed, it will deliver ack.
         self.project().frame.poll_flush(cx).map_err(Into::into)
     }
 
@@ -188,7 +186,6 @@ where
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
         if matches!(this.state, IncomingState::Closed) {
-            debug!("state closed, poll_next to deliver ack");
             // Poll the frame even if the state is closed to because the peer can send the
             // DisconnectNotification as it did not receive ack.
             // This will trigger the ack of the DisconnectNotification to be delivered.
@@ -299,14 +296,14 @@ mod test {
             FrameBody::DisconnectNotification
         ));
 
-        let mut closed = SinkExt::<FrameBody>::close(&mut goodbye).await.unwrap_err();
+        let closed = SinkExt::<FrameBody>::close(&mut goodbye).await.unwrap_err();
         // closed
         assert!(matches!(closed, Error::ConnectionClosed));
         // No more DisconnectNotification
         assert_eq!(goodbye.frame.buf.len(), 1);
 
-        // closed
-        closed = SinkExt::<Message>::flush(&mut goodbye).await.unwrap_err();
-        assert!(matches!(closed, Error::ConnectionClosed));
+        std::future::poll_fn(|cx| SinkExt::<FrameBody>::poll_ready_unpin(&mut goodbye, cx))
+            .await
+            .unwrap_err();
     }
 }

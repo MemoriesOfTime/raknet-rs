@@ -90,23 +90,34 @@ pub(crate) fn test_trace_log_setup() -> TestTraceLogGuard {
     TestTraceLogGuard { spans }
 }
 
+fn make_server_conf() -> server::Config {
+    server::Config::new()
+        .send_buf_cap(1024)
+        .sever_guid(1919810)
+        .advertisement(&b"123456"[..])
+        .max_mtu(1500)
+        .min_mtu(510)
+        .max_pending(1024)
+        .support_version(vec![9, 11, 13])
+}
+
+fn make_client_conf() -> client::Config {
+    client::Config::new()
+        .send_buf_cap(1024)
+        .mtu(1000)
+        .client_guid(114514)
+        .protocol_version(11)
+}
+
 #[tokio::test(unhandled_panic = "shutdown_runtime")]
 async fn test_tokio_udp_works() {
     let _guard = test_trace_log_setup();
 
     let echo_server = async {
-        let config = server::Config::new()
-            .send_buf_cap(1024)
-            .sever_guid(1919810)
-            .advertisement(&b"123456"[..])
-            .max_mtu(1500)
-            .min_mtu(510)
-            .max_pending(1024)
-            .support_version(vec![9, 11, 13]);
         let mut incoming = UdpSocket::bind("0.0.0.0:19132")
             .await
             .unwrap()
-            .make_incoming(config);
+            .make_incoming(make_server_conf());
         loop {
             let io = incoming.next().await.unwrap();
             tokio::spawn(async move {
@@ -130,15 +141,10 @@ async fn test_tokio_udp_works() {
     tokio::spawn(echo_server);
 
     let client = async {
-        let config = client::Config::new()
-            .send_buf_cap(1024)
-            .mtu(1000)
-            .client_guid(114514)
-            .protocol_version(11);
         let mut io = UdpSocket::bind("0.0.0.0:0")
             .await
             .unwrap()
-            .connect_to("127.0.0.1:19132", config)
+            .connect_to("127.0.0.1:19132", make_client_conf())
             .await
             .unwrap();
         io.send(Bytes::from_iter(repeat(0xfe).take(256)))
@@ -178,5 +184,106 @@ async fn test_tokio_udp_works() {
         );
     };
 
+    tokio::spawn(client).await.unwrap();
+}
+
+#[tokio::test(unhandled_panic = "shutdown_runtime")]
+async fn test_4way_handshake_client_close() {
+    let _guard = test_trace_log_setup();
+
+    let server = async {
+        let mut incoming = UdpSocket::bind("0.0.0.0:19133")
+            .await
+            .unwrap()
+            .make_incoming(make_server_conf());
+        loop {
+            let io = incoming.next().await.unwrap();
+            tokio::spawn(async move {
+                tokio::pin!(io);
+                let mut ticker = tokio::time::interval(Duration::from_millis(10));
+                loop {
+                    tokio::select! {
+                        None = io.next() => {
+                            break;
+                        }
+                        _ = ticker.tick() => {
+                            SinkExt::<Bytes>::flush(&mut io).await.unwrap();
+                        }
+                    };
+                }
+                info!("connection closed by client, close the io");
+                loop {
+                    tokio::select! {
+                        _ = ticker.tick() => {
+                            // That's ridiculous because all calculations are lazy, we should call `poll_next` on io to receive the ack
+                            // so that close will return.
+                            // TODO: eagerly deliver the ack
+                            assert!(io.next().await.is_none());
+                        }
+                        _ = SinkExt::<Bytes>::close(&mut io) => {
+                            break;
+                        }
+                    }
+                }
+                info!("io closed");
+            });
+        }
+    };
+
+    let client = async {
+        let mut io = UdpSocket::bind("0.0.0.0:0")
+            .await
+            .unwrap()
+            .connect_to("127.0.0.1:19133", make_client_conf())
+            .await
+            .unwrap();
+
+        io.send(Bytes::from_iter(repeat(0xfe).take(1024)))
+            .await
+            .unwrap();
+
+        // split it to avoid annoying borrow checker
+        let (src, dst) = IO::split(io);
+
+        tokio::pin!(src);
+        tokio::pin!(dst);
+
+        loop {
+            tokio::select! {
+                _ = src.next() => {}, // same as above, we should call `poll_next` on src to receive the ack so that dst.close will return
+                _ = dst.close() => {
+                    break;
+                }
+            }
+        }
+
+        info!("client closed the connection, wait for server to close");
+
+        let mut ticker = tokio::time::interval(Duration::from_millis(10));
+        let mut last_ticker = tokio::time::interval(Duration::from_millis(20));
+        let mut tick = 0;
+        loop {
+            tokio::select! {
+                None = src.next(), if tick == 0 => {
+                    info!("received close notification from server, wait for 2MSL");
+                    tick = 1;
+                }
+                _ = ticker.tick() => {
+                    dst.flush().await.unwrap();
+                }
+                _ = last_ticker.tick(), if tick > 0 => {
+                    // same as above, deliver the incoming ack
+                    assert!(src.next().await.is_none());
+                    tick += 1;
+                    // last 2MSL
+                    if tick > 10 {
+                        break;
+                    }
+                }
+            };
+        }
+    };
+
+    tokio::spawn(server);
     tokio::spawn(client).await.unwrap();
 }

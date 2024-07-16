@@ -28,11 +28,16 @@ pub trait IO:
     fn last_trace_id(&self) -> Option<TraceId>;
 
     /// Split into a Stream and a Sink
-    fn split(self) -> (impl Stream<Item = Bytes>, impl Sink<Message, Error = Error>);
+    fn split(
+        self,
+    ) -> (
+        impl Stream<Item = Bytes> + TraceInfo + Send,
+        impl Sink<Message, Error = Error> + Send,
+    );
 }
 
 pin_project! {
-    pub(crate) struct SplittedIO<I, O> {
+    pub(crate) struct SeparatedIO<I, O> {
         #[pin]
         src: I,
         #[pin]
@@ -42,13 +47,13 @@ pin_project! {
     }
 }
 
-impl<I, O> SplittedIO<I, O>
+impl<I, O> SeparatedIO<I, O>
 where
     I: Stream<Item = Bytes> + TraceInfo + Send,
     O: Sink<Message, Error = Error> + Send,
 {
     pub(crate) fn new(src: I, dst: O) -> Self {
-        SplittedIO {
+        SeparatedIO {
             src,
             dst,
             default_reliability: Reliability::ReliableOrdered,
@@ -57,7 +62,7 @@ where
     }
 }
 
-impl<I, O> Stream for SplittedIO<I, O>
+impl<I, O> Stream for SeparatedIO<I, O>
 where
     I: Stream<Item = Bytes>,
 {
@@ -68,7 +73,7 @@ where
     }
 }
 
-impl<I, O> Sink<Bytes> for SplittedIO<I, O>
+impl<I, O> Sink<Bytes> for SeparatedIO<I, O>
 where
     O: Sink<Message, Error = Error>,
 {
@@ -92,7 +97,7 @@ where
     }
 }
 
-impl<I, O> Sink<Message> for SplittedIO<I, O>
+impl<I, O> Sink<Message> for SeparatedIO<I, O>
 where
     O: Sink<Message, Error = Error>,
 {
@@ -115,7 +120,7 @@ where
     }
 }
 
-impl<I, O> crate::io::IO for SplittedIO<I, O>
+impl<I, O> crate::io::IO for SeparatedIO<I, O>
 where
     O: Sink<Message, Error = Error> + Send,
     I: Stream<Item = Bytes> + TraceInfo + Send,
@@ -141,7 +146,12 @@ where
         self.src.get_last_trace_id()
     }
 
-    fn split(self) -> (impl Stream<Item = Bytes>, impl Sink<Message, Error = Error>) {
+    fn split(
+        self,
+    ) -> (
+        impl Stream<Item = Bytes> + TraceInfo + Send,
+        impl Sink<Message, Error = Error> + Send,
+    ) {
         (self.src, self.dst)
     }
 }

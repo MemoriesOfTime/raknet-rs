@@ -14,7 +14,7 @@ use crate::codec::tokio::Codec;
 use crate::codec::{Decoded, Encoded};
 use crate::errors::Error;
 use crate::guard::HandleOutgoing;
-use crate::io::{SplittedIO, IO};
+use crate::io::{SeparatedIO, IO};
 use crate::link::TransferLink;
 use crate::state::{IncomingStateManage, OutgoingStateManage};
 use crate::utils::{Logged, TraceStreamExt};
@@ -71,6 +71,6 @@ impl ConnectTo for TokioUdpSocket {
             .handle_online(addr, config.client_guid, Arc::clone(&ack))
             .enter_on_item(Span::noop);
 
-        Ok(SplittedIO::new(src, dst))
+        Ok(SeparatedIO::new(src, dst))
     }
 }

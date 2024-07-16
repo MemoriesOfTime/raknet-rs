@@ -4,7 +4,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 
-use flume::{Receiver, Sender};
+use flume::Sender;
 use futures::Stream;
 use log::{debug, error};
 use minitrace::collector::SpanContext;
@@ -18,7 +18,7 @@ use crate::codec::tokio::Codec;
 use crate::codec::{Decoded, Encoded};
 use crate::errors::CodecError;
 use crate::guard::HandleOutgoing;
-use crate::io::{SplittedIO, IO};
+use crate::io::{SeparatedIO, IO};
 use crate::link::TransferLink;
 use crate::packet::connected::{self, FramesMut};
 use crate::packet::Packet;
@@ -39,25 +39,18 @@ pin_project! {
         config: Config,
         socket: Arc<TokioUdpSocket>,
         router: HashMap<SocketAddr, Sender<connected::Packet<FramesMut>>>,
-        drop_receiver: Receiver<SocketAddr>,
-        drop_notifier: Sender<SocketAddr>,
     }
 }
 
-impl Incoming {
-    fn clear_dropped_addr(self: Pin<&mut Self>) {
-        let mut this = self.project();
-        for addr in this.drop_receiver.try_iter() {
-            this.router.remove(&addr);
-            this.offline.as_mut().disconnect(&addr);
-        }
-    }
-}
+// impl Incoming {
+//     fn clear_dropped_addr(self: Pin<&mut Self>) {
+//         // TODO
+//     }
+// }
 
 impl MakeIncoming for TokioUdpSocket {
     fn make_incoming(self, config: Config) -> impl Stream<Item = impl IO> {
         let socket = Arc::new(self);
-        let (drop_notifier, drop_receiver) = flume::unbounded();
         Incoming {
             offline: UdpFramed::new(Arc::clone(&socket), Codec)
                 .logged_err(|err| {
@@ -67,8 +60,6 @@ impl MakeIncoming for TokioUdpSocket {
             socket,
             config,
             router: HashMap::new(),
-            drop_receiver,
-            drop_notifier,
         }
     }
 }
@@ -76,8 +67,8 @@ impl MakeIncoming for TokioUdpSocket {
 impl Stream for Incoming {
     type Item = impl IO;
 
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.as_mut().clear_dropped_addr();
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        // self.as_mut().clear_dropped_addr();
 
         let mut this = self.project();
         loop {
@@ -127,7 +118,7 @@ impl Stream for Incoming {
                     })
                 });
 
-            return Poll::Ready(Some(SplittedIO::new(src, dst)));
+            return Poll::Ready(Some(SeparatedIO::new(src, dst)));
         }
     }
 }
