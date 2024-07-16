@@ -1,4 +1,3 @@
-use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
@@ -228,12 +227,6 @@ pub(crate) struct Flags {
     needs_bas: bool,
 }
 
-impl Hash for Flags {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.raw.hash(state);
-    }
-}
-
 #[derive(Debug, Clone, Eq, PartialEq, Copy)]
 #[repr(u8)]
 pub enum Reliability {
@@ -271,23 +264,6 @@ pub enum Reliability {
     /// Same as `ReliableOrdered`, however the peer will get either ACK or
     /// NACK based on the result of sending this message when calling.
     ReliableOrderedWithAckReceipt = 0b111,
-}
-
-impl std::fmt::Display for Reliability {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Reliability::Unreliable => write!(f, "Unreliable"),
-            Reliability::UnreliableSequenced => write!(f, "UnreliableSequenced"),
-            Reliability::Reliable => write!(f, "Reliable"),
-            Reliability::ReliableOrdered => write!(f, "ReliableOrdered"),
-            Reliability::ReliableSequenced => write!(f, "ReliableSequenced"),
-            Reliability::UnreliableWithAckReceipt => write!(f, "UnreliableWithAckReceipt"),
-            Reliability::ReliableWithAckReceipt => write!(f, "ReliableWithAckReceipt"),
-            Reliability::ReliableOrderedWithAckReceipt => {
-                write!(f, "ReliableOrderedWithAckReceipt")
-            }
-        }
-    }
 }
 
 impl Reliability {
