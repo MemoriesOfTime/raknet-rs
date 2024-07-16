@@ -11,6 +11,7 @@ use crate::packet::connected::{FrameBody, Reliability};
 use crate::Message;
 
 pin_project! {
+    // FrameEncoder encodes internal frame body into Message
     pub(crate) struct FrameEncoder<F> {
         #[pin]
         frame: F,

@@ -8,24 +8,22 @@ use pin_project_lite::pin_project;
 
 use crate::errors::Error;
 use crate::packet::connected::Reliability;
-use crate::utils::TraceInfo;
 use crate::Message;
+
+/// Trace info extension for io
+pub trait TraceInfo {
+    fn last_trace_id(&self) -> Option<TraceId>;
+}
 
 /// The basic operation for each connection
 pub trait IO:
-    Stream<Item = Bytes>
-    + Sink<Bytes, Error = crate::errors::Error>
-    + Sink<Message, Error = crate::errors::Error>
-    + Send
+    Stream<Item = Bytes> + Sink<Bytes, Error = crate::errors::Error> + TraceInfo + Send
 {
     fn set_default_reliability(&mut self, reliability: Reliability);
     fn get_default_reliability(&self) -> Reliability;
 
     fn set_default_order_channel(&mut self, order_channel: u8);
     fn get_default_order_channel(&self) -> u8;
-
-    /// Get the last `trace_id` after polling Bytes form it, used for end to end tracing
-    fn last_trace_id(&self) -> Option<TraceId>;
 
     /// Split into a Stream and a Sink
     fn split(
@@ -80,35 +78,12 @@ where
     type Error = Error;
 
     fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Sink::<Message>::poll_ready(self, cx)
+        self.project().dst.poll_ready(cx)
     }
 
     fn start_send(self: Pin<&mut Self>, item: Bytes) -> Result<(), Self::Error> {
         let msg = Message::new(self.default_reliability, self.default_order_channel, item);
-        Sink::<Message>::start_send(self, msg)
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Sink::<Message>::poll_flush(self, cx)
-    }
-
-    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Sink::<Message>::poll_close(self, cx)
-    }
-}
-
-impl<I, O> Sink<Message> for SeparatedIO<I, O>
-where
-    O: Sink<Message, Error = Error>,
-{
-    type Error = Error;
-
-    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.project().dst.poll_ready(cx)
-    }
-
-    fn start_send(self: Pin<&mut Self>, item: Message) -> Result<(), Self::Error> {
-        self.project().dst.start_send(item)
+        self.project().dst.start_send(msg)
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -117,6 +92,15 @@ where
 
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.project().dst.poll_close(cx)
+    }
+}
+
+impl<I, O> TraceInfo for SeparatedIO<I, O>
+where
+    I: TraceInfo,
+{
+    fn last_trace_id(&self) -> Option<TraceId> {
+        self.src.last_trace_id()
     }
 }
 
@@ -139,11 +123,6 @@ where
 
     fn get_default_order_channel(&self) -> u8 {
         self.default_order_channel
-    }
-
-    /// Get the last `trace_id` after polling Bytes form it, used for end to end tracing
-    fn last_trace_id(&self) -> Option<TraceId> {
-        self.src.get_last_trace_id()
     }
 
     fn split(

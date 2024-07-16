@@ -1,15 +1,12 @@
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use futures::{Sink, Stream};
+use futures::Stream;
 use minitrace::collector::{SpanContext, TraceId};
 use minitrace::Span;
 use pin_project_lite::pin_project;
 
-/// Trace info extension for io
-pub(crate) trait TraceInfo {
-    fn get_last_trace_id(&self) -> Option<TraceId>;
-}
+use crate::io::TraceInfo;
 
 pub(crate) trait TraceStreamExt: Stream + Sized {
     /// It starts a span at every time an item is generating from the stream, and the span will end
@@ -71,35 +68,7 @@ where
 }
 
 impl<T, O> TraceInfo for EnterOnItem<T, O> {
-    fn get_last_trace_id(&self) -> Option<TraceId> {
+    fn last_trace_id(&self) -> Option<TraceId> {
         self.last_trace_id
-    }
-}
-
-// TODO: implement ConsoleTreeCollector here
-
-// Propagate Sink trait to inner stream
-// TODO: remove sink propagation when IO is splitted
-impl<T, I, O> Sink<I> for EnterOnItem<T, O>
-where
-    T: Sink<I>,
-    O: Fn() -> Span,
-{
-    type Error = T::Error;
-
-    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.project().inner.poll_ready(cx)
-    }
-
-    fn start_send(self: Pin<&mut Self>, item: I) -> Result<(), Self::Error> {
-        self.project().inner.start_send(item)
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.project().inner.poll_flush(cx)
-    }
-
-    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.project().inner.poll_close(cx)
     }
 }

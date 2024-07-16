@@ -107,11 +107,11 @@ fn configure_bencher(
                         tokio::select! {
                             _ = client.send(Bytes::from_static(data)) => break,
                             _ = ticker.tick() => {
-                                assert!(SinkExt::<Bytes>::flush(&mut client).await.is_ok());
+                                assert!(client.flush().await.is_ok());
                             }
                         }
                     }
-                    assert!(SinkExt::<Bytes>::close(&mut client).await.is_ok());
+                    assert!(client.close().await.is_ok());
                 });
                 join.push(handle);
             }
@@ -148,7 +148,7 @@ fn spawn_server() -> SocketAddr {
                             }
                         }
                         _ = ticker.tick() => {
-                            assert!(SinkExt::<Bytes>::flush(&mut io).await.is_ok());
+                            assert!(io.flush().await.is_ok());
                         }
                     };
                 }

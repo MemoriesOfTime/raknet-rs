@@ -11,7 +11,7 @@ use parking_lot::Mutex;
 use tokio::net::UdpSocket;
 
 use crate::client::{self, ConnectTo};
-use crate::io::IO;
+use crate::io::{TraceInfo, IO};
 use crate::server::{self, MakeIncoming};
 
 #[allow(clippy::type_complexity)]
@@ -130,7 +130,7 @@ async fn test_tokio_udp_works() {
                             info!("last trace id: {:?}", (*io).last_trace_id());
                         }
                         _ = ticker.tick() => {
-                            SinkExt::<Bytes>::flush(&mut io).await.unwrap();
+                            io.flush().await.unwrap();
                         }
                     };
                 }
@@ -207,7 +207,7 @@ async fn test_4way_handshake_client_close() {
                             break;
                         }
                         _ = ticker.tick() => {
-                            SinkExt::<Bytes>::flush(&mut io).await.unwrap();
+                            io.flush().await.unwrap();
                         }
                     };
                 }
@@ -220,7 +220,7 @@ async fn test_4way_handshake_client_close() {
                             // TODO: eagerly deliver the ack
                             assert!(io.next().await.is_none());
                         }
-                        _ = SinkExt::<Bytes>::close(&mut io) => {
+                        _ = io.close() => {
                             break;
                         }
                     }
