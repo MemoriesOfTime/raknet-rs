@@ -1,3 +1,5 @@
+# Some fast checks before committing, use `pre-commit install` to install the hooks.
+# PS: Use `pip install pre-commit` if you don't have pre-commit installed.
 fail_fast: false
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -21,18 +23,23 @@ repos:
   - repo: local
     hooks:
       - id: cargo-fmt
-        name: cargo fmt
+        name: check formatting with rustfmt
         description: Format files with rustfmt.
         entry: bash -c 'cargo fmt -- --check'
         language: rust
         files: ^(?!abi)\.rs$
-        args: []
 
       - id: cargo-sort
-        name: Check Cargo.toml is sorted
+        name: check Cargo.toml is sorted
         description: Ensure Cargo.toml is sorted
         entry: bash -c 'cargo sort --workspace'
         language: rust
         types: [file, toml]
         files: Cargo\.toml
-        pass_filenames: false
+
+      - id: cargo-machete
+        name: check for workspace consistency
+        description: Ensure workspace is consistent
+        entry: bash -c 'cargo machete'
+        language: rust
+        files: ^((?!abi)\.rs|Cargo\.toml)$

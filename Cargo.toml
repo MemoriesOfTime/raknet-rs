@@ -13,16 +13,17 @@ categories = ["network-programming"]
 keywords = ["raknet", "network", "udp"]
 
 [dependencies]
+async-channel = "2.3.1"
 bytes = "1"
-flume = "0.11"
+concurrent-queue = "2.5.0"
 futures = "0.3"
 futures-async-stream = "0.2"
 log = "0.4"
 lru = "0.12"
-minitrace = { version = "0.6" }
+minitrace = "0.6"
 parking_lot = "0.12"
 pin-project-lite = "0.2"
-rand = { version = "0.8" }
+rand = "0.8"
 thiserror = "1"
 tokio = { version = "1", features = ["io-util", "macros"], optional = true }
 tokio-util = { version = "0.7", features = [
@@ -49,7 +50,7 @@ tokio-udp = ["dep:tokio-util", "dep:tokio"]
 micro-bench = []
 
 # TODO: move bench marks to a separate crate cz it maybe slow to compile with minitrace enabled at [dev-dependencies]
-# Or there is some workaround avaliable: https://github.com/rust-lang/cargo/issues/3126
+# Or there is some workaround available: https://github.com/rust-lang/cargo/issues/3126
 [[bench]]
 name = "micro"
 harness = false

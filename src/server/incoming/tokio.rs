@@ -4,7 +4,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 
-use flume::Sender;
+use async_channel::Sender;
 use futures::Stream;
 use log::{debug, error};
 use minitrace::collector::SpanContext;
@@ -76,7 +76,7 @@ impl Stream for Incoming {
                 return Poll::Ready(None);
             };
             if let Some(router_tx) = this.router.get_mut(&peer.addr) {
-                if router_tx.send(pack).is_err() {
+                if router_tx.try_send(pack).is_err() {
                     error!("connection was dropped before closed");
                     this.router.remove(&peer.addr);
                     this.offline.as_mut().disconnect(&peer.addr);
@@ -84,8 +84,8 @@ impl Stream for Incoming {
                 continue;
             }
 
-            let (router_tx, router_rx) = flume::unbounded();
-            router_tx.send(pack).unwrap();
+            let (router_tx, router_rx) = async_channel::unbounded();
+            router_tx.try_send(pack).unwrap();
             this.router.insert(peer.addr, router_tx);
 
             let link = TransferLink::new_arc(this.config.server_role());
@@ -101,7 +101,7 @@ impl Stream for Incoming {
                 .manage_outgoing_state();
 
             let src = link
-                .filter_incoming_ack(router_rx.into_stream())
+                .filter_incoming_ack(router_rx)
                 .frame_decoded(
                     this.config.codec_config(),
                     Arc::clone(&link),
