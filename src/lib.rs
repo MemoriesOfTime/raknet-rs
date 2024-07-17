@@ -115,6 +115,13 @@ impl RoleContext {
             guid: rand::random(),
         }
     }
+
+    fn guid(&self) -> u64 {
+        match self {
+            RoleContext::Client { guid } => *guid,
+            RoleContext::Server { guid } => *guid,
+        }
+    }
 }
 
 impl std::fmt::Display for RoleContext {

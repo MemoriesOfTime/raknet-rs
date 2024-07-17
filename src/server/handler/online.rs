@@ -15,7 +15,7 @@ use crate::RoleContext;
 pub(crate) trait HandleOnline: Sized {
     fn handle_online(
         self,
-        server_guid: u64,
+        role: RoleContext,
         client_addr: SocketAddr,
         link: SharedLink,
     ) -> OnlineHandler<Self>;
@@ -27,17 +27,16 @@ where
 {
     fn handle_online(
         self,
-        server_guid: u64,
+        role: RoleContext,
         client_addr: SocketAddr,
         link: SharedLink,
     ) -> OnlineHandler<Self> {
         OnlineHandler {
             frame: self,
-            server_guid,
+            role,
             client_addr,
             state: HandshakeState::WaitConnRequest,
             link,
-            role: RoleContext::Server { guid: server_guid },
         }
     }
 }
@@ -46,11 +45,10 @@ pin_project! {
     pub(crate) struct OnlineHandler<F> {
         #[pin]
         frame: F,
-        server_guid: u64,
+        role: RoleContext,
         client_addr: SocketAddr,
         state: HandshakeState,
         link: SharedLink,
-        role: RoleContext,
     }
 }
 
@@ -84,7 +82,7 @@ where
                             this.link.send_unconnected(
                                 unconnected::Packet::ConnectionRequestFailed {
                                     magic: (),
-                                    server_guid: *this.server_guid,
+                                    server_guid: this.role.guid(),
                                 },
                             );
                             continue;

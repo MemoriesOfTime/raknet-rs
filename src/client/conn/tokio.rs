@@ -51,7 +51,7 @@ impl ConnectTo for TokioUdpSocket {
                 config.client_role(),
             )
             .frame_encoded(config.mtu, config.codec_config(), Arc::clone(&ack))
-            .manage_outgoing_state();
+            .manage_outgoing_state(None);
 
         let incoming = UdpFramed::new(socket, Codec)
             .logged_err(|err| {

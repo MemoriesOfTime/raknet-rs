@@ -2,9 +2,12 @@
 //! Perform the 4-ways handshake for the connection close.
 //! Reflect the operation in the APIs of Sink and Stream when the connection stops.
 
+use std::net::SocketAddr;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 
+use concurrent_queue::ConcurrentQueue;
 use futures::{Sink, Stream};
 use log::warn;
 use pin_project_lite::pin_project;
@@ -38,11 +41,32 @@ impl OutgoingState {
     }
 }
 
+/// Send close event when dropped.
+pub(crate) struct CloseOnDrop {
+    pub(crate) addr: SocketAddr,
+    pub(crate) close_events: Arc<ConcurrentQueue<SocketAddr>>,
+}
+
+impl Drop for CloseOnDrop {
+    fn drop(&mut self) {
+        self.close_events
+            .push(self.addr)
+            .expect("closed events queue cannot be closed");
+    }
+}
+
+impl CloseOnDrop {
+    pub(crate) fn new(addr: SocketAddr, close_events: Arc<ConcurrentQueue<SocketAddr>>) -> Self {
+        Self { addr, close_events }
+    }
+}
+
 pin_project! {
     pub(crate) struct StateManager<F, S> {
         #[pin]
         frame: F,
         state: S,
+        close_on_drop: Option<CloseOnDrop>,
     }
 }
 
@@ -52,6 +76,7 @@ pub(crate) trait OutgoingStateManage: Sized {
     /// mapping the `CodecError` to the `Error`.
     fn manage_outgoing_state(
         self,
+        close_on_drop: Option<CloseOnDrop>,
     ) -> impl Sink<FrameBody, Error = Error> + Sink<Message, Error = Error>;
 }
 
@@ -61,10 +86,12 @@ where
 {
     fn manage_outgoing_state(
         self,
+        close_on_drop: Option<CloseOnDrop>,
     ) -> impl Sink<FrameBody, Error = Error> + Sink<Message, Error = Error> {
         StateManager {
             frame: self,
             state: OutgoingState::Connecting,
+            close_on_drop,
         }
     }
 }
@@ -90,6 +117,7 @@ where
         StateManager {
             frame: self,
             state: IncomingState::Connecting,
+            close_on_drop: None,
         }
     }
 }
@@ -147,7 +175,11 @@ where
                     ready!(this.frame.as_mut().poll_close(cx)?);
                     *this.state = OutgoingState::Closed;
                 }
-                OutgoingState::Closed => return Poll::Ready(Ok(())),
+                OutgoingState::Closed => {
+                    // send close event
+                    let _ = this.close_on_drop.take();
+                    return Poll::Ready(Ok(()));
+                }
             }
         }
     }
@@ -186,6 +218,8 @@ where
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
         if matches!(this.state, IncomingState::Closed) {
+            // TODO: remove it when ack delivery is eagerly on client.
+
             // Poll the frame even if the state is closed to because the peer can send the
             // DisconnectNotification as it did not receive ack.
             // This will trigger the ack of the DisconnectNotification to be delivered.
@@ -195,7 +229,7 @@ where
         let Some(body) = ready!(this.frame.as_mut().poll_next(cx)) else {
             // This happens when the incoming router is dropped on server side.
             // On client side, the connection cannot be closed by UDP, this is unreachable.
-            warn!("Router dropped");
+            warn!("router dropped before the connection is closed");
             *this.state = IncomingState::Closed;
             return Poll::Ready(None);
         };
@@ -211,12 +245,15 @@ where
 #[cfg(test)]
 mod test {
     use std::pin::Pin;
+    use std::sync::Arc;
     use std::task::{Context, Poll};
 
+    use concurrent_queue::ConcurrentQueue;
     use futures::{Sink, SinkExt};
 
     use crate::errors::{CodecError, Error};
     use crate::packet::connected::FrameBody;
+    use crate::state::CloseOnDrop;
     use crate::Message;
 
     #[derive(Debug, Default)]
@@ -285,9 +322,12 @@ mod test {
 
     #[tokio::test]
     async fn test_goodbye_works() {
+        let queue = Arc::new(ConcurrentQueue::unbounded());
+        let addr = "0.0.0.0:0".parse().unwrap();
         let mut goodbye = super::StateManager {
             frame: DstSink::default(),
             state: crate::state::OutgoingState::Connecting,
+            close_on_drop: Some(CloseOnDrop::new(addr, Arc::clone(&queue))),
         };
         SinkExt::<FrameBody>::close(&mut goodbye).await.unwrap();
         assert_eq!(goodbye.frame.buf.len(), 1);
@@ -301,6 +341,10 @@ mod test {
         assert!(matches!(closed, Error::ConnectionClosed));
         // No more DisconnectNotification
         assert_eq!(goodbye.frame.buf.len(), 1);
+
+        // close event was pushed
+        assert_eq!(queue.pop().unwrap(), addr);
+        assert!(queue.is_empty());
 
         std::future::poll_fn(|cx| SinkExt::<FrameBody>::poll_ready_unpin(&mut goodbye, cx))
             .await

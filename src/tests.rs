@@ -207,24 +207,13 @@ async fn test_4way_handshake_client_close() {
                             break;
                         }
                         _ = ticker.tick() => {
+                            // flush periodically to ensure all missing packets/ack are sent
                             io.flush().await.unwrap();
                         }
                     };
                 }
                 info!("connection closed by client, close the io");
-                loop {
-                    tokio::select! {
-                        _ = ticker.tick() => {
-                            // That's ridiculous because all calculations are lazy, we should call `poll_next` on io to receive the ack
-                            // so that close will return.
-                            // TODO: eagerly deliver the ack
-                            assert!(io.next().await.is_none());
-                        }
-                        _ = io.close() => {
-                            break;
-                        }
-                    }
-                }
+                io.close().await.unwrap();
                 info!("io closed");
             });
         }
@@ -250,7 +239,11 @@ async fn test_4way_handshake_client_close() {
 
         loop {
             tokio::select! {
-                _ = src.next() => {}, // same as above, we should call `poll_next` on src to receive the ack so that dst.close will return
+                _ = src.next() => {
+                    // I know this's ridiculous cz all calculations are lazy, we should call `poll_next` on io to receive the ack
+                    // so that close will return.
+                    // TODO: eagerly deliver the ack on client
+                },
                 _ = dst.close() => {
                     break;
                 }
