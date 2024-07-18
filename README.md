@@ -17,6 +17,7 @@ Yet another project rewritten in Rust.
   - Support `ACK`/`NACK` mechanism.
 - Full tracing powered by [minitrace-rust](https://github.com/tikv/minitrace-rust).
   - You can track a packet's span during deduplication, fragmentation, ...
+- User space zero copy
 
 ## Roadmap
 

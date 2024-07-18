@@ -28,13 +28,8 @@ impl FrameSet<FramesMut> {
     pub(super) fn read(buf: &mut BytesMut) -> Result<Self, CodecError> {
         let seq_num = read_buf!(buf, 3, buf.get_u24_le());
         let mut frames = vec![];
-        let reader_buf_cap = buf.capacity();
-        let reader_buf_len = buf.len(); // remaining
         while buf.has_remaining() {
-            // reader_buf_len < reader_buf_cap * 50%, then deeply copy all bytes from reader buffer
-            // instead of occupying reader buffer slots
-            let deep_copy = reader_buf_len < (reader_buf_cap >> 1);
-            frames.push(Frame::read(buf, deep_copy)?);
+            frames.push(Frame::read(buf)?);
         }
         if frames.is_empty() {
             return Err(CodecError::InvalidPacketLength("frame set"));
@@ -106,7 +101,7 @@ impl FrameMut {
         self
     }
 
-    fn read(buf: &mut BytesMut, deep_copy: bool) -> Result<Self, CodecError> {
+    fn read(buf: &mut BytesMut) -> Result<Self, CodecError> {
         let (flags, length) = read_buf!(buf, 3, {
             let flags = Flags::read(buf);
             // length in bytes
@@ -135,15 +130,7 @@ impl FrameMut {
         if flags.parted {
             fragment = read_buf!(buf, 10, Some(Fragment::read(buf)));
         }
-        let body = read_buf!(buf, length, {
-            if deep_copy {
-                let res = BytesMut::from_iter(&buf.chunk()[..length]);
-                buf.advance(length);
-                res
-            } else {
-                buf.split_to(length)
-            }
-        });
+        let body = read_buf!(buf, length, buf.split_to(length));
         Ok(Frame {
             flags,
             reliable_frame_index,

@@ -1,7 +1,7 @@
-/// Frame decoder
+/// Frame pipeline decoder
 mod decoder;
 
-/// Frame encoder
+/// Frame pipeline encoder
 mod encoder;
 
 /// Tokio codec helper

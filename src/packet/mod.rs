@@ -12,7 +12,7 @@ use crate::errors::CodecError;
 macro_rules! read_buf {
     ($buf:expr, $len:expr, $exp:expr) => {{
         if $buf.remaining() < $len {
-            return Err(CodecError::InvalidPacketLength("particular sized pack"));
+            return Err(CodecError::InvalidPacketLength("certain sized pack"));
         }
         $exp
     }};
