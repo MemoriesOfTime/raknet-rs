@@ -160,7 +160,7 @@ impl Packet {
         })
     }
 
-    pub(super) fn write(self, buf: &mut BytesMut) {
+    pub(crate) fn write(self, buf: &mut BytesMut) {
         // Fixed id (type)
         buf.put_u8(self.pack_type().into());
         match self {

@@ -46,21 +46,21 @@ impl Drop for TestTraceLogGuard {
             depth: usize,
         ) {
             let span = &spans[&span_id];
-            let mut properties = String::new();
+            let mut properties = vec![];
             for (key, value) in &span.properties {
-                properties.push_str(&format!(", {}: {}", key, value));
+                properties.push(format!("{}: {}", key, value));
             }
             let mut events = String::new();
             for ev in &span.events {
                 events.push_str(&format!("'{}'", ev.name));
             }
             eprintln!(
-                "{}{}(duration:{}ns{}, {{{}}})",
+                "{}{}({}, {{{}}}) [{}us]",
                 "  ".repeat(depth),
                 span.name,
-                span.duration_ns,
-                properties,
-                events
+                properties.join(", "),
+                events,
+                span.duration_ns as f64 / 1_000.0,
             );
             if let Some(children) = adjacency_list.get(&span_id) {
                 for child in children {
@@ -122,11 +122,11 @@ async fn test_tokio_udp_works() {
             let io = incoming.next().await.unwrap();
             tokio::spawn(async move {
                 tokio::pin!(io);
-                let mut ticker = tokio::time::interval(Duration::from_millis(10));
+                let mut ticker = tokio::time::interval(Duration::from_millis(20));
                 loop {
                     tokio::select! {
                         Some(data) = io.next() => {
-                            io.send(data).await.unwrap();
+                            io.feed(data).await.unwrap();
                             info!("last trace id: {:?}", (*io).last_trace_id());
                         }
                         _ = ticker.tick() => {

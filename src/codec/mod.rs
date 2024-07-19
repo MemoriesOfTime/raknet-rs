@@ -1,20 +1,27 @@
-/// Frame pipeline decoder
+/// Raw frames codec
+pub(crate) mod frame;
+
+/// Frames pipeline decoder
 mod decoder;
 
-/// Frame pipeline encoder
+/// Frames pipeline encoder
 mod encoder;
 
 /// Tokio codec helper
 #[cfg(feature = "tokio-udp")]
 pub(crate) mod tokio;
 
+use std::io;
+use std::net::SocketAddr;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
+use bytes::BytesMut;
 use futures::{Sink, Stream, StreamExt};
 use log::{debug, trace};
 
-use self::decoder::{DeFragmented, Deduplicated, FrameDecoded, Ordered};
-use self::encoder::{Fragmented, FrameEncoded};
+use self::decoder::{BodyDecoded, DeFragmented, Deduplicated, Ordered};
+use self::encoder::{BodyEncoded, Fragmented};
 use crate::errors::CodecError;
 use crate::link::SharedLink;
 use crate::packet::connected::{Frame, FrameBody, FrameSet, FramesMut};
@@ -51,6 +58,25 @@ impl Default for Config {
     }
 }
 
+/// Abstract async socket
+/// It's used to decode/encode raw frames from/to the socket.
+pub(crate) trait AsyncSocket: Unpin {
+    fn poll_recv_from(
+        &self,
+        cx: &mut Context<'_>,
+        buf: &mut BytesMut,
+    ) -> Poll<io::Result<SocketAddr>>;
+
+    fn poll_send_to(
+        &self,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+        target: SocketAddr,
+    ) -> Poll<io::Result<usize>>;
+}
+
+/// Frames pipeline decoder
+/// It will convert the stream of raw frames into defragmented, deduplicated and ordered frames.
 pub(crate) trait Decoded {
     fn frame_decoded(
         self,
@@ -74,18 +100,20 @@ where
             .deduplicated(config.max_dedup_gap, Arc::clone(&link))
             .defragmented(config.max_parted_size, config.max_parted_count, link)
             .ordered(config.max_channels)
-            .frame_decoded()
+            .body_decoded()
             .logged_all(
                 move |pack| {
                     trace!("[{role}] received packet: {:?}", pack);
                 },
                 move |err| {
-                    debug!("[{role}] got codec error: {err} when decode packet");
+                    debug!("[{role}] got codec error: {err} when pipelining packets");
                 },
             )
     }
 }
 
+/// Frames pipeline encoder
+/// It will sink the messages/frame bodies into fragmented frames.
 pub(crate) trait Encoded {
     fn frame_encoded(
         self,
@@ -105,8 +133,7 @@ where
         config: Config,
         link: SharedLink,
     ) -> impl Sink<Message, Error = CodecError> + Sink<FrameBody, Error = CodecError> {
-        self.fragmented(mtu, config.max_channels)
-            .frame_encoded(link)
+        self.fragmented(mtu, config.max_channels).body_encoded(link)
     }
 }
 

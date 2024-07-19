@@ -55,7 +55,7 @@ where
     fn start_send(self: Pin<&mut Self>, msg: Message) -> Result<(), Self::Error> {
         let mut this = self.project();
         let mut reliability = msg.get_reliability();
-        let order_channel = msg.get_order_channel();
+        let order_channel = msg.get_order_channel() as usize;
         let mut body = msg.into_data();
 
         // max_len is the maximum size of the frame body (excluding the fragment part option)
@@ -82,7 +82,7 @@ where
             // TODO: sequencing
 
             if reliability.is_sequenced_or_ordered() {
-                if order_channel as usize >= this.order_write_index.len() {
+                if order_channel >= this.order_write_index.len() {
                     return Err(
                         CodecError::OrderedFrame(
                             format!(
@@ -93,8 +93,8 @@ where
                     );
                 }
                 ordered = Some(Ordered {
-                    frame_index: this.order_write_index[order_channel as usize],
-                    channel: order_channel,
+                    frame_index: this.order_write_index[order_channel],
+                    channel: order_channel as u8,
                 });
             }
             Ok((reliable_frame_index, ordered))
@@ -104,7 +104,7 @@ where
             // not exceeding the mtu, no need to split.
             let (reliable_frame_index, ordered) = common()?;
             if reliability.is_sequenced_or_ordered() {
-                this.order_write_index[order_channel as usize] += 1;
+                this.order_write_index[order_channel] += 1;
             }
             let frame = Frame {
                 flags: Flags::new(reliability, false),
@@ -149,7 +149,7 @@ where
         }
 
         if reliability.is_sequenced_or_ordered() {
-            this.order_write_index[order_channel as usize] += 1;
+            this.order_write_index[order_channel] += 1;
         }
 
         debug_assert!(

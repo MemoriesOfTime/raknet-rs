@@ -41,15 +41,6 @@ impl FrameSet<FramesMut> {
     }
 }
 
-impl<B: Buf> FrameSet<Frames<B>> {
-    pub(super) fn write(self, buf: &mut BytesMut) {
-        buf.put_u24_le(self.seq_num);
-        for frame in self.set {
-            frame.write(buf);
-        }
-    }
-}
-
 impl<'a, B: Buf + Clone> FrameSet<FramesRef<'a, B>> {
     pub(super) fn write(self, buf: &mut BytesMut) {
         buf.put_u24_le(self.seq_num);
@@ -71,13 +62,22 @@ pub(crate) struct Frame<B = Bytes> {
 
 impl<B: Buf> std::fmt::Debug for Frame<B> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // better for debug printing
+        fn to_hex_string(bytes: &[u8]) -> String {
+            let mut s = String::with_capacity(bytes.len() * 2);
+            for &byte in bytes {
+                s.push_str(&format!("{:02x}", byte));
+            }
+            s
+        }
+
         f.debug_struct("Frame")
             .field("flags", &self.flags)
             .field("reliable_frame_index", &self.reliable_frame_index)
             .field("seq_frame_index", &self.seq_frame_index)
             .field("ordered", &self.ordered)
             .field("fragment", &self.fragment)
-            .field("body", &self.body.chunk())
+            .field("body", &to_hex_string(self.body.chunk()))
             .finish()
     }
 }
@@ -143,30 +143,6 @@ impl FrameMut {
 }
 
 impl<B: Buf> Frame<B> {
-    fn write(self, buf: &mut BytesMut) {
-        self.flags.write(buf);
-        // length in bits
-        // self.body will be split up so cast to u16 should not overflow here
-        debug_assert!(
-            self.body.remaining() < (u16::MAX >> 3) as usize,
-            "self.body should be constructed based on mtu"
-        );
-        buf.put_u16((self.body.remaining() << 3) as u16);
-        if let Some(reliable_frame_index) = self.reliable_frame_index {
-            buf.put_u24_le(reliable_frame_index);
-        }
-        if let Some(seq_frame_index) = self.seq_frame_index {
-            buf.put_u24_le(seq_frame_index);
-        }
-        if let Some(ordered) = self.ordered {
-            ordered.write(buf);
-        }
-        if let Some(fragment) = self.fragment {
-            fragment.write(buf);
-        }
-        buf.put(self.body);
-    }
-
     /// Get the total size of this frame
     pub(crate) fn size(&self) -> usize {
         let mut size = self.flags.reliability.size();
@@ -200,7 +176,7 @@ impl<B: Buf + Clone> Frame<B> {
         if let Some(fragment) = self.fragment {
             fragment.write(buf);
         }
-        buf.put(self.body.clone()); // Bytes or BytesMut's clone are cheap
+        buf.put(self.body.clone()); // Cheap cloning
     }
 }
 

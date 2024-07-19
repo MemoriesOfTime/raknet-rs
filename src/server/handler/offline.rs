@@ -10,34 +10,9 @@ use log::{debug, error, warn};
 use pin_project_lite::pin_project;
 
 use crate::errors::CodecError;
-use crate::packet::connected::{Frames, FramesMut};
-use crate::packet::{connected, unconnected, Packet};
+use crate::packet::connected::{self, FramesMut};
+use crate::packet::{unconnected, Packet};
 use crate::{PeerContext, RoleContext};
-
-pub(crate) trait HandleOffline: Sized {
-    fn handle_offline(self, config: Config) -> OfflineHandler<Self>;
-}
-
-impl<F> HandleOffline for F
-where
-    F: Stream<Item = (Packet<FramesMut>, SocketAddr)>
-        + Sink<(Packet<Frames>, SocketAddr), Error = CodecError>,
-{
-    fn handle_offline(self, config: Config) -> OfflineHandler<Self> {
-        OfflineHandler {
-            frame: self,
-            pending: lru::LruCache::new(
-                NonZeroUsize::new(config.max_pending).expect("max_pending > 0"),
-            ),
-            role: RoleContext::Server {
-                guid: config.sever_guid,
-            },
-            config,
-            connected: HashMap::new(),
-            state: OfflineState::Listening,
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub(crate) struct Config {
@@ -52,7 +27,7 @@ pub(crate) struct Config {
 
 enum OfflineState {
     Listening,
-    SendingPrepare(Option<(Packet<Frames>, SocketAddr)>),
+    SendingPrepare(Option<(unconnected::Packet, SocketAddr)>),
     SendingFlush,
 }
 
@@ -70,45 +45,59 @@ pin_project! {
     }
 }
 
-impl<F> OfflineHandler<F> {
+impl<F> OfflineHandler<F>
+where
+    F: Stream<Item = (Packet<FramesMut>, SocketAddr)>
+        + Sink<(unconnected::Packet, SocketAddr), Error = CodecError>,
+{
+    pub(crate) fn new(frame: F, config: Config) -> Self {
+        Self {
+            frame,
+            pending: lru::LruCache::new(
+                NonZeroUsize::new(config.max_pending).expect("max_pending > 0"),
+            ),
+            role: RoleContext::Server {
+                guid: config.sever_guid,
+            },
+            config,
+            connected: HashMap::new(),
+            state: OfflineState::Listening,
+        }
+    }
+
     pub(crate) fn disconnect(self: Pin<&mut Self>, addr: &SocketAddr) {
         let this = self.project();
         this.pending.pop(addr);
         this.connected.remove(addr);
     }
-}
 
-impl<F> OfflineHandler<F>
-where
-    F: Sink<(Packet<Frames>, SocketAddr), Error = CodecError>,
-{
-    fn make_incompatible_version(config: &Config) -> Packet<Frames> {
-        Packet::Unconnected(unconnected::Packet::IncompatibleProtocol {
+    fn make_incompatible_version(config: &Config) -> unconnected::Packet {
+        unconnected::Packet::IncompatibleProtocol {
             server_protocol: *config.support_version.last().unwrap(),
             magic: (),
             server_guid: config.sever_guid,
-        })
+        }
     }
 
-    fn make_already_connected(config: &Config) -> Packet<Frames> {
-        Packet::Unconnected(unconnected::Packet::AlreadyConnected {
+    fn make_already_connected(config: &Config) -> unconnected::Packet {
+        unconnected::Packet::AlreadyConnected {
             magic: (),
             server_guid: config.sever_guid,
-        })
+        }
     }
 
-    fn make_connection_request_failed(config: &Config) -> Packet<Frames> {
-        Packet::Unconnected(unconnected::Packet::ConnectionRequestFailed {
+    fn make_connection_request_failed(config: &Config) -> unconnected::Packet {
+        unconnected::Packet::ConnectionRequestFailed {
             magic: (),
             server_guid: config.sever_guid,
-        })
+        }
     }
 }
 
 impl<F> Stream for OfflineHandler<F>
 where
     F: Stream<Item = (Packet<FramesMut>, SocketAddr)>
-        + Sink<(Packet<Frames>, SocketAddr), Error = CodecError>,
+        + Sink<(unconnected::Packet, SocketAddr), Error = CodecError>,
 {
     type Item = (connected::Packet<FramesMut>, PeerContext);
 
@@ -253,7 +242,7 @@ where
                     continue;
                 }
             };
-            *this.state = OfflineState::SendingPrepare(Some((Packet::Unconnected(resp), addr)));
+            *this.state = OfflineState::SendingPrepare(Some((resp, addr)));
         }
     }
 }
@@ -262,7 +251,7 @@ where
 mod test {
     use std::collections::VecDeque;
 
-    use connected::FrameSet;
+    use connected::{FrameSet, Frames};
     use futures::StreamExt;
 
     use super::*;
@@ -271,7 +260,7 @@ mod test {
     struct TestCase {
         addr: SocketAddr,
         source: VecDeque<Packet<FramesMut>>,
-        dst: Vec<Packet<Frames>>,
+        dst: Vec<unconnected::Packet>,
     }
 
     impl Stream for TestCase {
@@ -285,7 +274,7 @@ mod test {
         }
     }
 
-    impl Sink<(Packet<Frames>, SocketAddr)> for TestCase {
+    impl Sink<(unconnected::Packet, SocketAddr)> for TestCase {
         type Error = CodecError;
 
         fn poll_ready(
@@ -297,7 +286,7 @@ mod test {
 
         fn start_send(
             mut self: Pin<&mut Self>,
-            item: (Packet<Frames>, SocketAddr),
+            item: (unconnected::Packet, SocketAddr),
         ) -> Result<(), Self::Error> {
             self.dst.push(item.0);
             Ok(())
@@ -354,14 +343,18 @@ mod test {
             .collect(),
             dst: vec![],
         };
-        let handler = test_case.handle_offline(Config {
-            sever_guid: 1919810,
-            advertisement: Bytes::from_static(b"hello"),
-            min_mtu: 800,
-            max_mtu: 1400,
-            support_version: vec![8, 11, 12],
-            max_pending: 10,
-        });
+
+        let handler = OfflineHandler::new(
+            test_case,
+            Config {
+                sever_guid: 1919810,
+                advertisement: Bytes::from_static(b"hello"),
+                min_mtu: 800,
+                max_mtu: 1400,
+                support_version: vec![8, 11, 12],
+                max_pending: 10,
+            },
+        );
         tokio::pin!(handler);
         assert_eq!(
             handler.next().await.unwrap().0,
@@ -393,9 +386,6 @@ mod test {
                     encryption_enabled: false
                 },
             ]
-            .into_iter()
-            .map(Packet::Unconnected)
-            .collect::<Vec<_>>()
         );
     }
 
@@ -413,24 +403,25 @@ mod test {
             .collect(),
             dst: vec![],
         };
-        let handler = test_case.handle_offline(Config {
-            sever_guid: 1919810,
-            advertisement: Bytes::from_static(b"hello"),
-            min_mtu: 800,
-            max_mtu: 1400,
-            support_version: vec![8, 11, 12],
-            max_pending: 10,
-        });
+        let handler = OfflineHandler::new(
+            test_case,
+            Config {
+                sever_guid: 1919810,
+                advertisement: Bytes::from_static(b"hello"),
+                min_mtu: 800,
+                max_mtu: 1400,
+                support_version: vec![8, 11, 12],
+                max_pending: 10,
+            },
+        );
         tokio::pin!(handler);
         assert!(handler.next().await.is_none());
         assert_eq!(
             handler.project().frame.dst,
-            vec![Packet::Unconnected(
-                unconnected::Packet::ConnectionRequestFailed {
-                    magic: (),
-                    server_guid: 1919810,
-                }
-            )]
+            vec![unconnected::Packet::ConnectionRequestFailed {
+                magic: (),
+                server_guid: 1919810,
+            }]
         );
     }
 
@@ -462,17 +453,17 @@ mod test {
                     dst: vec![],
                 },
                 vec![
-                    Packet::Unconnected(unconnected::Packet::IncompatibleProtocol {
+                    unconnected::Packet::IncompatibleProtocol {
                         server_protocol: 12,
                         magic: (),
                         server_guid: 1919810,
-                    }),
-                    Packet::Unconnected(unconnected::Packet::OpenConnectionReply1 {
+                    },
+                    unconnected::Packet::OpenConnectionReply1 {
                         magic: (),
                         server_guid: 1919810,
                         use_encryption: false,
                         mtu: 1000,
-                    }),
+                    },
                 ],
             ),
             (
@@ -489,13 +480,11 @@ mod test {
                     .collect(),
                     dst: vec![],
                 },
-                vec![Packet::Unconnected(
-                    unconnected::Packet::IncompatibleProtocol {
-                        server_protocol: 12,
-                        magic: (),
-                        server_guid: 1919810,
-                    },
-                )],
+                vec![unconnected::Packet::IncompatibleProtocol {
+                    server_protocol: 12,
+                    magic: (),
+                    server_guid: 1919810,
+                }],
             ),
             (
                 TestCase {
@@ -531,29 +520,29 @@ mod test {
                     dst: vec![],
                 },
                 vec![
-                    Packet::Unconnected(unconnected::Packet::OpenConnectionReply1 {
+                    unconnected::Packet::OpenConnectionReply1 {
                         magic: (),
                         server_guid: 1919810,
                         use_encryption: false,
                         mtu: 1000,
-                    }),
-                    Packet::Unconnected(unconnected::Packet::OpenConnectionReply2 {
+                    },
+                    unconnected::Packet::OpenConnectionReply2 {
                         magic: (),
                         server_guid: 1919810,
                         client_address: "0.0.0.5:1".parse().unwrap(),
                         mtu: 1000,
                         encryption_enabled: false, // must set to false
-                    }),
-                    Packet::Unconnected(unconnected::Packet::OpenConnectionReply1 {
+                    },
+                    unconnected::Packet::OpenConnectionReply1 {
                         magic: (),
                         server_guid: 1919810,
                         use_encryption: false,
                         mtu: 1000,
-                    }),
-                    Packet::Unconnected(unconnected::Packet::AlreadyConnected {
+                    },
+                    unconnected::Packet::AlreadyConnected {
                         magic: (),
                         server_guid: 1919810,
-                    }),
+                    },
                 ],
             ),
             (
@@ -579,29 +568,32 @@ mod test {
                     dst: vec![],
                 },
                 vec![
-                    Packet::Unconnected(unconnected::Packet::OpenConnectionReply1 {
+                    unconnected::Packet::OpenConnectionReply1 {
                         magic: (),
                         server_guid: 1919810,
                         use_encryption: false,
                         mtu: 800,
-                    }),
-                    Packet::Unconnected(unconnected::Packet::AlreadyConnected {
+                    },
+                    unconnected::Packet::AlreadyConnected {
                         magic: (),
                         server_guid: 1919810,
-                    }),
+                    },
                 ],
             ),
         ];
 
         for (case, expect) in test_cases {
-            let handler = case.handle_offline(Config {
-                sever_guid: 1919810,
-                advertisement: Bytes::from_static(b"hello"),
-                min_mtu: 800,
-                max_mtu: 1400,
-                support_version: vec![8, 11, 12],
-                max_pending: 10,
-            });
+            let handler = OfflineHandler::new(
+                case,
+                Config {
+                    sever_guid: 1919810,
+                    advertisement: Bytes::from_static(b"hello"),
+                    min_mtu: 800,
+                    max_mtu: 1400,
+                    support_version: vec![8, 11, 12],
+                    max_pending: 10,
+                },
+            );
             tokio::pin!(handler);
             assert!(handler.next().await.is_none());
             assert_eq!(handler.project().frame.dst, expect);

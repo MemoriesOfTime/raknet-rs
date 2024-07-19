@@ -11,24 +11,24 @@ use crate::packet::connected::{FrameBody, Reliability};
 use crate::Message;
 
 pin_project! {
-    // FrameEncoder encodes internal frame body into Message
-    pub(crate) struct FrameEncoder<F> {
+    // BodyEncoder encodes internal frame body into Message
+    pub(crate) struct BodyEncoder<F> {
         #[pin]
         frame: F,
         link: SharedLink,
     }
 }
 
-pub(crate) trait FrameEncoded: Sized {
-    fn frame_encoded(self, link: SharedLink) -> FrameEncoder<Self>;
+pub(crate) trait BodyEncoded: Sized {
+    fn body_encoded(self, link: SharedLink) -> BodyEncoder<Self>;
 }
 
-impl<F> FrameEncoded for F
+impl<F> BodyEncoded for F
 where
     F: Sink<Message, Error = CodecError>,
 {
-    fn frame_encoded(self, link: SharedLink) -> FrameEncoder<Self> {
-        FrameEncoder { frame: self, link }
+    fn body_encoded(self, link: SharedLink) -> BodyEncoder<Self> {
+        BodyEncoder { frame: self, link }
     }
 }
 
@@ -45,7 +45,7 @@ fn encode(body: FrameBody) -> Message {
         FrameBody::DisconnectNotification => Reliability::Reliable,
         FrameBody::DetectLostConnections => Reliability::Reliable,
         FrameBody::User(_) => {
-            panic!("you should not send user packet into FrameEncoder, please send `Message`")
+            panic!("you should not send user packet into BodyEncoder, please send `Message`")
         }
     };
     let mut data = BytesMut::new();
@@ -57,7 +57,7 @@ fn encode(body: FrameBody) -> Message {
     )
 }
 
-impl<F> FrameEncoder<F>
+impl<F> BodyEncoder<F>
 where
     F: Sink<Message, Error = CodecError>,
 {
@@ -83,7 +83,7 @@ where
     }
 }
 
-impl<F> Sink<Message> for FrameEncoder<F>
+impl<F> Sink<Message> for BodyEncoder<F>
 where
     F: Sink<Message, Error = CodecError>,
 {
@@ -107,7 +107,7 @@ where
     }
 }
 
-impl<F> Sink<FrameBody> for FrameEncoder<F>
+impl<F> Sink<FrameBody> for BodyEncoder<F>
 where
     F: Sink<Message, Error = CodecError>,
 {

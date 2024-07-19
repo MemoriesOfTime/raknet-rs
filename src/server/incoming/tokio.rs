@@ -12,26 +12,18 @@ use minitrace::collector::SpanContext;
 use minitrace::Span;
 use pin_project_lite::pin_project;
 use tokio::net::UdpSocket as TokioUdpSocket;
-use tokio_util::udp::UdpFramed;
 
 use super::{Config, MakeIncoming};
-use crate::codec::tokio::Codec;
+use crate::codec::frame::Framed;
 use crate::codec::{Decoded, Encoded};
-use crate::errors::CodecError;
 use crate::guard::HandleOutgoing;
 use crate::io::{SeparatedIO, IO};
 use crate::link::{SharedLink, TransferLink};
 use crate::packet::connected::{self, FrameSet, FramesMut};
-use crate::packet::Packet;
-use crate::server::handler::offline;
-use crate::server::handler::offline::HandleOffline;
+use crate::server::handler::offline::OfflineHandler;
 use crate::server::handler::online::HandleOnline;
 use crate::state::{CloseOnDrop, IncomingStateManage, OutgoingStateManage};
-use crate::utils::{Log, Logged, TraceStreamExt};
-
-type OfflineHandler = offline::OfflineHandler<
-    Log<UdpFramed<Codec, Arc<TokioUdpSocket>>, (Packet<FramesMut>, SocketAddr), CodecError>,
->;
+use crate::utils::TraceStreamExt;
 
 struct RouteEntry {
     router_tx: Sender<FrameSet<FramesMut>>,
@@ -63,7 +55,7 @@ impl RouteEntry {
 pin_project! {
     struct Incoming {
         #[pin]
-        offline: OfflineHandler,
+        offline: OfflineHandler<Framed<Arc<TokioUdpSocket>>>,
         config: Config,
         socket: Arc<TokioUdpSocket>,
         router: HashMap<SocketAddr, RouteEntry>,
@@ -75,11 +67,10 @@ impl MakeIncoming for TokioUdpSocket {
     fn make_incoming(self, config: Config) -> impl Stream<Item = impl IO> {
         let socket = Arc::new(self);
         Incoming {
-            offline: UdpFramed::new(Arc::clone(&socket), Codec)
-                .logged_err(|err| {
-                    debug!("codec error: {err} when decode offline frames");
-                })
-                .handle_offline(config.offline_config()),
+            offline: OfflineHandler::new(
+                Framed::new(Arc::clone(&socket), config.max_mtu as usize),
+                config.offline_config(),
+            ),
             socket,
             config,
             router: HashMap::new(),
@@ -121,7 +112,7 @@ impl Stream for Incoming {
             entry.deliver(pack);
             this.router.insert(peer.addr, entry);
 
-            let dst = UdpFramed::new(Arc::clone(this.socket), Codec)
+            let dst = Framed::new(Arc::clone(this.socket), this.config.max_mtu as usize)
                 .handle_outgoing(
                     Arc::clone(&link),
                     this.config.send_buf_cap,

@@ -1,42 +1,42 @@
-use bytes::{Buf, BytesMut};
-use tokio_util::codec::{Decoder, Encoder};
+use std::io;
+use std::mem::MaybeUninit;
+use std::net::SocketAddr;
+use std::task::{ready, Context, Poll};
 
-use crate::errors::CodecError;
-use crate::packet::connected::{Frames, FramesMut, FramesRef};
-use crate::packet::Packet;
+use bytes::{BufMut, BytesMut};
+use tokio::net::UdpSocket as TokioUdpSocket;
 
-/// The raknet codec
-pub(crate) struct Codec;
+use super::AsyncSocket;
 
-impl<B: Buf> Encoder<Packet<Frames<B>>> for Codec {
-    type Error = CodecError;
+impl<S: AsRef<TokioUdpSocket> + Unpin> AsyncSocket for S {
+    fn poll_recv_from(
+        &self,
+        cx: &mut Context<'_>,
+        rd: &mut BytesMut,
+    ) -> Poll<io::Result<SocketAddr>> {
+        // Safety: `chunk_mut()` returns a `&mut UninitSlice`, and `UninitSlice` is a
+        // transparent wrapper around `[MaybeUninit<u8>]`.
+        let buf = unsafe { &mut *(rd.chunk_mut() as *mut _ as *mut [MaybeUninit<u8>]) };
+        let mut read = tokio::io::ReadBuf::uninit(buf);
+        let ptr = read.filled().as_ptr();
+        let res = ready!(self.as_ref().poll_recv_from(cx, &mut read));
 
-    fn encode(&mut self, item: Packet<Frames<B>>, dst: &mut BytesMut) -> Result<(), Self::Error> {
-        item.write(dst);
-        Ok(())
+        assert_eq!(ptr, read.filled().as_ptr());
+        let addr = res?;
+
+        // Safety: This is guaranteed to be the number of initialized (and read) bytes due
+        // to the invariants provided by `ReadBuf::filled`.
+        unsafe { rd.advance_mut(read.filled().len()) };
+
+        Poll::Ready(Ok(addr))
     }
-}
 
-// encode from a frames slice
-impl<'a, B: Buf + Clone> Encoder<Packet<FramesRef<'a, B>>> for Codec {
-    type Error = CodecError;
-
-    fn encode(
-        &mut self,
-        item: Packet<FramesRef<'a, B>>,
-        dst: &mut BytesMut,
-    ) -> Result<(), Self::Error> {
-        item.write(dst);
-        Ok(())
-    }
-}
-
-impl Decoder for Codec {
-    type Error = CodecError;
-    // we might want to update the package during codec
-    type Item = Packet<FramesMut>;
-
-    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        Packet::read(src)
+    fn poll_send_to(
+        &self,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+        target: SocketAddr,
+    ) -> Poll<io::Result<usize>> {
+        self.as_ref().poll_send_to(cx, buf, target)
     }
 }

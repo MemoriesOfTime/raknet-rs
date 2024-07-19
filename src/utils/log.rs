@@ -5,8 +5,6 @@ use futures::{Sink, Stream};
 use pin_project_lite::pin_project;
 
 pub(crate) trait Logged<T, E>: Sized {
-    fn logged_err(self, f: impl Fn(&E) + Send + Sync + 'static) -> Log<Self, T, E>;
-
     fn logged_all(
         self,
         ok_f: impl Fn(&T) + Send + Sync + 'static,
@@ -18,14 +16,6 @@ impl<F, T, E> Logged<T, E> for F
 where
     F: Stream<Item = Result<T, E>>,
 {
-    fn logged_err(self, f: impl Fn(&E) + Send + Sync + 'static) -> Log<Self, T, E> {
-        Log {
-            source: self,
-            err_f: Box::new(f),
-            ok_f: None,
-        }
-    }
-
     fn logged_all(
         self,
         ok_f: impl Fn(&T) + Send + Sync + 'static,

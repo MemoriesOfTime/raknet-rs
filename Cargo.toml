@@ -26,11 +26,6 @@ pin-project-lite = "0.2"
 rand = "0.8"
 thiserror = "1"
 tokio = { version = "1", features = ["io-util", "macros"], optional = true }
-tokio-util = { version = "0.7", features = [
-    "codec",
-    "net",
-    "io-util",
-], optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["async_futures", "async_tokio"] }
@@ -46,7 +41,7 @@ tokio-macros = { git = "https://github.com/tokio-rs/tokio.git", rev = "833ee027d
 
 [features]
 default = ["tokio-udp"]
-tokio-udp = ["dep:tokio-util", "dep:tokio"]
+tokio-udp = ["dep:tokio"]
 micro-bench = []
 
 # TODO: move bench marks to a separate crate cz it maybe slow to compile with minitrace enabled at [dev-dependencies]

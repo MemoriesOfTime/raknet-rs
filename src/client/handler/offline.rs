@@ -7,7 +7,7 @@ use log::debug;
 use pin_project_lite::pin_project;
 
 use crate::errors::{CodecError, Error};
-use crate::packet::connected::{self, Frames, FramesMut};
+use crate::packet::connected::{self, FramesMut};
 use crate::packet::{unconnected, Packet};
 use crate::RoleContext;
 
@@ -16,34 +16,6 @@ pub(crate) struct Config {
     pub(crate) mtu: u16,
     pub(crate) client_guid: u64,
     pub(crate) protocol_version: u8,
-}
-
-pub(crate) trait HandleOffline: Sized {
-    fn handle_offline(self, server_addr: SocketAddr, config: Config) -> OfflineHandler<Self>;
-}
-
-impl<F> HandleOffline for F
-where
-    F: Stream<Item = (Packet<FramesMut>, SocketAddr)>
-        + Sink<(Packet<Frames>, SocketAddr), Error = CodecError>,
-{
-    fn handle_offline(self, server_addr: SocketAddr, config: Config) -> OfflineHandler<Self> {
-        OfflineHandler {
-            frame: Some(self),
-            state: State::SendOpenConnectionRequest1(Packet::Unconnected(
-                unconnected::Packet::OpenConnectionRequest1 {
-                    magic: (),
-                    protocol_version: config.protocol_version,
-                    mtu: config.mtu,
-                },
-            )),
-            server_addr,
-            role: RoleContext::Client {
-                guid: config.client_guid,
-            },
-            config,
-        }
-    }
 }
 
 pin_project! {
@@ -56,17 +28,42 @@ pin_project! {
     }
 }
 
+impl<F> OfflineHandler<F>
+where
+    F: Stream<Item = (Packet<FramesMut>, SocketAddr)>
+        + Sink<(unconnected::Packet, SocketAddr), Error = CodecError>
+        + Unpin,
+{
+    pub(crate) fn new(frame: F, server_addr: SocketAddr, config: Config) -> Self {
+        Self {
+            frame: Some(frame),
+            state: State::SendOpenConnReq1(unconnected::Packet::OpenConnectionRequest1 {
+                magic: (),
+                protocol_version: config.protocol_version,
+                mtu: config.mtu,
+            }),
+            server_addr,
+            role: RoleContext::Client {
+                guid: config.client_guid,
+            },
+            config,
+        }
+    }
+}
+
 enum State {
-    SendOpenConnectionRequest1(Packet<Frames>),
-    WaitOpenConnectionReply1,
-    SendOpenConnectionRequest2(Packet<Frames>),
-    WaitOpenConnectionReply2,
+    SendOpenConnReq1(unconnected::Packet),
+    SendOpenConnReq1Flush,
+    WaitOpenConnReply1,
+    SendOpenConnReq2(unconnected::Packet),
+    SendOpenConnReq2Flush,
+    WaitOpenConnReply2,
 }
 
 impl<F> Future for OfflineHandler<F>
 where
     F: Stream<Item = (Packet<FramesMut>, SocketAddr)>
-        + Sink<(Packet<Frames>, SocketAddr), Error = CodecError>
+        + Sink<(unconnected::Packet, SocketAddr), Error = CodecError>
         + Unpin,
 {
     type Output = Result<impl Stream<Item = connected::Packet<FramesMut>>, Error>;
@@ -76,7 +73,7 @@ where
         let frame = this.frame.as_mut().unwrap();
         loop {
             match this.state {
-                State::SendOpenConnectionRequest1(pack) => {
+                State::SendOpenConnReq1(pack) => {
                     if let Err(err) = ready!(frame.poll_ready_unpin(cx)) {
                         debug!(
                             "[{}] SendingOpenConnectionRequest1 poll_ready error: {err}, retrying",
@@ -91,6 +88,9 @@ where
                         );
                         continue;
                     }
+                    *this.state = State::SendOpenConnReq1Flush;
+                }
+                State::SendOpenConnReq1Flush => {
                     if let Err(err) = ready!(frame.poll_flush_unpin(cx)) {
                         debug!(
                             "[{}] SendingOpenConnectionRequest1 poll_flush error: {err}, retrying",
@@ -98,9 +98,10 @@ where
                         );
                         continue;
                     }
-                    *this.state = State::WaitOpenConnectionReply1;
+                    *this.state = State::WaitOpenConnReply1;
                 }
-                State::WaitOpenConnectionReply1 => {
+                State::WaitOpenConnReply1 => {
+                    // TODO: Add timeout
                     let Some((pack, addr)) = ready!(frame.poll_next_unpin(cx)) else {
                         return Poll::Ready(Err(Error::ConnectionClosed));
                     };
@@ -111,17 +112,17 @@ where
                         Packet::Unconnected(unconnected::Packet::OpenConnectionReply1 {
                             mtu,
                             ..
-                        }) => Packet::Unconnected(unconnected::Packet::OpenConnectionRequest2 {
+                        }) => unconnected::Packet::OpenConnectionRequest2 {
                             magic: (),
                             server_address: *this.server_addr,
                             mtu,
                             client_guid: this.config.client_guid,
-                        }),
+                        },
                         _ => continue,
                     };
-                    *this.state = State::SendOpenConnectionRequest2(next);
+                    *this.state = State::SendOpenConnReq2(next);
                 }
-                State::SendOpenConnectionRequest2(pack) => {
+                State::SendOpenConnReq2(pack) => {
                     if let Err(err) = ready!(frame.poll_ready_unpin(cx)) {
                         debug!(
                             "[{}] SendOpenConnectionRequest2 poll_ready error: {err}, retrying",
@@ -136,6 +137,9 @@ where
                         );
                         continue;
                     }
+                    *this.state = State::SendOpenConnReq2Flush;
+                }
+                State::SendOpenConnReq2Flush => {
                     if let Err(err) = ready!(frame.poll_flush_unpin(cx)) {
                         debug!(
                             "[{}] SendOpenConnectionRequest2 poll_flush error: {err}, retrying",
@@ -143,9 +147,10 @@ where
                         );
                         continue;
                     }
-                    *this.state = State::WaitOpenConnectionReply2;
+                    *this.state = State::WaitOpenConnReply2;
                 }
-                State::WaitOpenConnectionReply2 => {
+                State::WaitOpenConnReply2 => {
+                    // TODO: Add timeout
                     let Some((pack, addr)) = ready!(frame.poll_next_unpin(cx)) else {
                         return Poll::Ready(Err(Error::ConnectionClosed));
                     };
