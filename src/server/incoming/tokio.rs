@@ -130,9 +130,9 @@ impl Stream for Incoming {
                 .manage_incoming_state()
                 .handle_online(role, peer.addr, Arc::clone(&link))
                 .enter_on_item(move || {
-                    Span::root("conn", SpanContext::random()).with_properties(|| {
+                    Span::root("online", SpanContext::random()).with_properties(|| {
                         [
-                            ("addr", peer.addr.to_string()),
+                            ("peer", peer.addr.to_string()),
                             ("mtu", peer.mtu.to_string()),
                         ]
                     })

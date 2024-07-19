@@ -155,6 +155,13 @@ impl<'a, B: Buf + Clone> Packet<FramesRef<'a, B>> {
 }
 
 impl Packet<FramesMut> {
+    pub(crate) fn pack_type(&self) -> PackType {
+        match self {
+            Packet::Unconnected(packet) => packet.pack_type(),
+            Packet::Connected(packet) => packet.pack_type(),
+        }
+    }
+
     pub(crate) fn read(buf: &mut BytesMut) -> Result<Option<Self>, CodecError> {
         if buf.is_empty() {
             return Ok(None);

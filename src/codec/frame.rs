@@ -6,6 +6,7 @@ use std::task::{ready, Context, Poll};
 use bytes::{Buf, BytesMut};
 use futures::{Sink, Stream};
 use log::error;
+use minitrace::{Event, Span};
 
 use super::AsyncSocket;
 use crate::errors::CodecError;
@@ -21,6 +22,8 @@ pub(crate) struct Framed<T> {
     flushed: bool,
     is_readable: bool,
     current_addr: Option<SocketAddr>,
+    decode_span: Option<Span>,
+    read_span: Option<Span>,
 }
 
 impl<T: AsyncSocket> Framed<T> {
@@ -34,6 +37,8 @@ impl<T: AsyncSocket> Framed<T> {
             flushed: true,
             is_readable: false,
             current_addr: None,
+            decode_span: None,
+            read_span: None,
         }
     }
 
@@ -107,27 +112,53 @@ impl<T: AsyncSocket> Stream for Framed<T> {
                         let current_addr = pin
                             .current_addr
                             .expect("will always be set before this line is called");
-
+                        Event::add_to_parent(
+                            format!("{:?} decoded", frame.pack_type()),
+                            pin.decode_span.as_ref().unwrap(),
+                            || [],
+                        );
                         return Poll::Ready(Some((frame, current_addr)));
                     }
-                    Err(err) => error!("failed to decode packet: {:?}", err),
+                    Err(err) => {
+                        Event::add_to_parent(
+                            err.to_string(),
+                            pin.decode_span.as_ref().unwrap(),
+                            || [],
+                        );
+                        error!("failed to decode packet: {:?}", err);
+                    }
                     Ok(None) => {}
                 }
+                // if this line has been reached then decode has returned `None` or an error
 
-                // if this line has been reached then decode has returned `None`.
+                pin.decode_span.take(); // finish the decode span
                 pin.is_readable = false;
                 pin.rd.clear();
             }
 
             // We're out of data. Try and fetch more data to decode
+            pin.read_span
+                .get_or_insert_with(|| Span::enter_with_local_parent("codec.frame.read"));
             let addr = match ready!(pin.socket.poll_recv_from(cx, &mut pin.rd)) {
                 Ok(addr) => addr,
                 Err(err) => {
                     error!("failed to receive data: {:?}", err);
+                    Event::add_to_parent(err.to_string(), pin.read_span.as_ref().unwrap(), || []);
                     pin.rd.clear();
                     continue;
                 }
             };
+            // finish the read span
+            pin.read_span.take();
+            // start a new decode span
+            pin.decode_span.get_or_insert_with(|| {
+                Span::enter_with_local_parent("codec.frame.decode").with_properties(|| {
+                    [
+                        ("addr", addr.to_string()),
+                        ("datagram_size", pin.rd.len().to_string()),
+                    ]
+                })
+            });
             pin.current_addr = Some(addr);
             pin.is_readable = true;
         }

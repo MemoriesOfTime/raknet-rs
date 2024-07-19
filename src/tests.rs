@@ -46,19 +46,19 @@ impl Drop for TestTraceLogGuard {
             depth: usize,
         ) {
             let span = &spans[&span_id];
-            let mut properties = vec![];
+            let mut properties = String::new();
             for (key, value) in &span.properties {
-                properties.push(format!("{}: {}", key, value));
+                properties.push_str(&format!("{}: {}, ", key, value));
             }
             let mut events = String::new();
             for ev in &span.events {
                 events.push_str(&format!("'{}'", ev.name));
             }
             eprintln!(
-                "{}{}({}, {{{}}}) [{}us]",
+                "{}{}({}{{{}}}) [{}us]",
                 "  ".repeat(depth),
                 span.name,
-                properties.join(", "),
+                properties,
                 events,
                 span.duration_ns as f64 / 1_000.0,
             );

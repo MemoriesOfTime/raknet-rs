@@ -7,6 +7,8 @@ use std::task::{Context, Poll};
 use bytes::Bytes;
 use futures::{ready, Sink, Stream};
 use log::{debug, error, warn};
+use minitrace::collector::SpanContext;
+use minitrace::Span;
 use pin_project_lite::pin_project;
 
 use crate::errors::CodecError;
@@ -42,6 +44,7 @@ pin_project! {
         connected: HashMap<SocketAddr, PeerContext>,
         state: OfflineState,
         role: RoleContext,
+        read_span: Option<Span>,
     }
 }
 
@@ -62,6 +65,7 @@ where
             config,
             connected: HashMap::new(),
             state: OfflineState::Listening,
+            read_span: None,
         }
     }
 
@@ -128,6 +132,18 @@ where
                 }
             }
 
+            let guard = this
+                .read_span
+                .get_or_insert_with(|| {
+                    Span::root("offline", SpanContext::random()).with_properties(|| {
+                        [
+                            ("role", this.role.to_string()),
+                            ("pending_size", this.pending.len().to_string()),
+                            ("connected_size", this.connected.len().to_string()),
+                        ]
+                    })
+                })
+                .set_local_parent();
             let Some((packet, addr)) = ready!(this.frame.as_mut().poll_next(cx)) else {
                 return Poll::Ready(None);
             };
@@ -136,6 +152,8 @@ where
                 Packet::Unconnected(pack) => pack,
                 Packet::Connected(pack) => {
                     if let Some(peer) = this.connected.get(&addr) {
+                        drop(guard);
+                        this.read_span.take();
                         return Poll::Ready(Some((pack, peer.clone())));
                     }
                     debug!(
