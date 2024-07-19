@@ -10,6 +10,7 @@ use pin_project_lite::pin_project;
 use crate::link::SharedLink;
 use crate::packet::connected::FrameBody;
 use crate::packet::unconnected;
+use crate::utils::timestamp;
 use crate::RoleContext;
 
 pub(crate) trait HandleOnline: Sized {
@@ -149,11 +150,4 @@ where
             }
         }
     }
-}
-
-fn timestamp() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as i64
 }

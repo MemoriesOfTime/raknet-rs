@@ -11,7 +11,7 @@ use parking_lot::Mutex;
 use tokio::net::UdpSocket;
 
 use crate::client::{self, ConnectTo};
-use crate::io::{TraceInfo, IO};
+use crate::io::{Ping, TraceInfo, IO};
 use crate::server::{self, MakeIncoming};
 
 #[allow(clippy::type_complexity)]
@@ -141,12 +141,13 @@ async fn test_tokio_udp_works() {
     tokio::spawn(echo_server);
 
     let client = async {
-        let mut io = UdpSocket::bind("0.0.0.0:0")
+        let io = UdpSocket::bind("0.0.0.0:0")
             .await
             .unwrap()
             .connect_to("127.0.0.1:19132", make_client_conf())
             .await
             .unwrap();
+        tokio::pin!(io);
         io.send(Bytes::from_iter(repeat(0xfe).take(256)))
             .await
             .unwrap();
@@ -168,13 +169,16 @@ async fn test_tokio_udp_works() {
             io.next().await.unwrap(),
             Bytes::from_iter(repeat(0xfe).take(1024))
         );
+        io.as_mut().ping().await.unwrap();
         io.send(Bytes::from_iter(repeat(0xfe).take(2048)))
             .await
             .unwrap();
+        io.as_mut().ping().await.unwrap();
         assert_eq!(
             io.next().await.unwrap(),
             Bytes::from_iter(repeat(0xfe).take(2048))
         );
+        io.as_mut().ping().await.unwrap();
         io.send(Bytes::from_iter(repeat(0xfe).take(4096)))
             .await
             .unwrap();

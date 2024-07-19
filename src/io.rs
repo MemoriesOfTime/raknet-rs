@@ -2,12 +2,13 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use bytes::Bytes;
-use futures::{Sink, Stream};
+use futures::{Future, Sink, SinkExt, Stream};
 use minitrace::collector::TraceId;
 use pin_project_lite::pin_project;
 
 use crate::errors::Error;
-use crate::packet::connected::Reliability;
+use crate::packet::connected::{FrameBody, Reliability};
+use crate::utils::timestamp;
 use crate::Message;
 
 /// Trace info extension for io
@@ -132,5 +133,25 @@ where
         impl Sink<Message, Error = Error> + Send,
     ) {
         (self.src, self.dst)
+    }
+}
+
+/// Ping extension for client, experimental
+pub trait Ping {
+    fn ping(self: Pin<&mut Self>) -> impl Future<Output = Result<(), Error>> + Send;
+}
+
+impl<I, O> Ping for SeparatedIO<I, O>
+where
+    O: Sink<Message, Error = Error> + Sink<FrameBody, Error = Error> + Send,
+    I: Stream<Item = Bytes> + TraceInfo + Send,
+{
+    async fn ping(self: Pin<&mut Self>) -> Result<(), Error> {
+        self.project()
+            .dst
+            .send(FrameBody::ConnectedPing {
+                client_timestamp: timestamp(),
+            })
+            .await
     }
 }

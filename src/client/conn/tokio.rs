@@ -12,7 +12,7 @@ use crate::codec::frame::Framed;
 use crate::codec::{Decoded, Encoded};
 use crate::errors::Error;
 use crate::guard::HandleOutgoing;
-use crate::io::{SeparatedIO, IO};
+use crate::io::{Ping, SeparatedIO, IO};
 use crate::link::TransferLink;
 use crate::state::{IncomingStateManage, OutgoingStateManage};
 use crate::utils::TraceStreamExt;
@@ -23,7 +23,7 @@ impl ConnectTo for TokioUdpSocket {
         self,
         addrs: impl ToSocketAddrs,
         config: super::Config,
-    ) -> Result<impl IO, Error> {
+    ) -> Result<impl IO + Ping, Error> {
         let socket = Arc::new(self);
         let mut lookups = addrs.to_socket_addrs()?;
         let addr = loop {

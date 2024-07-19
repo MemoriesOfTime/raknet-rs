@@ -2,7 +2,7 @@ use std::net::ToSocketAddrs;
 
 use super::handler::offline;
 use crate::errors::Error;
-use crate::io::IO;
+use crate::io::{Ping, IO};
 use crate::{codec, RoleContext};
 
 /// Connection implementation by using tokio's UDP framework
@@ -138,5 +138,9 @@ impl Config {
 
 pub trait ConnectTo: Sized {
     #[allow(async_fn_in_trait)] // No need to consider the auto trait for now.
-    async fn connect_to(self, addr: impl ToSocketAddrs, config: Config) -> Result<impl IO, Error>;
+    async fn connect_to(
+        self,
+        addr: impl ToSocketAddrs,
+        config: Config,
+    ) -> Result<impl IO + Ping, Error>;
 }
