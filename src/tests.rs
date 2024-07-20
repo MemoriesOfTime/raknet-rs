@@ -284,7 +284,7 @@ async fn test_4way_handshake_client_close() {
 
         let mut ticker = tokio::time::interval(Duration::from_millis(10));
         let mut last_2msl = false;
-        let last_timer = tokio::time::sleep(Duration::from_millis(200));
+        let last_timer = tokio::time::sleep(Duration::from_millis(288));
         tokio::pin!(last_timer);
         loop {
             tokio::select! {

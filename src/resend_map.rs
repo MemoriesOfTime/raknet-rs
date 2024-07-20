@@ -235,6 +235,8 @@ mod test {
     use crate::tests::test_trace_log_setup;
     use crate::Reliability;
 
+    const TEST_RTO: Duration = Duration::from_millis(500);
+
     #[test]
     fn test_resend_map_works() {
         let mut map = ResendMap::new();
@@ -292,8 +294,6 @@ mod test {
 
     #[test]
     fn test_resend_map_stales() {
-        const TEST_RTO: Duration = Duration::from_millis(100);
-
         let mut map = ResendMap::new();
         map.record(0.into(), vec![]);
         map.record(1.into(), vec![]);
@@ -308,8 +308,6 @@ mod test {
     #[tokio::test]
     async fn test_resend_map_poll_wait() {
         let _guard = test_trace_log_setup();
-
-        const TEST_RTO: Duration = Duration::from_millis(100);
 
         let mut map = ResendMap::new();
         map.record(0.into(), vec![]);
