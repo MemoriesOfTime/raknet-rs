@@ -1,3 +1,5 @@
+#![allow(clippy::use_debug)]
+
 use std::collections::HashMap;
 use std::iter::repeat;
 use std::sync::Arc;
@@ -93,7 +95,7 @@ impl Drop for TestTraceLogGuard {
             if list.is_empty() {
                 continue;
             }
-            eprintln!("{trace_id:?}",);
+            eprintln!("{trace_id:?}");
             let l = &list[&SpanId::default()];
             for (i, root) in l.iter().enumerate() {
                 dfs(&list, &spans_map, *root, 0, i == l.len() - 1);
