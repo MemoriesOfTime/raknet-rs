@@ -6,8 +6,8 @@ use crate::packet::PackType;
 mod ack;
 mod frame_set;
 
-pub(crate) use self::ack::*;
-pub(crate) use self::frame_set::*;
+pub(crate) use ack::*;
+pub(crate) use frame_set::*;
 
 use super::{ACK_FLAG, CONTINUOUS_SEND_FLAG, NACK_FLAG, NEEDS_B_AND_AS_FLAG, VALID_FLAG};
 
