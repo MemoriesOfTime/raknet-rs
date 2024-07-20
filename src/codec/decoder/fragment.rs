@@ -13,7 +13,6 @@ use pin_project_lite::pin_project;
 use crate::errors::CodecError;
 use crate::link::SharedLink;
 use crate::packet::connected::{Fragment, Frame, FrameMut, FrameSet, FramesMut};
-use crate::utils::u24;
 
 const DEFAULT_DEFRAGMENT_BUF_SIZE: usize = 512;
 
@@ -56,8 +55,6 @@ pin_project! {
         // users sending a large number of parted IDs.
         parts: LruCache<u16, BinaryHeap<FramePart>>,
         buffer: VecDeque<FrameSet<Frame>>,
-        // maximum sequence number wish to be read
-        max_seq_num_read: u24,
         link: SharedLink,
         span: Option<Span>,
     }
@@ -87,7 +84,6 @@ where
             limit_size,
             parts: LruCache::new(NonZeroUsize::new(limit_parted).expect("limit_parted > 0")),
             buffer: VecDeque::with_capacity(DEFAULT_DEFRAGMENT_BUF_SIZE),
-            max_seq_num_read: 0.into(),
             link,
             span: None,
         }
@@ -138,8 +134,6 @@ where
                         return Poll::Ready(Some(Err(CodecError::PartedFrame(err))));
                     }
                     if *this.limit_size != 0 && parted_size > *this.limit_size {
-                        // we discarded this packet and prevented the peer from resending it.
-                        this.link.outgoing_ack(frame_set.seq_num);
                         let err = format!(
                             "parted_size {} exceed limit_size {}",
                             parted_size, *this.limit_size
@@ -186,17 +180,6 @@ where
                     seq_num: frame_set.seq_num,
                     set: frame.freeze(),
                 });
-            }
-
-            let seq_index = frame_set.seq_num;
-            this.link.outgoing_ack(seq_index);
-            let pre_max = *this.max_seq_num_read;
-            if pre_max <= seq_index {
-                *this.max_seq_num_read = seq_index + 1;
-                let nack = pre_max.to_u32()..seq_index.to_u32();
-                if !nack.is_empty() {
-                    this.link.outgoing_nack_batch(nack.map(u24::from));
-                }
             }
         }
     }

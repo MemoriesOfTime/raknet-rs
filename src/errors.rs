@@ -18,8 +18,6 @@ pub enum CodecError {
     OrderedFrame(String),
     #[error("maximum amount of packets in acknowledgement exceeded")]
     AckCountExceed,
-    #[error("exceed deduplication maximum gap {0}, current gap {1}")]
-    DedupExceed(usize, usize),
     #[error("magic number not matched, pos {0}, byte {1}")]
     MagicNotMatched(usize, u8),
 }

@@ -78,7 +78,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
 async fn client(addr: SocketAddr) -> Result<(), Box<dyn Error>> {
     let socket = UdpSocket::bind("0.0.0.0:0").await?;
-    let mut conn = socket
+    let conn = socket
         .connect_to(
             addr,
             client::Config::new()
@@ -88,6 +88,7 @@ async fn client(addr: SocketAddr) -> Result<(), Box<dyn Error>> {
                 .protocol_version(11),
         )
         .await?;
+    tokio::pin!(conn);
     conn.send(Bytes::from_static(b"User pack1")).await?;
     conn.send(Bytes::from_static(b"User pack2")).await?;
     let pack1 = conn.next().await.unwrap();

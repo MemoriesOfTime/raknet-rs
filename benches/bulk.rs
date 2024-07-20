@@ -100,9 +100,10 @@ fn configure_bencher(
         },
         |clients| async move {
             let mut join = vec![];
-            for mut client in clients {
+            for client in clients {
                 let handle = tokio::spawn(async move {
                     let mut ticker = tokio::time::interval(Duration::from_millis(10));
+                    tokio::pin!(client);
                     loop {
                         tokio::select! {
                             _ = client.send(Bytes::from_static(data)) => break,

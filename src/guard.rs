@@ -86,27 +86,8 @@ where
 
         // TODO: Weighted Round-Robin
 
-        // try empty outgoing buffer
         while !this.link.flush_empty() || !this.buf.is_empty() {
-            // 1st. empty the ack
-            if sent {
-                ready!(this.frame.as_mut().poll_ready(cx))?;
-                sent = false;
-            }
-            if let Some(ack) = this.link.process_outgoing_ack(this.peer.mtu) {
-                trace!(
-                    "[{}] send ack {ack:?}, total count: {}",
-                    this.role,
-                    ack.total_cnt()
-                );
-                this.frame.as_mut().start_send((
-                    Packet::Connected(connected::Packet::Ack(ack)),
-                    this.peer.addr,
-                ))?;
-                sent = true;
-            }
-
-            // 2nd. empty the nack
+            // 1st. empty the nack
             if sent {
                 ready!(this.frame.as_mut().poll_ready(cx))?;
                 sent = false;
@@ -119,6 +100,24 @@ where
                 );
                 this.frame.as_mut().start_send((
                     Packet::Connected(connected::Packet::Nack(nack)),
+                    this.peer.addr,
+                ))?;
+                sent = true;
+            }
+
+            // 2nd. empty the ack
+            if sent {
+                ready!(this.frame.as_mut().poll_ready(cx))?;
+                sent = false;
+            }
+            if let Some(ack) = this.link.process_outgoing_ack(this.peer.mtu) {
+                trace!(
+                    "[{}] send ack {ack:?}, total count: {}",
+                    this.role,
+                    ack.total_cnt()
+                );
+                this.frame.as_mut().start_send((
+                    Packet::Connected(connected::Packet::Ack(ack)),
                     this.peer.addr,
                 ))?;
                 sent = true;
@@ -160,19 +159,19 @@ where
                         reliable = true;
                     }
                     remain_mtu -= frame.size();
+                    trace!(
+                        "[{}] send frame, seq_num: {}, reliable: {}, first byte: 0x{:02x}",
+                        this.role,
+                        *this.seq_num_write_index,
+                        reliable,
+                        frame.body[0],
+                    );
                     frames.push(this.buf.pop_back().unwrap());
                     continue;
                 }
                 break;
             }
             if !frames.is_empty() {
-                trace!(
-                    "[{}] send frame set, seq_num: {}, reliable: {}, frame count: {}",
-                    this.role,
-                    *this.seq_num_write_index,
-                    reliable,
-                    frames.len(),
-                );
                 let frame_set = FrameSet {
                     seq_num: *this.seq_num_write_index,
                     set: &frames[..],
@@ -229,11 +228,24 @@ where
 
     /// Close the outgoing guard, notice that it may resend infinitely if you do not cancel it.
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        // insure all frames are received by the peer
-        while !self.resend.is_empty() || !self.buf.is_empty() || !self.link.flush_empty() {
+        // insure all frames are received by the peer at the point of closing
+        loop {
             ready!(self.as_mut().try_empty(cx))?;
             debug_assert!(self.buf.is_empty() && self.link.flush_empty());
+            ready!(self.as_mut().project().frame.poll_flush(cx))?;
+            if self.resend.is_empty() {
+                trace!(
+                    "[{}] all frames are received by the peer, close the outgoing guard",
+                    self.role
+                );
+                break;
+            }
             // wait for the next resend
+            trace!(
+                "[{}] poll_wait for next timeout, resend map size: {}",
+                self.role,
+                self.resend.size()
+            );
             ready!(self.resend.poll_wait(cx));
         }
         self.project().frame.poll_close(cx)

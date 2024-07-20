@@ -15,6 +15,7 @@ use tokio::net::UdpSocket;
 use crate::client::{self, ConnectTo};
 use crate::io::{Ping, TraceInfo, IO};
 use crate::server::{self, MakeIncoming};
+use crate::{Message, Reliability};
 
 #[allow(clippy::type_complexity)]
 pub(crate) struct TestTraceLogGuard {
@@ -231,11 +232,15 @@ async fn test_4way_handshake_client_close() {
             let io = incoming.next().await.unwrap();
             tokio::spawn(async move {
                 tokio::pin!(io);
-                let mut ticker = tokio::time::interval(Duration::from_millis(10));
+                let mut ticker = tokio::time::interval(Duration::from_millis(5));
                 loop {
                     tokio::select! {
-                        None = io.next() => {
-                            break;
+                        res = io.next() => {
+                            if let Some(res) = res {
+                                io.feed(res).await.unwrap();
+                            } else {
+                                break;
+                            }
                         }
                         _ = ticker.tick() => {
                             // flush periodically to ensure all missing packets/ack are sent
@@ -251,58 +256,48 @@ async fn test_4way_handshake_client_close() {
     };
 
     let client = async {
-        let mut io = UdpSocket::bind("0.0.0.0:0")
+        let io = UdpSocket::bind("0.0.0.0:0")
             .await
             .unwrap()
             .connect_to("127.0.0.1:19133", make_client_conf())
             .await
             .unwrap();
 
-        io.send(Bytes::from_iter(repeat(0xfe).take(1024)))
-            .await
-            .unwrap();
-
-        // split it to avoid annoying borrow checker
         let (src, dst) = IO::split(io);
 
         tokio::pin!(src);
         tokio::pin!(dst);
 
-        loop {
-            tokio::select! {
-                _ = src.next() => {
-                    // I know this's ridiculous cz all calculations are lazy, we should call `poll_next` on io to receive the ack
-                    // so that close will return.
-                    // TODO: eagerly deliver the ack on client
-                },
-                _ = dst.close() => {
-                    break;
-                }
-            }
-        }
+        let huge_msg = Bytes::from_iter(repeat(0xfe).take(2048));
+        dst.send(Message::new(
+            Reliability::ReliableOrdered,
+            0,
+            huge_msg.clone(),
+        ))
+        .await
+        .unwrap();
+        assert_eq!(src.next().await.unwrap(), huge_msg);
+
+        dst.close().await.unwrap();
 
         info!("client closed the connection, wait for server to close");
 
         let mut ticker = tokio::time::interval(Duration::from_millis(10));
-        let mut last_ticker = tokio::time::interval(Duration::from_millis(20));
-        let mut tick = 0;
+        let mut last_2msl = false;
+        let last_timer = tokio::time::sleep(Duration::from_millis(200));
+        tokio::pin!(last_timer);
         loop {
             tokio::select! {
-                None = src.next(), if tick == 0 => {
-                    info!("received close notification from server, wait for 2MSL");
-                    tick = 1;
+                None = src.next(), if !last_2msl => {
+                    info!("received close notification from server, wait for 200ms(2MSL for test purpose)");
+                    last_2msl = true;
                 }
                 _ = ticker.tick() => {
+                    // flush periodically to ensure all missing packets/ack are sent
                     dst.flush().await.unwrap();
                 }
-                _ = last_ticker.tick(), if tick > 0 => {
-                    // same as above, deliver the incoming ack
-                    assert!(src.next().await.is_none());
-                    tick += 1;
-                    // last 2MSL
-                    if tick > 10 {
-                        break;
-                    }
+                _ = &mut last_timer, if last_2msl => {
+                    break;
                 }
             };
         }

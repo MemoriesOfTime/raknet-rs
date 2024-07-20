@@ -218,12 +218,6 @@ where
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
         if matches!(this.state, IncomingState::Closed) {
-            // TODO: remove it when ack delivery is eagerly on client.
-
-            // Poll the frame even if the state is closed to because the peer can send the
-            // DisconnectNotification as it did not receive ack.
-            // This will trigger the ack of the DisconnectNotification to be delivered.
-            let _ = this.frame.as_mut().poll_next(cx); // ignore pending
             return Poll::Ready(None);
         }
         let Some(body) = ready!(this.frame.as_mut().poll_next(cx)) else {

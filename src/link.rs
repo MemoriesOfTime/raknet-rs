@@ -1,15 +1,13 @@
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, VecDeque};
-use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{ready, Context, Poll};
 
+use async_channel::Sender;
 use concurrent_queue::ConcurrentQueue;
-use futures::{Stream, StreamExt};
+use futures::Stream;
 use log::{trace, warn};
-use pin_project_lite::pin_project;
 
-use crate::packet::connected::{self, AckOrNack, Frame, FrameBody, FrameSet};
+use crate::packet::connected::{self, AckOrNack, Frame, FrameBody, FrameSet, FramesMut};
 use crate::packet::unconnected;
 use crate::resend_map::ResendMap;
 use crate::utils::u24;
@@ -68,19 +66,6 @@ impl TransferLink {
             frame_body: ConcurrentQueue::unbounded(),
             role,
         })
-    }
-
-    pub(crate) fn filter_incoming_ack<F, S>(
-        self: &SharedLink,
-        frame: F,
-    ) -> impl Stream<Item = FrameSet<S>>
-    where
-        F: Stream<Item = connected::Packet<S>>,
-    {
-        IncomingAckFilter {
-            frame,
-            link: Arc::clone(self),
-        }
     }
 
     pub(crate) fn incoming_ack(&self, records: AckOrNack) {
@@ -180,34 +165,51 @@ impl TransferLink {
     }
 }
 
-pin_project! {
-    // IncomingAckFilter delivers all acknowledgement packets into transfer link, mapping
-    // connected::Packet into FrameSet
-    pub(crate) struct IncomingAckFilter<F> {
-        #[pin]
-        frame: F,
-        link: SharedLink
-    }
+/// Router for incoming packets
+pub(crate) struct Router {
+    router_tx: Sender<FrameSet<FramesMut>>,
+    link: SharedLink,
+    seq_read: u24,
 }
 
-impl<F, S> Stream for IncomingAckFilter<F>
-where
-    F: Stream<Item = connected::Packet<S>>,
-{
-    type Item = FrameSet<S>;
+impl Router {
+    pub(crate) fn new(link: SharedLink) -> (Self, impl Stream<Item = FrameSet<FramesMut>>) {
+        let (router_tx, router_rx) = async_channel::unbounded();
+        (
+            Self {
+                router_tx,
+                link,
+                seq_read: 0.into(),
+            },
+            router_rx,
+        )
+    }
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let mut this = self.project();
-
-        loop {
-            let Some(packet) = ready!(this.frame.poll_next_unpin(cx)) else {
-                return Poll::Ready(None);
-            };
-            match packet {
-                connected::Packet::FrameSet(frame_set) => return Poll::Ready(Some(frame_set)),
-                connected::Packet::Ack(records) => this.link.incoming_ack(records),
-                connected::Packet::Nack(records) => this.link.incoming_nack(records),
-            };
+    /// Deliver the packet to the corresponding router. Return false if the connection was dropped.
+    pub(crate) fn deliver(&mut self, pack: connected::Packet<FramesMut>) -> bool {
+        if self.router_tx.is_closed() {
+            debug_assert!(Arc::strong_count(&self.link) == 1);
+            return false;
         }
+        match pack {
+            connected::Packet::FrameSet(frames) => {
+                self.link.outgoing_ack(frames.seq_num);
+
+                let seq_num = frames.seq_num;
+                let pre_read = self.seq_read;
+                if pre_read <= seq_num {
+                    self.seq_read = seq_num + 1;
+                    let nack = pre_read.to_u32()..seq_num.to_u32();
+                    if !nack.is_empty() {
+                        self.link.outgoing_nack_batch(nack.map(u24::from));
+                    }
+                }
+
+                self.router_tx.try_send(frames).unwrap();
+            }
+            connected::Packet::Ack(ack) => self.link.incoming_ack(ack),
+            connected::Packet::Nack(nack) => self.link.incoming_nack(nack),
+        };
+        true
     }
 }

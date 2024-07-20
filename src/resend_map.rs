@@ -6,7 +6,7 @@ use crate::packet::connected::{AckOrNack, Frame, Frames, Record};
 use crate::utils::u24;
 
 // TODO: use RTTEstimator to get adaptive RTO
-const RTO: Duration = Duration::from_millis(77);
+const RTO: Duration = Duration::from_millis(144);
 
 struct ResendEntry {
     frames: Option<Frames>,
@@ -96,15 +96,18 @@ impl ResendMap {
         self.map.is_empty()
     }
 
+    pub(crate) fn size(&self) -> usize {
+        self.map.len()
+    }
+
     /// `poll_wait` suspends the task when the resend map needs to wait for the next resend
     pub(crate) fn poll_wait(&self, cx: &mut Context<'_>) -> Poll<()> {
         let expired_at;
-        if let Some((_, entry)) = self.map.iter().min_by_key(|(_, entry)| entry.expired_at) {
+        if let Some((_, entry)) = self.map.iter().min_by_key(|(_, entry)| entry.expired_at)
+            && entry.expired_at > Instant::now()
+        {
             expired_at = entry.expired_at;
         } else {
-            return Poll::Ready(());
-        }
-        if expired_at <= Instant::now() {
             return Poll::Ready(());
         }
         reactor::Reactor::get().insert_timer(expired_at, cx.waker());
@@ -121,6 +124,7 @@ mod reactor {
     use std::time::{Duration, Instant};
     use std::{mem, panic, thread};
 
+    use log::trace;
     use parking_lot::{Condvar, Mutex};
 
     /// A simple timer reactor.
@@ -208,8 +212,10 @@ mod reactor {
             }
 
             if let Some(dur) = dur {
+                trace!("[timer_reactor] wait for {dur:?}");
                 self.cond.wait_for(&mut timers, dur);
             } else {
+                trace!("[timer_reactor] wait for next timer insertion");
                 self.cond.wait(&mut timers);
             }
         }
@@ -226,6 +232,7 @@ mod test {
 
     use super::ResendMap;
     use crate::packet::connected::{AckOrNack, Flags, Frame};
+    use crate::tests::test_trace_log_setup;
     use crate::Reliability;
 
     #[test]
@@ -300,6 +307,8 @@ mod test {
 
     #[tokio::test]
     async fn test_resend_map_poll_wait() {
+        let _guard = test_trace_log_setup();
+
         const TEST_RTO: Duration = Duration::from_millis(100);
 
         let mut map = ResendMap::new();

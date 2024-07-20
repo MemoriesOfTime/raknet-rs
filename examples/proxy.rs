@@ -68,7 +68,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 async fn client(addr: SocketAddr, name: &str) -> Result<(), Box<dyn Error>> {
     let socket = UdpSocket::bind("0.0.0.0:0").await?;
     println!("[{name}] I am listening on {}", socket.local_addr()?);
-    let mut conn = socket
+    let conn = socket
         .connect_to(
             addr,
             client::Config::new()
@@ -78,6 +78,7 @@ async fn client(addr: SocketAddr, name: &str) -> Result<(), Box<dyn Error>> {
                 .protocol_version(11),
         )
         .await?;
+    tokio::pin!(conn);
     conn.send(Bytes::from_static(b"Hello, Anyone there?"))
         .await?;
     let res = conn.next().await.unwrap();

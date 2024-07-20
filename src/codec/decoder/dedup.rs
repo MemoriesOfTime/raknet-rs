@@ -2,11 +2,10 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use futures::{ready, Stream, StreamExt};
-use minitrace::{Event, Span};
+use minitrace::Span;
 use pin_project_lite::pin_project;
 
 use crate::errors::CodecError;
-use crate::link::SharedLink;
 use crate::packet::connected::{FrameSet, Frames};
 use crate::utils::{u24, BitVecQueue};
 
@@ -58,28 +57,23 @@ pin_project! {
     pub(crate) struct Dedup<F> {
         #[pin]
         frame: F,
-        // Limit the maximum reliable_frame_index gap for a connection. 0 means no limit.
-        max_gap: usize,
         window: DuplicateWindow,
-        link: SharedLink,
         span: Option<Span>,
     }
 }
 
 pub(crate) trait Deduplicated: Sized {
-    fn deduplicated(self, max_gap: usize, link: SharedLink) -> Dedup<Self>;
+    fn deduplicated(self) -> Dedup<Self>;
 }
 
 impl<F, B> Deduplicated for F
 where
     F: Stream<Item = Result<FrameSet<Frames<B>>, CodecError>>,
 {
-    fn deduplicated(self, max_gap: usize, link: SharedLink) -> Dedup<Self> {
+    fn deduplicated(self) -> Dedup<Self> {
         Dedup {
             frame: self,
-            max_gap,
             window: DuplicateWindow::default(),
-            link,
             span: None,
         }
     }
@@ -105,13 +99,6 @@ where
                     )]
                 })
             });
-            if *this.max_gap != 0 && this.window.received_status.len() > *this.max_gap {
-                Event::add_to_local_parent(format!("dedup gap exceed {}", *this.max_gap), || []);
-                return Poll::Ready(Some(Err(CodecError::DedupExceed(
-                    *this.max_gap,
-                    this.window.received_status.len(),
-                ))));
-            }
             frame_set.set.retain(|frame| {
                 let Some(reliable_frame_index) = frame.reliable_frame_index else {
                     // no reliable_frame_index, just pass
@@ -123,8 +110,6 @@ where
                 this.span.take();
                 return Poll::Ready(Some(Ok(frame_set)));
             }
-            // all duplicated, send ack back
-            this.link.outgoing_ack(frame_set.seq_num);
         }
     }
 }
@@ -139,8 +124,6 @@ mod test {
     use indexmap::IndexSet;
 
     use super::*;
-    use crate::errors::CodecError;
-    use crate::link::TransferLink;
     use crate::packet::connected::{Flags, Frame, FrameSet};
 
     #[test]
@@ -223,10 +206,7 @@ mod test {
             }
         };
         tokio::pin!(frame);
-        let mut dedup = frame.map(Ok).deduplicated(
-            100,
-            TransferLink::new_arc(crate::RoleContext::test_server()),
-        );
+        let mut dedup = frame.map(Ok).deduplicated();
 
         assert_eq!(dedup.next().await.unwrap().unwrap(), frame_set(0..64));
         assert_eq!(
@@ -239,29 +219,6 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_dedup_exceed() {
-        let frame = {
-            #[stream]
-            async {
-                yield frame_set([0]);
-                yield frame_set([101]);
-                yield frame_set([102]);
-            }
-        };
-        tokio::pin!(frame);
-        let mut dedup = frame.map(Ok).deduplicated(
-            100,
-            TransferLink::new_arc(crate::RoleContext::test_client()),
-        );
-        assert_eq!(dedup.next().await.unwrap().unwrap(), frame_set([0]));
-        assert_eq!(dedup.next().await.unwrap().unwrap(), frame_set([101]));
-        assert!(matches!(
-            dedup.next().await.unwrap(),
-            Err(CodecError::DedupExceed(..))
-        ));
-    }
-
-    #[tokio::test]
     async fn test_dedup_same() {
         let frame = {
             #[stream]
@@ -271,10 +228,7 @@ mod test {
             }
         };
         tokio::pin!(frame);
-        let mut dedup = frame.map(Ok).deduplicated(
-            100,
-            TransferLink::new_arc(crate::RoleContext::test_client()),
-        );
+        let mut dedup = frame.map(Ok).deduplicated();
         assert_eq!(
             dedup.next().await.unwrap().unwrap(),
             frame_set([0, 1, 2, 3])
@@ -304,10 +258,7 @@ mod test {
             }
         };
         tokio::pin!(frame);
-        let mut dedup = frame.map(Ok).deduplicated(
-            scale,
-            TransferLink::new_arc(crate::RoleContext::test_server()),
-        );
+        let mut dedup = frame.map(Ok).deduplicated();
         assert_eq!(dedup.next().await.unwrap().unwrap(), frame_set(idx1_set));
 
         if diff.is_empty() {

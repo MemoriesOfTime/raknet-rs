@@ -107,14 +107,6 @@ impl RoleContext {
         RoleContext::Server { guid: 0 }
     }
 
-    #[cfg(any(test, feature = "micro-bench"))]
-    fn test_client() -> Self {
-        // Multiple clients
-        RoleContext::Client {
-            guid: rand::random(),
-        }
-    }
-
     fn guid(&self) -> u64 {
         match self {
             RoleContext::Client { guid } => *guid,

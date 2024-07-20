@@ -29,8 +29,6 @@ pub struct Config {
     max_parted_count: usize,
     /// Maximum ordered channel, the value should be less than 256
     max_channels: usize,
-    // Limit the maximum deduplication gap for a connection, 0 means no limit.
-    max_dedup_gap: usize,
 }
 
 impl Default for Config {
@@ -49,7 +47,6 @@ impl Config {
             max_parted_size: 256,
             max_parted_count: 256,
             max_channels: 1,
-            max_dedup_gap: 0,
         }
     }
 
@@ -104,14 +101,6 @@ impl Config {
         self
     }
 
-    /// Set the maximum deduplication gap
-    /// The default value is 0, which means no limitation
-    /// Used to discard the deduplication frame if the gap is reached
-    pub fn max_dedup_gap(mut self, gap: usize) -> Self {
-        self.max_dedup_gap = gap;
-        self
-    }
-
     fn offline_config(&self) -> offline::Config {
         offline::Config {
             client_guid: self.client_guid,
@@ -125,7 +114,6 @@ impl Config {
             max_parted_count: self.max_parted_count,
             max_parted_size: self.max_parted_size,
             max_channels: self.max_channels,
-            max_dedup_gap: self.max_dedup_gap,
         }
     }
 

@@ -4,7 +4,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 
-use async_channel::Sender;
 use concurrent_queue::ConcurrentQueue;
 use futures::Stream;
 use log::{debug, error};
@@ -18,39 +17,11 @@ use crate::codec::frame::Framed;
 use crate::codec::{Decoded, Encoded};
 use crate::guard::HandleOutgoing;
 use crate::io::{SeparatedIO, IO};
-use crate::link::{SharedLink, TransferLink};
-use crate::packet::connected::{self, FrameSet, FramesMut};
+use crate::link::{Router, TransferLink};
 use crate::server::handler::offline::OfflineHandler;
 use crate::server::handler::online::HandleOnline;
 use crate::state::{CloseOnDrop, IncomingStateManage, OutgoingStateManage};
 use crate::utils::TraceStreamExt;
-
-struct RouteEntry {
-    router_tx: Sender<FrameSet<FramesMut>>,
-    link: SharedLink,
-}
-
-impl RouteEntry {
-    fn new(link: SharedLink) -> (Self, impl Stream<Item = FrameSet<FramesMut>>) {
-        let (router_tx, router_rx) = async_channel::unbounded();
-        (Self { router_tx, link }, router_rx)
-    }
-
-    /// Deliver the packet to the corresponding router. Return false if the connection was dropped.
-    #[inline]
-    fn deliver(&self, pack: connected::Packet<FramesMut>) -> bool {
-        if self.router_tx.is_closed() {
-            debug_assert!(Arc::strong_count(&self.link) == 1);
-            return false;
-        }
-        match pack {
-            connected::Packet::FrameSet(frames) => self.router_tx.try_send(frames).unwrap(),
-            connected::Packet::Ack(ack) => self.link.incoming_ack(ack),
-            connected::Packet::Nack(nack) => self.link.incoming_nack(nack),
-        };
-        true
-    }
-}
 
 pin_project! {
     struct Incoming {
@@ -58,7 +29,7 @@ pin_project! {
         offline: OfflineHandler<Framed<Arc<TokioUdpSocket>>>,
         config: Config,
         socket: Arc<TokioUdpSocket>,
-        router: HashMap<SocketAddr, RouteEntry>,
+        routers: HashMap<SocketAddr, Router>,
         close_events: Arc<ConcurrentQueue<SocketAddr>>,
     }
 }
@@ -73,7 +44,7 @@ impl MakeIncoming for TokioUdpSocket {
             ),
             socket,
             config,
-            router: HashMap::new(),
+            routers: HashMap::new(),
             close_events: Arc::new(ConcurrentQueue::unbounded()),
         }
     }
@@ -87,7 +58,7 @@ impl Stream for Incoming {
 
         let role = this.config.server_role();
         for ev in this.close_events.try_iter() {
-            this.router
+            this.routers
                 .remove(&ev)
                 .expect("closed a non-exist connection");
             this.offline.as_mut().disconnect(&ev);
@@ -98,19 +69,19 @@ impl Stream for Incoming {
             let Some((pack, peer)) = ready!(this.offline.as_mut().poll_next(cx)) else {
                 return Poll::Ready(None);
             };
-            if let Some(entry) = this.router.get_mut(&peer.addr) {
+            if let Some(entry) = this.routers.get_mut(&peer.addr) {
                 if !entry.deliver(pack) {
                     error!("[{role}] connection was dropped before closed");
-                    this.router.remove(&peer.addr);
+                    this.routers.remove(&peer.addr);
                     this.offline.as_mut().disconnect(&peer.addr);
                 }
                 continue;
             }
 
             let link = TransferLink::new_arc(role);
-            let (entry, route) = RouteEntry::new(Arc::clone(&link));
+            let (mut entry, route) = Router::new(Arc::clone(&link));
             entry.deliver(pack);
-            this.router.insert(peer.addr, entry);
+            this.routers.insert(peer.addr, entry);
 
             let dst = Framed::new(Arc::clone(this.socket), this.config.max_mtu as usize)
                 .handle_outgoing(

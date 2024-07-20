@@ -13,7 +13,6 @@ pub(crate) mod tokio;
 
 use std::io;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use bytes::BytesMut;
@@ -41,9 +40,6 @@ pub(crate) struct Config {
     pub(crate) max_parted_count: usize,
     /// Maximum ordered channel, the value should be less than 256
     pub(crate) max_channels: usize,
-    // Limit the maximum deduplication gap for a connection, 0 means no limit.
-    // Enable it to avoid D-DoS attack based on deduplication.
-    pub(crate) max_dedup_gap: usize,
 }
 
 impl Default for Config {
@@ -53,7 +49,6 @@ impl Default for Config {
             max_parted_size: 256,
             max_parted_count: 256,
             max_channels: 1,
-            max_dedup_gap: 1024,
         }
     }
 }
@@ -98,7 +93,7 @@ where
     ) -> impl Stream<Item = FrameBody> {
         self.map(Ok)
             .trace_pending()
-            .deduplicated(config.max_dedup_gap, Arc::clone(&link))
+            .deduplicated()
             .defragmented(config.max_parted_size, config.max_parted_count, link)
             .ordered(config.max_channels)
             .body_decoded()
@@ -276,7 +271,7 @@ pub mod micro_bench {
 
             let stream = self
                 .into_stream()
-                .frame_decoded(config, link, RoleContext::test_client());
+                .frame_decoded(config, link, RoleContext::test_server());
             #[futures_async_stream::for_await]
             for res in stream {
                 let body = match res {
@@ -290,7 +285,7 @@ pub mod micro_bench {
         #[allow(clippy::semicolon_if_nothing_returned)]
         pub async fn bench_decoded(self) {
             let config = self.config;
-            let link = TransferLink::new_arc(RoleContext::test_client());
+            let link = TransferLink::new_arc(RoleContext::test_server());
 
             let stream = self
                 .into_stream()

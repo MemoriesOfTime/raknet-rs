@@ -2,6 +2,7 @@ use std::io;
 use std::net::ToSocketAddrs;
 use std::sync::Arc;
 
+use futures::StreamExt;
 use minitrace::Span;
 use tokio::net::UdpSocket as TokioUdpSocket;
 
@@ -13,7 +14,7 @@ use crate::codec::{Decoded, Encoded};
 use crate::errors::Error;
 use crate::guard::HandleOutgoing;
 use crate::io::{Ping, SeparatedIO, IO};
-use crate::link::TransferLink;
+use crate::link::{Router, TransferLink};
 use crate::state::{IncomingStateManage, OutgoingStateManage};
 use crate::utils::TraceStreamExt;
 use crate::PeerContext;
@@ -36,18 +37,17 @@ impl ConnectTo for TokioUdpSocket {
             return Err(io::Error::new(io::ErrorKind::AddrNotAvailable, "invalid address").into());
         };
 
-        let incoming = OfflineHandler::new(
+        let mut incoming = OfflineHandler::new(
             Framed::new(Arc::clone(&socket), config.mtu as usize), // TODO: discover MTU
             addr,
             config.offline_config(),
         )
         .await?;
 
-        let ack = TransferLink::new_arc(config.client_role());
-
+        let link = TransferLink::new_arc(config.client_role());
         let dst = Framed::new(Arc::clone(&socket), config.mtu as usize)
             .handle_outgoing(
-                Arc::clone(&ack),
+                Arc::clone(&link),
                 config.send_buf_cap,
                 PeerContext {
                     addr,
@@ -55,18 +55,25 @@ impl ConnectTo for TokioUdpSocket {
                 },
                 config.client_role(),
             )
-            .frame_encoded(config.mtu, config.codec_config(), Arc::clone(&ack))
+            .frame_encoded(config.mtu, config.codec_config(), Arc::clone(&link))
             .manage_outgoing_state(None);
 
-        let src = ack
-            .filter_incoming_ack(incoming)
+        let (mut router, route) = Router::new(Arc::clone(&link));
+
+        tokio::spawn(async move {
+            while let Some(pack) = incoming.next().await {
+                router.deliver(pack);
+            }
+        });
+
+        let src = route
             .frame_decoded(
                 config.codec_config(),
-                Arc::clone(&ack),
+                Arc::clone(&link),
                 config.client_role(),
             )
             .manage_incoming_state()
-            .handle_online(addr, config.client_guid, Arc::clone(&ack))
+            .handle_online(addr, config.client_guid, Arc::clone(&link))
             .enter_on_item(Span::noop);
 
         Ok(SeparatedIO::new(src, dst))
