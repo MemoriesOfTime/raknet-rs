@@ -20,10 +20,10 @@ pub trait TraceInfo {
 pub trait IO:
     Stream<Item = Bytes> + Sink<Bytes, Error = crate::errors::Error> + TraceInfo + Send
 {
-    fn set_default_reliability(&mut self, reliability: Reliability);
+    fn set_default_reliability(self: Pin<&mut Self>, reliability: Reliability);
     fn get_default_reliability(&self) -> Reliability;
 
-    fn set_default_order_channel(&mut self, order_channel: u8);
+    fn set_default_order_channel(self: Pin<&mut Self>, order_channel: u8);
     fn get_default_order_channel(&self) -> u8;
 
     /// Split into a Stream and a Sink
@@ -110,16 +110,16 @@ where
     O: Sink<Message, Error = Error> + Send,
     I: Stream<Item = Bytes> + TraceInfo + Send,
 {
-    fn set_default_reliability(&mut self, reliability: Reliability) {
-        self.default_reliability = reliability;
+    fn set_default_reliability(self: Pin<&mut Self>, reliability: Reliability) {
+        *self.project().default_reliability = reliability;
     }
 
     fn get_default_reliability(&self) -> Reliability {
         self.default_reliability
     }
 
-    fn set_default_order_channel(&mut self, order_channel: u8) {
-        self.default_order_channel = order_channel;
+    fn set_default_order_channel(self: Pin<&mut Self>, order_channel: u8) {
+        *self.project().default_order_channel = order_channel;
     }
 
     fn get_default_order_channel(&self) -> u8 {

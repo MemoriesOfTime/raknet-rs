@@ -49,6 +49,7 @@ jobs:
       - name: Run example with codecov
         run: |
           cargo llvm-cov --no-report run --example proxy
+          cargo llvm-cov --no-report run --example tracing --features minitrace/enable
 
       - name: Run bench with codecov
         run: |
