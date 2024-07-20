@@ -1,9 +1,6 @@
 use std::collections::{HashMap, VecDeque};
-use std::sync::Arc;
-use std::task::{Context, Poll, Waker};
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
-
-use parking_lot::Mutex;
 
 use crate::packet::connected::{AckOrNack, Frame, Frames, Record};
 use crate::utils::u24;
@@ -18,7 +15,6 @@ struct ResendEntry {
 
 pub(crate) struct ResendMap {
     map: HashMap<u24, ResendEntry>,
-    waker: Arc<Mutex<Option<Waker>>>,
     last_record_expired_at: Instant,
 }
 
@@ -26,7 +22,6 @@ impl ResendMap {
     pub(crate) fn new() -> Self {
         Self {
             map: HashMap::new(),
-            waker: Arc::new(Mutex::new(None)),
             last_record_expired_at: Instant::now(),
         }
     }
@@ -79,7 +74,7 @@ impl ResendMap {
     pub(crate) fn process_stales(&mut self, buffer: &mut VecDeque<Frame>) {
         let now = Instant::now();
         if now < self.last_record_expired_at {
-            // probably no stale entries
+            // probably no stale entries, skip scanning the map
             return;
         }
         // find the first expired_at larger than now
@@ -103,33 +98,121 @@ impl ResendMap {
 
     /// `poll_wait` suspends the task when the resend map needs to wait for the next resend
     pub(crate) fn poll_wait(&self, cx: &mut Context<'_>) -> Poll<()> {
-        let wait;
+        let expired_at;
         if let Some((_, entry)) = self.map.iter().min_by_key(|(_, entry)| entry.expired_at) {
-            wait = entry.expired_at.saturating_duration_since(Instant::now());
+            expired_at = entry.expired_at;
         } else {
             return Poll::Ready(());
         }
-        if wait.is_zero() {
+        if expired_at <= Instant::now() {
             return Poll::Ready(());
         }
-
-        let old_waker = self.waker.lock().replace(cx.waker().clone());
-        // wake up the old waker if the task is moved
-        if let Some(old_waker) = old_waker {
-            old_waker.wake();
-        }
-        let waker_ref = self.waker.clone();
-
-        // TODO: I know this is stupid, we should spawn a daemon thread to wake up the task. But
-        // poll_wait is hardly called now.
-        std::thread::spawn(move || {
-            std::thread::sleep(wait);
-            if let Some(waker) = waker_ref.lock().take() {
-                waker.wake();
-            }
-        });
-
+        reactor::Reactor::get().insert_timer(expired_at, cx.waker());
         Poll::Pending
+    }
+}
+
+/// Timer reactor
+mod reactor {
+    use std::collections::BTreeMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::OnceLock;
+    use std::task::Waker;
+    use std::time::{Duration, Instant};
+    use std::{mem, panic, thread};
+
+    use parking_lot::{Condvar, Mutex};
+
+    /// A simple timer reactor.
+    ///
+    /// There is only one global instance of this type, accessible by [`Reactor::get()`].
+    pub(crate) struct Reactor {
+        /// An ordered map of registered timers.
+        ///
+        /// Timers are in the order in which they fire. The `usize` in this type is a timer ID used
+        /// to distinguish timers that fire at the same time. The `Waker` represents the
+        /// task awaiting the timer.
+        timers: Mutex<BTreeMap<(Instant, usize), Waker>>,
+        cond: Condvar,
+    }
+
+    fn main_loop() {
+        let reactor = Reactor::get();
+        loop {
+            reactor.process_timers();
+        }
+    }
+
+    impl Reactor {
+        pub(crate) fn get() -> &'static Reactor {
+            static REACTOR: OnceLock<Reactor> = OnceLock::new();
+
+            REACTOR.get_or_init(|| {
+                // Spawn the daemon thread to motivate the reactor.
+                thread::Builder::new()
+                    .name("timer-reactor".to_string())
+                    .spawn(main_loop)
+                    .expect("cannot spawn timer-reactor thread");
+
+                Reactor {
+                    timers: Mutex::new(BTreeMap::new()),
+                    cond: Condvar::new(),
+                }
+            })
+        }
+
+        /// Registers a timer in the reactor.
+        ///
+        /// Returns the inserted timer's ID.
+        pub(crate) fn insert_timer(&self, when: Instant, waker: &Waker) -> usize {
+            // Generate a new timer ID.
+            static ID_GENERATOR: AtomicUsize = AtomicUsize::new(1);
+            let id = ID_GENERATOR.fetch_add(1, Ordering::Relaxed);
+
+            let mut guard = self.timers.lock();
+            guard.insert((when, id), waker.clone());
+
+            // Notify that a timer has been inserted.
+            self.cond.notify_one();
+
+            drop(guard);
+
+            id
+        }
+
+        /// Processes ready timers and extends the list of wakers to wake.
+        ///
+        /// Returns the duration until the next timer before this method was called.
+        fn process_timers(&self) {
+            let mut timers = self.timers.lock();
+
+            let now = Instant::now();
+
+            // Split timers into ready and pending timers.
+            //
+            // Careful to split just *after* `now`, so that a timer set for exactly `now` is
+            // considered ready.
+            let pending = timers.split_off(&(now + Duration::from_nanos(1), 0));
+            let ready = mem::replace(&mut *timers, pending);
+
+            // Calculate the duration until the next event.
+            let dur = timers
+                .keys()
+                .next()
+                .map(|(when, _)| when.saturating_duration_since(now));
+
+            for (_, waker) in ready {
+                // TODO: wake up maybe slow down the reactor
+                // Don't let a panicking waker blow everything up.
+                panic::catch_unwind(|| waker.wake()).ok();
+            }
+
+            if let Some(dur) = dur {
+                self.cond.wait_for(&mut timers, dur);
+            } else {
+                self.cond.wait(&mut timers);
+            }
+        }
     }
 }
 
