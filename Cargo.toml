@@ -31,7 +31,6 @@ tokio = { version = "1", features = ["net"], optional = true }
 criterion = { version = "0.5", features = ["async_futures", "async_tokio"] }
 env_logger = "0.11"
 indexmap = "2"
-minitrace = { version = "0.6", features = ["enable"] }
 reqwest = "0.12"
 tokio = { version = "1", features = ["full"] }
 
@@ -44,8 +43,6 @@ default = ["tokio-udp"]
 tokio-udp = ["dep:tokio"]
 micro-bench = []
 
-# TODO: move bench marks to a separate crate cz it maybe slow to compile with minitrace enabled at [dev-dependencies]
-# Or there is some workaround available: https://github.com/rust-lang/cargo/issues/3126
 [[bench]]
 name = "micro"
 harness = false
