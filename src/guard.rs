@@ -148,7 +148,6 @@ where
                 sent = false;
             }
 
-            // TODO: with capacity
             let mut frames = vec![];
             let mut reliable = false;
 
@@ -228,9 +227,9 @@ where
         self.project().frame.poll_flush(cx)
     }
 
+    /// Close the outgoing guard, notice that it may resend infinitely if you do not cancel it.
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         // insure all frames are received by the peer
-        // TODO: resend with a proper threshold or timeout here instead of infinite waiting
         while !self.resend.is_empty() || !self.buf.is_empty() || !self.link.flush_empty() {
             ready!(self.as_mut().try_empty(cx))?;
             debug_assert!(self.buf.is_empty() && self.link.flush_empty());

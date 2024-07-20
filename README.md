@@ -37,8 +37,12 @@ See [examples](examples/) for basic usage.
 ### Server
 
 [IO](src/io.rs) is a hidden type that implements the traits `Stream` and `Sink`.
-Never stop polling `incoming` because it also serves as the router to every IOs.
+
+Keep polling `incoming` because it also serves as the router to every IOs.
 Apply `Sink::poll_flush` to IO will trigger to flush all pending packets, `ACK`/`NACK`, and stale packets.
+Apply `Sink::poll_close` to IO will ensure that all data is received by the peer before returning (i.e It may keep resending infinitely.).
+
+> Notice: All calculations are lazy. You need to decide how long to flush once, and how long to wait when closing before considering the peer is disconnected.
 
 ```rust
 use bytes::Bytes;
