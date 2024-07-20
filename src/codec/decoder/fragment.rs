@@ -114,8 +114,8 @@ where
             this.span.get_or_insert_with(|| {
                 Span::enter_with_local_parent("codec.defragment").with_properties(|| {
                     [
-                        ("frame_set_size", frame_set.set.len().to_string()),
-                        ("frame_seq_num", frame_set.seq_num.to_string()),
+                        ("buffer_size", this.buffer.len().to_string()),
+                        ("pending", this.parts.len().to_string()),
                     ]
                 })
             });
@@ -134,7 +134,7 @@ where
                             "parted_index {} >= parted_size {}",
                             parted_index, parted_size
                         );
-                        Event::add_to_parent(err.clone(), this.span.as_ref().unwrap(), || []);
+                        Event::add_to_local_parent(err.clone(), || []);
                         return Poll::Ready(Some(Err(CodecError::PartedFrame(err))));
                     }
                     if *this.limit_size != 0 && parted_size > *this.limit_size {
@@ -144,7 +144,7 @@ where
                             "parted_size {} exceed limit_size {}",
                             parted_size, *this.limit_size
                         );
-                        Event::add_to_parent(err.clone(), this.span.as_ref().unwrap(), || []);
+                        Event::add_to_local_parent(err.clone(), || []);
                         return Poll::Ready(Some(Err(CodecError::PartedFrame(err))));
                     }
                     let frames_queue = this.parts.get_or_insert_mut(parted_id, || {

@@ -1,5 +1,5 @@
 mod body;
 mod fragment;
 
-pub(super) use body::*;
-pub(super) use fragment::*;
+pub(super) use self::body::*;
+pub(super) use self::fragment::*;

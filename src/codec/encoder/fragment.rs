@@ -7,10 +7,10 @@ use futures::Sink;
 use pin_project_lite::pin_project;
 
 use crate::errors::CodecError;
-use crate::packet::connected::{self, Flags, Frame, Ordered, Reliability};
+use crate::packet::connected::{self, Flags, Frame, Ordered};
 use crate::packet::{FRAGMENT_PART_SIZE, FRAME_SET_HEADER_SIZE};
 use crate::utils::u24;
-use crate::Message;
+use crate::{Message, Reliability};
 
 pin_project! {
     pub(crate) struct Fragment<F> {

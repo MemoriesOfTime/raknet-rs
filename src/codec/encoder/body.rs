@@ -7,8 +7,8 @@ use pin_project_lite::pin_project;
 
 use crate::errors::CodecError;
 use crate::link::SharedLink;
-use crate::packet::connected::{FrameBody, Reliability};
-use crate::Message;
+use crate::packet::connected::FrameBody;
+use crate::{Message, Reliability};
 
 pin_project! {
     // BodyEncoder encodes internal frame body into Message

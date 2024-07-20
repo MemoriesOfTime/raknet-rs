@@ -20,7 +20,7 @@ use bytes::BytesMut;
 use futures::{Sink, Stream, StreamExt};
 use log::{debug, trace};
 
-use self::decoder::{BodyDecoded, DeFragmented, Deduplicated, Ordered};
+use self::decoder::{BodyDecoded, DeFragmented, Deduplicated, Ordered, TracePending};
 use self::encoder::{BodyEncoded, Fragmented};
 use crate::errors::CodecError;
 use crate::link::SharedLink;
@@ -97,6 +97,7 @@ where
         role: RoleContext,
     ) -> impl Stream<Item = FrameBody> {
         self.map(Ok)
+            .trace_pending()
             .deduplicated(config.max_dedup_gap, Arc::clone(&link))
             .defragmented(config.max_parted_size, config.max_parted_count, link)
             .ordered(config.max_channels)
@@ -147,8 +148,8 @@ pub mod micro_bench {
 
     use super::{Config, Decoded, FrameSet, FramesMut, Stream};
     use crate::link::TransferLink;
-    use crate::packet::connected::{Flags, Fragment, Frame, Ordered, Reliability};
-    use crate::RoleContext;
+    use crate::packet::connected::{Flags, Fragment, Frame, Ordered};
+    use crate::{Reliability, RoleContext};
 
     #[derive(Debug, Clone)]
     pub struct Options {

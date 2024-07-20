@@ -6,7 +6,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
 use log::info;
-use minitrace::collector::{SpanId, SpanRecord};
+use minitrace::collector::{SpanId, SpanRecord, TraceId};
 use parking_lot::Mutex;
 use tokio::net::UdpSocket;
 
@@ -29,13 +29,20 @@ impl Drop for TestTraceLogGuard {
             .iter()
             .map(|span| (span.span_id, span.clone()))
             .collect();
-        let adjacency_list: HashMap<SpanId, Vec<SpanId>> = spans.iter().fold(
+        let adjacency_lists: HashMap<TraceId, HashMap<SpanId, Vec<SpanId>>> = spans.iter().fold(
             std::collections::HashMap::new(),
             |mut map,
              SpanRecord {
-                 span_id, parent_id, ..
+                 trace_id,
+                 span_id,
+                 parent_id,
+                 ..
              }| {
-                map.entry(*parent_id).or_default().push(*span_id);
+                map.entry(*trace_id)
+                    .or_default()
+                    .entry(*parent_id)
+                    .or_default()
+                    .push(*span_id);
                 map
             },
         );
@@ -44,6 +51,7 @@ impl Drop for TestTraceLogGuard {
             spans: &HashMap<SpanId, SpanRecord>,
             span_id: SpanId,
             depth: usize,
+            last: bool,
         ) {
             let span = &spans[&span_id];
             let mut properties = String::new();
@@ -54,31 +62,48 @@ impl Drop for TestTraceLogGuard {
             for ev in &span.events {
                 events.push_str(&format!("'{}'", ev.name));
             }
+            let prefix = if depth == 0 {
+                String::new()
+            } else if last {
+                "╰".to_owned() + &"─".repeat(depth) + " "
+            } else {
+                "├".to_owned() + &"─".repeat(depth) + " "
+            };
             eprintln!(
                 "{}{}({}{{{}}}) [{}us]",
-                "  ".repeat(depth),
+                prefix,
                 span.name,
                 properties,
                 events,
                 span.duration_ns as f64 / 1_000.0,
             );
             if let Some(children) = adjacency_list.get(&span_id) {
-                for child in children {
-                    dfs(adjacency_list, spans, *child, depth + 1);
+                for (i, child) in children.iter().enumerate() {
+                    dfs(
+                        adjacency_list,
+                        spans,
+                        *child,
+                        depth + 1,
+                        i == children.len() - 1 && last,
+                    );
                 }
             }
         }
-        if adjacency_list.is_empty() {
-            return;
-        }
-        for root in &adjacency_list[&SpanId::default()] {
-            dfs(&adjacency_list, &spans_map, *root, 0);
+        for (trace_id, list) in adjacency_lists {
+            if list.is_empty() {
+                continue;
+            }
+            eprintln!("{trace_id:?}",);
+            let l = &list[&SpanId::default()];
+            for (i, root) in l.iter().enumerate() {
+                dfs(&list, &spans_map, *root, 0, i == l.len() - 1);
+            }
             eprintln!();
         }
     }
 }
 
-#[must_use]
+#[must_use = "guard should be kept alive to keep the trace log"]
 pub(crate) fn test_trace_log_setup() -> TestTraceLogGuard {
     std::env::set_var("RUST_LOG", "trace");
     let (reporter, spans) = minitrace::collector::TestReporter::new();

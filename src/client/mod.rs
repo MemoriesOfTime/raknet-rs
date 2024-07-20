@@ -3,4 +3,4 @@
 mod conn;
 mod handler;
 
-pub use conn::*;
+pub use self::conn::*;

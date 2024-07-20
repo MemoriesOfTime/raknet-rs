@@ -112,19 +112,14 @@ impl<T: AsyncSocket> Stream for Framed<T> {
                         let current_addr = pin
                             .current_addr
                             .expect("will always be set before this line is called");
-                        Event::add_to_parent(
+                        Event::add_to_local_parent(
                             format!("{:?} decoded", frame.pack_type()),
-                            pin.decode_span.as_ref().unwrap(),
                             || [],
                         );
                         return Poll::Ready(Some((frame, current_addr)));
                     }
                     Err(err) => {
-                        Event::add_to_parent(
-                            err.to_string(),
-                            pin.decode_span.as_ref().unwrap(),
-                            || [],
-                        );
+                        Event::add_to_local_parent(err.to_string(), || []);
                         error!("failed to decode packet: {:?}", err);
                     }
                     Ok(None) => {}
@@ -143,7 +138,7 @@ impl<T: AsyncSocket> Stream for Framed<T> {
                 Ok(addr) => addr,
                 Err(err) => {
                     error!("failed to receive data: {:?}", err);
-                    Event::add_to_parent(err.to_string(), pin.read_span.as_ref().unwrap(), || []);
+                    Event::add_to_local_parent(err.to_string(), || []);
                     pin.rd.clear();
                     continue;
                 }

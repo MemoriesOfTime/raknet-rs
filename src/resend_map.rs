@@ -226,6 +226,7 @@ mod test {
 
     use super::ResendMap;
     use crate::packet::connected::{AckOrNack, Flags, Frame};
+    use crate::Reliability;
 
     #[test]
     fn test_resend_map_works() {
@@ -241,7 +242,7 @@ mod test {
         map.record(
             4.into(),
             vec![Frame {
-                flags: Flags::new(crate::packet::connected::Reliability::Unreliable, false),
+                flags: Flags::new(Reliability::Unreliable, false),
                 reliable_frame_index: None,
                 seq_frame_index: None,
                 ordered: None,
@@ -253,7 +254,7 @@ mod test {
             5.into(),
             vec![
                 Frame {
-                    flags: Flags::new(crate::packet::connected::Reliability::Unreliable, false),
+                    flags: Flags::new(Reliability::Unreliable, false),
                     reliable_frame_index: None,
                     seq_frame_index: None,
                     ordered: None,
@@ -261,7 +262,7 @@ mod test {
                     body: Bytes::from_static(b"2"),
                 },
                 Frame {
-                    flags: Flags::new(crate::packet::connected::Reliability::Unreliable, false),
+                    flags: Flags::new(Reliability::Unreliable, false),
                     reliable_frame_index: None,
                     seq_frame_index: None,
                     ordered: None,

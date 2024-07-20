@@ -93,8 +93,15 @@ where
                 return Poll::Ready(None);
             };
             this.span.get_or_insert_with(|| {
-                Span::enter_with_local_parent("codec.reorder")
-                    .with_properties(|| [("frame_seq_num", frame_set.seq_num.to_string())])
+                Span::enter_with_local_parent("codec.reorder").with_properties(|| {
+                    [(
+                        "pending",
+                        this.ordering
+                            .iter()
+                            .fold(0, |acc, o| acc + o.map.len())
+                            .to_string(),
+                    )]
+                })
             });
             if let Some(connected::Ordered {
                 frame_index,
@@ -104,7 +111,7 @@ where
                 let channel = usize::from(channel);
                 if channel >= *this.max_channels {
                     let err = format!("channel {} >= max_channels {}", channel, *this.max_channels);
-                    Event::add_to_parent(err.clone(), this.span.as_ref().unwrap(), || []);
+                    Event::add_to_local_parent(err.clone(), || []);
                     return Poll::Ready(Some(Err(CodecError::OrderedFrame(err))));
                 }
                 let ordering = this
@@ -120,6 +127,7 @@ where
                 continue;
             }
             // the frame set which does not require ordered
+            this.span.take();
             return Poll::Ready(Some(Ok(frame_set)));
         }
     }

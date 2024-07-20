@@ -7,9 +7,9 @@ use minitrace::collector::TraceId;
 use pin_project_lite::pin_project;
 
 use crate::errors::Error;
-use crate::packet::connected::{FrameBody, Reliability};
+use crate::packet::connected::FrameBody;
 use crate::utils::timestamp;
-use crate::Message;
+use crate::{Message, Reliability};
 
 /// Trace info extension for io
 pub trait TraceInfo {

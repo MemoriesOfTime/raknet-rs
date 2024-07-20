@@ -99,18 +99,14 @@ where
             };
             this.span.get_or_insert_with(|| {
                 Span::enter_with_local_parent("codec.deduplication").with_properties(|| {
-                    [
-                        ("frame_set_size", frame_set.set.len().to_string()),
-                        ("frame_seq_num", frame_set.seq_num.to_string()),
-                    ]
+                    [(
+                        "dup_window_size",
+                        this.window.received_status.len().to_string(),
+                    )]
                 })
             });
             if *this.max_gap != 0 && this.window.received_status.len() > *this.max_gap {
-                Event::add_to_parent(
-                    format!("dedup gap exceed {}", *this.max_gap),
-                    this.span.as_ref().unwrap(),
-                    || [],
-                );
+                Event::add_to_local_parent(format!("dedup gap exceed {}", *this.max_gap), || []);
                 return Poll::Ready(Some(Err(CodecError::DedupExceed(
                     *this.max_gap,
                     this.window.received_status.len(),
