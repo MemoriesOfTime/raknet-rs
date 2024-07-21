@@ -1,15 +1,16 @@
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, VecDeque};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use async_channel::Sender;
 use concurrent_queue::ConcurrentQueue;
 use futures::Stream;
-use log::{trace, warn};
+use log::{debug, trace, warn};
 
-use crate::packet::connected::{self, AckOrNack, Frame, FrameBody, FrameSet, FramesMut};
+use crate::packet::connected::{self, AckOrNack, Frame, FrameBody, FrameSet, FramesMut, Record};
 use crate::packet::unconnected;
-use crate::resend_map::ResendMap;
+use crate::resend_map::{reactor, ResendMap};
 use crate::utils::u24;
 use crate::RoleContext;
 
@@ -21,6 +22,7 @@ pub(crate) type SharedLink = Arc<TransferLink>;
 pub(crate) struct TransferLink {
     incoming_ack: ConcurrentQueue<AckOrNack>,
     incoming_nack: ConcurrentQueue<AckOrNack>,
+    forward_waking: AtomicBool,
 
     outgoing_ack: parking_lot::Mutex<BinaryHeap<Reverse<u24>>>,
     // TODO: nack channel should always be in order according to [`DeFragment::poll_next`], replace
@@ -60,6 +62,7 @@ impl TransferLink {
         Arc::new(Self {
             incoming_ack: ConcurrentQueue::bounded(MAX_ACK_BUFFER),
             incoming_nack: ConcurrentQueue::bounded(MAX_ACK_BUFFER),
+            forward_waking: AtomicBool::new(false),
             outgoing_ack: parking_lot::Mutex::new(BinaryHeap::with_capacity(MAX_ACK_BUFFER)),
             outgoing_nack: parking_lot::Mutex::new(BinaryHeap::with_capacity(MAX_ACK_BUFFER)),
             unconnected: ConcurrentQueue::unbounded(),
@@ -68,13 +71,59 @@ impl TransferLink {
         })
     }
 
+    pub(crate) fn turn_on_waking(&self) {
+        self.forward_waking
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn should_waking(&self) -> bool {
+        self.forward_waking
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub(crate) fn turn_off_waking(&self) {
+        self.forward_waking
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+
     pub(crate) fn incoming_ack(&self, records: AckOrNack) {
+        let to_wakes = if self.should_waking() {
+            let mut wakers = Vec::new();
+            let mut guard = reactor::Reactor::get().lock();
+            for record in &records.records {
+                match record {
+                    Record::Range(start, end) => {
+                        for seq_num in start.to_u32()..=end.to_u32() {
+                            guard.cancel_timer(seq_num.into(), self.role.guid(), &mut wakers);
+                        }
+                    }
+                    Record::Single(seq_num) => {
+                        guard.cancel_timer(*seq_num, self.role.guid(), &mut wakers);
+                    }
+                }
+            }
+            Some(wakers)
+        } else {
+            None
+        };
         if let Some(dropped) = self.incoming_ack.force_push(records).unwrap() {
             warn!(
                 "[{}] discard received ack {dropped:?}, total count: {}",
                 self.role,
                 dropped.total_cnt()
             );
+        }
+        // wake up after sends ack
+        if let Some(wakers) = to_wakes {
+            debug!(
+                "[{}] wake up {} wakers after receives ack",
+                self.role,
+                wakers.len()
+            );
+            for waker in wakers {
+                // safe to panic
+                waker.wake();
+            }
         }
     }
 

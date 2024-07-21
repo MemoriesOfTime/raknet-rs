@@ -61,7 +61,7 @@ where
             peer,
             role,
             cap,
-            resend: ResendMap::new(),
+            resend: ResendMap::new(role),
         }
     }
 }
@@ -227,8 +227,10 @@ where
     }
 
     /// Close the outgoing guard, notice that it may resend infinitely if you do not cancel it.
+    /// Insure all frames are received by the peer at the point of closing
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        // insure all frames are received by the peer at the point of closing
+        // maybe go to sleep, turn on the waking
+        self.link.turn_on_waking();
         loop {
             ready!(self.as_mut().try_empty(cx))?;
             debug_assert!(self.buf.is_empty() && self.link.flush_empty());
@@ -240,16 +242,10 @@ where
                 );
                 break;
             }
-            // wait for the next resend
-            // TODO: When receiving an ack, we should immediately stop waiting and check if it can
-            // be terminated.
-            trace!(
-                "[{}] poll_wait for next timeout, resend map size: {}",
-                self.role,
-                self.resend.size()
-            );
             ready!(self.resend.poll_wait(cx));
         }
+        // no need to wake up
+        self.link.turn_off_waking();
         self.project().frame.poll_close(cx)
     }
 }

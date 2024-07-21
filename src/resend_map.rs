@@ -2,8 +2,11 @@ use std::collections::{HashMap, VecDeque};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
+use log::trace;
+
 use crate::packet::connected::{AckOrNack, Frame, Frames, Record};
 use crate::utils::u24;
+use crate::RoleContext;
 
 // TODO: use RTTEstimator to get adaptive RTO
 const RTO: Duration = Duration::from_secs(1);
@@ -15,13 +18,15 @@ struct ResendEntry {
 
 pub(crate) struct ResendMap {
     map: HashMap<u24, ResendEntry>,
+    role: RoleContext,
     last_record_expired_at: Instant,
 }
 
 impl ResendMap {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(role: RoleContext) -> Self {
         Self {
             map: HashMap::new(),
+            role,
             last_record_expired_at: Instant::now(),
         }
     }
@@ -89,6 +94,12 @@ impl ResendMap {
             }
         });
         debug_assert!(min_expired_at > now);
+        trace!(
+            "[{}]: process stales, {} entries left, next expired at {:?}",
+            self.role,
+            self.map.len(),
+            min_expired_at
+        );
         self.last_record_expired_at = min_expired_at;
     }
 
@@ -96,60 +107,82 @@ impl ResendMap {
         self.map.is_empty()
     }
 
-    pub(crate) fn size(&self) -> usize {
-        self.map.len()
-    }
-
     /// `poll_wait` suspends the task when the resend map needs to wait for the next resend
     pub(crate) fn poll_wait(&self, cx: &mut Context<'_>) -> Poll<()> {
         let expired_at;
-        if let Some((_, entry)) = self.map.iter().min_by_key(|(_, entry)| entry.expired_at)
-            && entry.expired_at > Instant::now()
+        let seq_num;
+        let now = Instant::now();
+        if let Some((seq, entry)) = self.map.iter().min_by_key(|(_, entry)| entry.expired_at)
+            && entry.expired_at > now
         {
             expired_at = entry.expired_at;
+            seq_num = *seq;
         } else {
             return Poll::Ready(());
         }
-        reactor::Reactor::get().insert_timer(expired_at, cx.waker());
+        trace!(
+            "[{}]: wait for resend seq_num {} within {:?}",
+            self.role,
+            seq_num,
+            expired_at - now
+        );
+        reactor::Reactor::get().insert_timer(expired_at, seq_num, self.role.guid(), cx.waker());
         Poll::Pending
     }
 }
 
-/// Timer reactor
-mod reactor {
-    use std::collections::BTreeMap;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+/// Specialized timer reactor for resend map
+pub(crate) mod reactor {
+    use std::collections::{BTreeMap, HashMap};
     use std::sync::OnceLock;
     use std::task::Waker;
     use std::time::{Duration, Instant};
     use std::{mem, panic, thread};
 
-    use log::trace;
-    use parking_lot::{Condvar, Mutex};
+    use crate::utils::u24;
+
+    /// A unique sequence number with a global unique ID.
+    /// This is used to identify a timer across the different peers.
+    #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Default)]
+    struct UniqueSeq {
+        seq_num: u24,
+        guid: u64,
+    }
 
     /// A simple timer reactor.
     ///
     /// There is only one global instance of this type, accessible by [`Reactor::get()`].
     pub(crate) struct Reactor {
-        /// An ordered map of registered timers.
-        ///
-        /// Timers are in the order in which they fire. The `usize` in this type is a timer ID used
-        /// to distinguish timers that fire at the same time. The `Waker` represents the
-        /// task awaiting the timer.
-        timers: Mutex<BTreeMap<(Instant, usize), Waker>>,
-        cond: Condvar,
+        /// Inner state of the timer reactor.
+        inner: parking_lot::Mutex<ReactorInner>,
+        /// A condition variable to notify the reactor of new timers.
+        cond: parking_lot::Condvar,
     }
 
-    fn main_loop() {
-        let reactor = Reactor::get();
-        loop {
-            reactor.process_timers();
-        }
+    /// Inner state of the timer reactor.
+    struct ReactorInner {
+        /// An ordered map of registered timers.
+        ///
+        /// Timers are in the order in which they fire. The `UniqueSeq` in this type is relative to
+        /// the timer and plays a role in a unique ID for same timeout. The `Waker`
+        /// represents the task awaiting the timer.
+        timers: BTreeMap<(Instant, UniqueSeq), Waker>,
+        /// A mapping of unique seq num to their respective `Instant`s.
+        ///
+        /// This is used to cancel timers with a given sequence number.
+        mapping: HashMap<UniqueSeq, Instant>,
     }
 
     impl Reactor {
         pub(crate) fn get() -> &'static Reactor {
             static REACTOR: OnceLock<Reactor> = OnceLock::new();
+
+            fn main_loop() {
+                let reactor = Reactor::get();
+                loop {
+                    reactor.process_timers();
+                }
+            }
 
             REACTOR.get_or_init(|| {
                 // Spawn the daemon thread to motivate the reactor.
@@ -159,36 +192,39 @@ mod reactor {
                     .expect("cannot spawn timer-reactor thread");
 
                 Reactor {
-                    timers: Mutex::new(BTreeMap::new()),
-                    cond: Condvar::new(),
+                    inner: parking_lot::Mutex::new(ReactorInner {
+                        timers: BTreeMap::new(),
+                        mapping: HashMap::new(),
+                    }),
+                    cond: parking_lot::Condvar::new(),
                 }
             })
+        }
+
+        /// Locks the reactor for exclusive access.
+        pub(crate) fn lock(&self) -> ReactorLock<'_> {
+            ReactorLock {
+                inner: self.inner.lock(),
+                cond: &self.cond,
+            }
         }
 
         /// Registers a timer in the reactor.
         ///
         /// Returns the inserted timer's ID.
-        pub(crate) fn insert_timer(&self, when: Instant, waker: &Waker) -> usize {
-            // Generate a new timer ID.
-            static ID_GENERATOR: AtomicUsize = AtomicUsize::new(1);
-            let id = ID_GENERATOR.fetch_add(1, Ordering::Relaxed);
-
-            let mut guard = self.timers.lock();
-            guard.insert((when, id), waker.clone());
+        pub(crate) fn insert_timer(&self, when: Instant, seq_num: u24, guid: u64, waker: &Waker) {
+            let mut guard = self.inner.lock();
+            let unique_seq = UniqueSeq { seq_num, guid };
+            guard.mapping.insert(unique_seq, when);
+            guard.timers.insert((when, unique_seq), waker.clone());
 
             // Notify that a timer has been inserted.
             self.cond.notify_one();
-
-            drop(guard);
-
-            id
         }
 
-        /// Processes ready timers and extends the list of wakers to wake.
-        ///
-        /// Returns the duration until the next timer before this method was called.
+        /// Processes ready timers and waits for the next timer to be inserted.
         fn process_timers(&self) {
-            let mut timers = self.timers.lock();
+            let mut inner = self.inner.lock();
 
             let now = Instant::now();
 
@@ -196,27 +232,55 @@ mod reactor {
             //
             // Careful to split just *after* `now`, so that a timer set for exactly `now` is
             // considered ready.
-            let pending = timers.split_off(&(now + Duration::from_nanos(1), 0));
-            let ready = mem::replace(&mut *timers, pending);
+            let pending = inner
+                .timers
+                .split_off(&(now + Duration::from_nanos(1), UniqueSeq::default()));
+            let ready = mem::replace(&mut inner.timers, pending);
 
-            // Calculate the duration until the next event.
-            let dur = timers
-                .keys()
-                .next()
-                .map(|(when, _)| when.saturating_duration_since(now));
-
-            for (_, waker) in ready {
+            for ((_, seq_num), waker) in ready {
+                inner.mapping.remove(&seq_num);
                 // TODO: wake up maybe slow down the reactor
                 // Don't let a panicking waker blow everything up.
                 panic::catch_unwind(|| waker.wake()).ok();
             }
 
+            // Calculate the duration until the next event.
+            let dur = inner
+                .timers
+                .keys()
+                .next()
+                .map(|(when, _)| when.saturating_duration_since(now));
+
             if let Some(dur) = dur {
-                trace!("[timer_reactor] wait for {dur:?}");
-                self.cond.wait_for(&mut timers, dur);
+                self.cond.wait_for(&mut inner, dur);
             } else {
-                trace!("[timer_reactor] wait for next timer insertion");
-                self.cond.wait(&mut timers);
+                self.cond.wait(&mut inner);
+            }
+        }
+    }
+
+    pub(crate) struct ReactorLock<'a> {
+        inner: parking_lot::MutexGuard<'a, ReactorInner>,
+        cond: &'a parking_lot::Condvar,
+    }
+
+    impl Drop for ReactorLock<'_> {
+        fn drop(&mut self) {
+            // Notify the reactor that the inner state has changed.
+            self.cond.notify_one();
+        }
+    }
+
+    impl ReactorLock<'_> {
+        pub(crate) fn cancel_timer(&mut self, seq_num: u24, guid: u64, wakers: &mut Vec<Waker>) {
+            let unique_seq = UniqueSeq { seq_num, guid };
+            if let Some(when) = self.inner.mapping.remove(&unique_seq) {
+                wakers.push(
+                    self.inner
+                        .timers
+                        .remove(&(when, unique_seq))
+                        .expect("timer should exist"),
+                );
             }
         }
     }
@@ -233,13 +297,13 @@ mod test {
     use super::ResendMap;
     use crate::packet::connected::{AckOrNack, Flags, Frame};
     use crate::tests::test_trace_log_setup;
-    use crate::Reliability;
+    use crate::{Reliability, RoleContext};
 
     const TEST_RTO: Duration = Duration::from_millis(1200);
 
     #[test]
     fn test_resend_map_works() {
-        let mut map = ResendMap::new();
+        let mut map = ResendMap::new(RoleContext::test_server());
         map.record(0.into(), vec![]);
         map.record(1.into(), vec![]);
         map.record(2.into(), vec![]);
@@ -294,7 +358,7 @@ mod test {
 
     #[test]
     fn test_resend_map_stales() {
-        let mut map = ResendMap::new();
+        let mut map = ResendMap::new(RoleContext::test_server());
         map.record(0.into(), vec![]);
         map.record(1.into(), vec![]);
         map.record(2.into(), vec![]);
@@ -309,7 +373,7 @@ mod test {
     async fn test_resend_map_poll_wait() {
         let _guard = test_trace_log_setup();
 
-        let mut map = ResendMap::new();
+        let mut map = ResendMap::new(RoleContext::test_server());
         map.record(0.into(), vec![]);
         std::thread::sleep(TEST_RTO);
         map.record(1.into(), vec![]);

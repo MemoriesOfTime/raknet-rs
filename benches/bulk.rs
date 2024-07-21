@@ -11,6 +11,9 @@ use raknet_rs::server::{self, MakeIncoming};
 use tokio::net::UdpSocket as TokioUdpSocket;
 use tokio::runtime::Runtime;
 
+const SEND_BUF_CAP: usize = 1024;
+const MTU: u16 = 1500;
+
 pub fn bulk_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("bulk_benchmark");
     let server_addr = spawn_server();
@@ -44,6 +47,14 @@ pub fn bulk_benchmark(c: &mut Criterion) {
         });
     }
 
+    // The following benchmarks are not stable, and the reason is as follows:
+    // Some ack may fail to wake up a certain client (This client has already received the ack
+    // before falling asleep to wait RTO, causing the ack not to wake it up. This is almost
+    // impossible to happen in real-life scenarios.), and this client will wait for a complete
+    // RTO period before receiving this ack. This ultimately causes this round of benchmarking to
+    // stall for a while, affecting the benchmark results.
+
+    // TODO: find a way to make the benchmark stable
     {
         group.throughput(Throughput::Bytes(short_data.len() as u64 * 10));
         group.bench_function("short_data_10_clients", |bencher| {
@@ -79,9 +90,8 @@ fn configure_bencher(
         sock.connect_to(
             server_addr,
             client::Config::default()
-                .send_buf_cap(1024)
-                .mtu(1400)
-                .client_guid(1919810)
+                .send_buf_cap(SEND_BUF_CAP)
+                .mtu(MTU)
                 .protocol_version(11),
         )
         .await
@@ -100,10 +110,6 @@ fn configure_bencher(
                     tokio::pin!(client);
                     client.feed(Bytes::from_static(data)).await.unwrap();
                     debug!("client {} finished feeding", i);
-                    // TODO: This is the culprit that currently causes the benchmark to be very
-                    // slow. The current implementation avoids spinning in close check by waiting
-                    // for an RTO each time before starting the check, which usually takes a long
-                    // time.
                     client.close().await.unwrap(); // make sure all data is sent
                     debug!("client {} closed", i);
                 });
@@ -122,11 +128,10 @@ fn spawn_server() -> SocketAddr {
     let server_addr = sock.local_addr().unwrap();
     rt().spawn(async move {
         let config = server::Config::new()
-            .send_buf_cap(1024)
-            .sever_guid(114514)
-            .advertisement(&b"Hello, I am proxy server"[..])
+            .send_buf_cap(SEND_BUF_CAP)
+            .advertisement(&b"Hello, I am server"[..])
             .min_mtu(500)
-            .max_mtu(1400)
+            .max_mtu(MTU)
             .support_version(vec![9, 11, 13])
             .max_pending(1024);
         let mut incoming = sock.make_incoming(config);
