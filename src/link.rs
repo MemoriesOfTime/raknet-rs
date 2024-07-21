@@ -185,7 +185,7 @@ impl Router {
         )
     }
 
-    /// Deliver the packet to the corresponding router. Return false if the connection was dropped.
+    /// Deliver the packet to the corresponding route. Return false if the connection was dropped.
     pub(crate) fn deliver(&mut self, pack: connected::Packet<FramesMut>) -> bool {
         if self.router_tx.is_closed() {
             debug_assert!(Arc::strong_count(&self.link) == 1);
