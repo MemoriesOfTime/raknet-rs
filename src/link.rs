@@ -205,7 +205,7 @@ impl Router {
                     }
                 }
 
-                self.router_tx.try_send(frames).unwrap();
+                return self.router_tx.try_send(frames).is_ok();
             }
             connected::Packet::Ack(ack) => self.link.incoming_ack(ack),
             connected::Packet::Nack(nack) => self.link.incoming_nack(nack),

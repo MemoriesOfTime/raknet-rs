@@ -6,7 +6,7 @@ use std::task::{Context, Poll};
 
 use bytes::Bytes;
 use futures::{ready, Sink, Stream};
-use log::{debug, error, warn};
+use log::{debug, error, trace, warn};
 use minitrace::collector::SpanContext;
 use minitrace::Span;
 use pin_project_lite::pin_project;
@@ -204,7 +204,7 @@ where
                             this.role
                         );
                     } else {
-                        debug!(
+                        trace!(
                             "[{}] received open connection request 1 from {addr}",
                             this.role,
                         );
@@ -227,7 +227,7 @@ where
                         )));
                         continue;
                     }
-                    debug!(
+                    trace!(
                         "[{}] received open connection request 2 from {addr}",
                         this.role
                     );
@@ -236,12 +236,14 @@ where
                         || mtu > this.config.max_mtu
                         || this.connected.contains_key(&addr)
                     {
+                        debug!("[{}] received unexpected mtu({mtu}) from {addr}", this.role);
                         *this.state = OfflineState::SendingPrepare(Some((
                             Self::make_already_connected(this.config),
                             addr,
                         )));
                         continue;
                     }
+                    debug!("[{}] client {addr} connected with mtu {mtu}", this.role);
                     this.connected.insert(addr, PeerContext { addr, mtu });
                     unconnected::Packet::OpenConnectionReply2 {
                         magic: (),

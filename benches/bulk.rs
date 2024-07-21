@@ -5,6 +5,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use criterion::{criterion_group, criterion_main, BatchSize, Bencher, Criterion, Throughput};
 use futures::{SinkExt, StreamExt};
+use log::debug;
 use raknet_rs::client::{self, ConnectTo};
 use raknet_rs::server::{self, MakeIncoming};
 use tokio::net::UdpSocket as TokioUdpSocket;
@@ -90,29 +91,21 @@ fn configure_bencher(
         || {
             std::iter::repeat_with(mk_client)
                 .take(clients_num)
-                .map(|handshake| {
-                    futures::executor::block_on(async move {
-                        let io = handshake.await;
-                        std::thread::sleep(Duration::from_millis(100));
-                        io
-                    })
-                })
+                .map(futures::executor::block_on)
         },
         |clients| async move {
             let mut join = vec![];
-            for client in clients {
+            for (i, client) in clients.enumerate() {
                 let handle = tokio::spawn(async move {
-                    let mut ticker = tokio::time::interval(Duration::from_millis(10));
                     tokio::pin!(client);
-                    loop {
-                        tokio::select! {
-                            _ = client.send(Bytes::from_static(data)) => break,
-                            _ = ticker.tick() => {
-                                assert!(client.flush().await.is_ok());
-                            }
-                        }
-                    }
-                    assert!(client.close().await.is_ok());
+                    client.feed(Bytes::from_static(data)).await.unwrap();
+                    debug!("client {} finished feeding", i);
+                    // TODO: This is the culprit that currently causes the benchmark to be very
+                    // slow. The current implementation avoids spinning in close check by waiting
+                    // for an RTO each time before starting the check, which usually takes a long
+                    // time.
+                    client.close().await.unwrap(); // make sure all data is sent
+                    debug!("client {} closed", i);
                 });
                 join.push(handle);
             }
@@ -140,19 +133,26 @@ fn spawn_server() -> SocketAddr {
         while let Some(io) = incoming.next().await {
             tokio::spawn(async move {
                 tokio::pin!(io);
-                let mut ticker = tokio::time::interval(Duration::from_millis(10));
+                // 20ms, one tick, from Minecraft
+                let mut ticker = tokio::time::interval(Duration::from_millis(20));
                 loop {
                     tokio::select! {
-                        res = io.next() => {
-                            if res.is_none() {
-                                break;
-                            }
+                        None = io.next() => {
+                            break;
                         }
                         _ = ticker.tick() => {
                             assert!(io.flush().await.is_ok());
                         }
                     };
                 }
+                // No 2MSL for benchmark, so just wait for a while
+                // On the server side, it may never receive the final acknowledgment of FIN
+                // (Usually, the peer that initiates the closure first will wait for
+                // 2MSL to ensure.). It is necessary to ensure that when the server
+                // closes, all previously sent data packets are sent. Therefore, the
+                // client will receive an acknowledgment of the FIN it sends and can
+                // proceed with a normal closure.
+                let _ = tokio::time::timeout(Duration::from_millis(100), io.close()).await;
             });
         }
     });

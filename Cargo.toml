@@ -47,10 +47,10 @@ micro-bench = []
 name = "micro"
 harness = false
 required-features = ["micro-bench"]
-# TODO: Not available currently
-# [[bench]]
-# name = "bulk"
-# harness = false
+
+[[bench]]
+name = "bulk"
+harness = false
 
 [profile.bench]
 opt-level = 3

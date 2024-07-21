@@ -241,6 +241,8 @@ where
                 break;
             }
             // wait for the next resend
+            // TODO: When receiving an ack, we should immediately stop waiting and check if it can
+            // be terminated.
             trace!(
                 "[{}] poll_wait for next timeout, resend map size: {}",
                 self.role,

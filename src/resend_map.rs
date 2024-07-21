@@ -6,7 +6,7 @@ use crate::packet::connected::{AckOrNack, Frame, Frames, Record};
 use crate::utils::u24;
 
 // TODO: use RTTEstimator to get adaptive RTO
-const RTO: Duration = Duration::from_millis(144);
+const RTO: Duration = Duration::from_secs(1);
 
 struct ResendEntry {
     frames: Option<Frames>,
@@ -235,7 +235,7 @@ mod test {
     use crate::tests::test_trace_log_setup;
     use crate::Reliability;
 
-    const TEST_RTO: Duration = Duration::from_millis(500);
+    const TEST_RTO: Duration = Duration::from_millis(1200);
 
     #[test]
     fn test_resend_map_works() {
