@@ -8,10 +8,10 @@ use concurrent_queue::ConcurrentQueue;
 use futures::Stream;
 use log::{debug, trace, warn};
 
-use crate::packet::connected::{self, AckOrNack, Frame, FrameBody, FrameSet, FramesMut, Record};
+use crate::packet::connected::{self, AckOrNack, Frame, FrameBody, FrameSet, FramesMut};
 use crate::packet::unconnected;
-use crate::resend_map::{reactor, ResendMap};
-use crate::utils::u24;
+use crate::resend_map::ResendMap;
+use crate::utils::{u24, Reactor};
 use crate::RoleContext;
 
 /// Shared link between stream and sink
@@ -87,25 +87,6 @@ impl TransferLink {
     }
 
     pub(crate) fn incoming_ack(&self, records: AckOrNack) {
-        let to_wakes = if self.should_waking() {
-            let mut wakers = Vec::new();
-            let mut guard = reactor::Reactor::get().lock();
-            for record in &records.records {
-                match record {
-                    Record::Range(start, end) => {
-                        for seq_num in start.to_u32()..=end.to_u32() {
-                            guard.cancel_timer(seq_num.into(), self.role.guid(), &mut wakers);
-                        }
-                    }
-                    Record::Single(seq_num) => {
-                        guard.cancel_timer(*seq_num, self.role.guid(), &mut wakers);
-                    }
-                }
-            }
-            Some(wakers)
-        } else {
-            None
-        };
         if let Some(dropped) = self.incoming_ack.force_push(records).unwrap() {
             warn!(
                 "[{}] discard received ack {dropped:?}, total count: {}",
@@ -114,15 +95,11 @@ impl TransferLink {
             );
         }
         // wake up after sends ack
-        if let Some(wakers) = to_wakes {
-            debug!(
-                "[{}] wake up {} wakers after receives ack",
-                self.role,
-                wakers.len()
-            );
-            for waker in wakers {
+        if self.should_waking() {
+            for waker in Reactor::get().cancel_all_timers(self.role.guid()) {
                 // safe to panic
                 waker.wake();
+                debug!("[{}] wake up a certain waker after receives ack", self.role,);
             }
         }
     }

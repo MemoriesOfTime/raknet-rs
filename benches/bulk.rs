@@ -138,8 +138,8 @@ fn spawn_server() -> SocketAddr {
         while let Some(io) = incoming.next().await {
             tokio::spawn(async move {
                 tokio::pin!(io);
-                // 20ms, one tick, from Minecraft
-                let mut ticker = tokio::time::interval(Duration::from_millis(20));
+                // 50ms = 1s/20, one tick, from Minecraft
+                let mut ticker = tokio::time::interval(Duration::from_millis(50));
                 loop {
                     tokio::select! {
                         None = io.next() => {

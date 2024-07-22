@@ -275,7 +275,7 @@ mod test {
     use futures::StreamExt;
 
     use super::*;
-    use crate::tests::test_trace_log_setup;
+    use crate::utils::tests::test_trace_log_setup;
 
     struct TestCase {
         addr: SocketAddr,
