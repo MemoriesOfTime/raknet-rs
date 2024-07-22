@@ -6,8 +6,8 @@ mod ordered;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use futures::Stream;
 use fastrace::Span;
+use futures::Stream;
 use pin_project_lite::pin_project;
 
 pub(super) use self::body::*;

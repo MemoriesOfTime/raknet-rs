@@ -5,9 +5,9 @@ use std::process::exit;
 use std::time::Duration;
 
 use bytes::Bytes;
-use futures::{SinkExt, StreamExt};
 use fastrace::collector::{SpanContext, SpanId, SpanRecord, TraceId};
 use fastrace::Span;
+use futures::{SinkExt, StreamExt};
 use raknet_rs::client::{self, ConnectTo};
 use raknet_rs::io::{TraceInfo, IO};
 use raknet_rs::server::{self, MakeIncoming};
@@ -45,9 +45,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 loop {
                     if let Some(data) = read.next().await {
                         let trace_id = read.last_trace_id().unwrap_or_else(|| {
-                            eprintln!(
-                                "Please run with `--features fastrace/enable` and try again"
-                            );
+                            eprintln!("Please run with `--features fastrace/enable` and try again");
                             exit(0)
                         });
                         let root_span = Span::root(

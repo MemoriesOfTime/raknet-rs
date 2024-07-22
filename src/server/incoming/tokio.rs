@@ -5,10 +5,10 @@ use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 
 use concurrent_queue::ConcurrentQueue;
-use futures::Stream;
-use log::{debug, error};
 use fastrace::collector::SpanContext;
 use fastrace::Span;
+use futures::Stream;
+use log::{debug, error};
 use pin_project_lite::pin_project;
 use tokio::net::UdpSocket as TokioUdpSocket;
 

@@ -2,8 +2,8 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use bytes::Bytes;
-use futures::{Future, Sink, SinkExt, Stream};
 use fastrace::collector::TraceId;
+use futures::{Future, Sink, SinkExt, Stream};
 use pin_project_lite::pin_project;
 
 use crate::errors::Error;

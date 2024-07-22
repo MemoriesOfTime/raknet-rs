@@ -2,8 +2,8 @@ use std::io;
 use std::net::ToSocketAddrs;
 use std::sync::Arc;
 
-use futures::StreamExt;
 use fastrace::Span;
+use futures::StreamExt;
 use tokio::net::UdpSocket as TokioUdpSocket;
 
 use super::ConnectTo;
