@@ -3,7 +3,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::task::Waker;
 
-use minitrace::collector::{SpanId, SpanRecord, TraceId};
+use fastrace::collector::{SpanId, SpanRecord, TraceId};
 use parking_lot::Mutex;
 
 pub(crate) struct TestTraceLogGuard {
@@ -13,7 +13,7 @@ pub(crate) struct TestTraceLogGuard {
 impl Drop for TestTraceLogGuard {
     #[allow(clippy::print_stderr)]
     fn drop(&mut self) {
-        minitrace::flush();
+        fastrace::flush();
 
         let spans = self.spans.lock().clone();
         let spans_map: HashMap<SpanId, SpanRecord> = spans
@@ -97,10 +97,10 @@ impl Drop for TestTraceLogGuard {
 #[must_use = "guard should be kept alive to keep the trace log"]
 pub(crate) fn test_trace_log_setup() -> TestTraceLogGuard {
     std::env::set_var("RUST_LOG", "trace");
-    let (reporter, spans) = minitrace::collector::TestReporter::new();
-    minitrace::set_reporter(
+    let (reporter, spans) = fastrace::collector::TestReporter::new();
+    fastrace::set_reporter(
         reporter,
-        minitrace::collector::Config::default().report_before_root_finish(true),
+        fastrace::collector::Config::default().report_before_root_finish(true),
     );
     let _ignore = env_logger::try_init();
     TestTraceLogGuard { spans }

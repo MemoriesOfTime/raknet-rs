@@ -5,7 +5,7 @@ use std::task::{Context, Poll};
 use bytes::Buf;
 use futures::{ready, Stream, StreamExt};
 use log::warn;
-use minitrace::{Event, Span};
+use fastrace::{Event, Span};
 use pin_project_lite::pin_project;
 
 use crate::errors::CodecError;

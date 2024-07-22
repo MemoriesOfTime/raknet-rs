@@ -2,8 +2,8 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use futures::Stream;
-use minitrace::collector::{SpanContext, TraceId};
-use minitrace::Span;
+use fastrace::collector::{SpanContext, TraceId};
+use fastrace::Span;
 use pin_project_lite::pin_project;
 
 use crate::io::TraceInfo;

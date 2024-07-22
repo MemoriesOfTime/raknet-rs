@@ -3,7 +3,7 @@ use std::net::ToSocketAddrs;
 use std::sync::Arc;
 
 use futures::StreamExt;
-use minitrace::Span;
+use fastrace::Span;
 use tokio::net::UdpSocket as TokioUdpSocket;
 
 use super::ConnectTo;

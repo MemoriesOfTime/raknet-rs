@@ -7,8 +7,8 @@ use std::task::{ready, Context, Poll};
 use concurrent_queue::ConcurrentQueue;
 use futures::Stream;
 use log::{debug, error};
-use minitrace::collector::SpanContext;
-use minitrace::Span;
+use fastrace::collector::SpanContext;
+use fastrace::Span;
 use pin_project_lite::pin_project;
 use tokio::net::UdpSocket as TokioUdpSocket;
 

@@ -6,7 +6,7 @@ use std::task::{ready, Context, Poll};
 use bytes::{Buf, BytesMut};
 use futures::{Sink, Stream};
 use log::error;
-use minitrace::{Event, Span};
+use fastrace::{Event, Span};
 
 use super::AsyncSocket;
 use crate::errors::CodecError;

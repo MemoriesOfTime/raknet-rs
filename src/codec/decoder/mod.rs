@@ -7,7 +7,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use futures::Stream;
-use minitrace::Span;
+use fastrace::Span;
 use pin_project_lite::pin_project;
 
 pub(super) use self::body::*;

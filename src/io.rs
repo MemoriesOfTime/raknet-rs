@@ -3,7 +3,7 @@ use std::task::{Context, Poll};
 
 use bytes::Bytes;
 use futures::{Future, Sink, SinkExt, Stream};
-use minitrace::collector::TraceId;
+use fastrace::collector::TraceId;
 use pin_project_lite::pin_project;
 
 use crate::errors::Error;
