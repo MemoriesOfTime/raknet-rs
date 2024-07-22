@@ -5,9 +5,9 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use bytes::BufMut;
+use fastrace::{Event, Span};
 use futures::{ready, Stream, StreamExt};
 use lru::LruCache;
-use minitrace::{Event, Span};
 use pin_project_lite::pin_project;
 
 use crate::errors::CodecError;

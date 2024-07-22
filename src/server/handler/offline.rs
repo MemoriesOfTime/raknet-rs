@@ -5,10 +5,10 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use bytes::Bytes;
+use fastrace::collector::SpanContext;
+use fastrace::Span;
 use futures::{ready, Sink, Stream};
 use log::{debug, error, trace, warn};
-use minitrace::collector::SpanContext;
-use minitrace::Span;
 use pin_project_lite::pin_project;
 
 use crate::errors::CodecError;

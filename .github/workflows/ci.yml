@@ -44,12 +44,12 @@ jobs:
         run: sccache --zero-stats > /dev/null
 
       - name: Run test with codecov
-        run: cargo llvm-cov --no-report nextest --all-features --features minitrace/enable
+        run: cargo llvm-cov --no-report nextest --all-features --features fastrace/enable
 
       - name: Run example with codecov
         run: |
           cargo llvm-cov --no-report run --example proxy
-          cargo llvm-cov --no-report run --example tracing --features minitrace/enable
+          cargo llvm-cov --no-report run --example tracing --features fastrace/enable
 
       - name: Run bench with codecov
         run: |

@@ -1,9 +1,9 @@
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+use fastrace::local::LocalSpan;
+use fastrace::Event;
 use futures::{ready, Stream, StreamExt};
-use minitrace::local::LocalSpan;
-use minitrace::Event;
 use pin_project_lite::pin_project;
 
 use crate::errors::CodecError;

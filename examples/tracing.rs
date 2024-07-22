@@ -5,9 +5,9 @@ use std::process::exit;
 use std::time::Duration;
 
 use bytes::Bytes;
+use fastrace::collector::{SpanContext, SpanId, SpanRecord, TraceId};
+use fastrace::Span;
 use futures::{SinkExt, StreamExt};
-use minitrace::collector::{SpanContext, SpanId, SpanRecord, TraceId};
-use minitrace::Span;
 use raknet_rs::client::{self, ConnectTo};
 use raknet_rs::io::{TraceInfo, IO};
 use raknet_rs::server::{self, MakeIncoming};
@@ -16,10 +16,10 @@ use tokio::net::UdpSocket;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let (reporter, spans) = minitrace::collector::TestReporter::new();
-    minitrace::set_reporter(
+    let (reporter, spans) = fastrace::collector::TestReporter::new();
+    fastrace::set_reporter(
         reporter,
-        minitrace::collector::Config::default().report_before_root_finish(true),
+        fastrace::collector::Config::default().report_before_root_finish(true),
     );
 
     let socket = UdpSocket::bind("127.0.0.1:0").await?;
@@ -45,9 +45,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 loop {
                     if let Some(data) = read.next().await {
                         let trace_id = read.last_trace_id().unwrap_or_else(|| {
-                            eprintln!(
-                                "Please run with `--features minitrace/enable` and try again"
-                            );
+                            eprintln!("Please run with `--features fastrace/enable` and try again");
                             exit(0)
                         });
                         let root_span = Span::root(
@@ -71,7 +69,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     client(local_addr).await?;
 
-    minitrace::flush();
+    fastrace::flush();
     display(spans.lock().clone());
     Ok(())
 }
