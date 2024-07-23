@@ -72,8 +72,6 @@ impl Stream for Incoming {
             if let Some(entry) = this.routers.get_mut(&peer.addr) {
                 if !entry.deliver(pack) {
                     error!("[{role}] connection was dropped before closed");
-                    this.routers.remove(&peer.addr);
-                    this.offline.as_mut().disconnect(&peer.addr);
                 }
                 continue;
             }

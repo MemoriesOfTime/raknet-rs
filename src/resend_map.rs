@@ -98,7 +98,7 @@ impl ResendMap {
             "[{}]: process stales, {} entries left, next expired at {:?}",
             self.role,
             self.map.len(),
-            min_expired_at
+            min_expired_at.elapsed()
         );
         self.last_record_expired_at = min_expired_at;
     }
