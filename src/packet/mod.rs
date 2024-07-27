@@ -162,28 +162,18 @@ impl Packet<FramesMut> {
         }
     }
 
-    pub(crate) fn read(buf: &mut BytesMut) -> Result<Option<Self>, CodecError> {
-        if buf.is_empty() {
-            return Ok(None);
-        }
-        // read more
-        if buf.chunk()[0] == 0 {
-            buf.clear();
-            return Ok(None);
-        }
-
+    pub(crate) fn read(buf: &mut BytesMut) -> Result<Self, CodecError> {
         let pack_type: PackType = read_buf!(buf, 1, buf.get_u8().try_into()?);
         if pack_type.is_frame_set() {
-            return Ok(Some(Self::Connected(connected::Packet::read_frame_set(
-                buf,
-            )?)));
+            return Ok(Self::Connected(connected::Packet::read_frame_set(buf)?));
         }
         if pack_type.is_ack() {
-            return Ok(Some(Self::Connected(connected::Packet::read_ack(buf)?)));
+            return Ok(Self::Connected(connected::Packet::read_ack(buf)?));
         }
         if pack_type.is_nack() {
-            return Ok(Some(Self::Connected(connected::Packet::read_nack(buf)?)));
+            return Ok(Self::Connected(connected::Packet::read_nack(buf)?));
         }
+        // unconnected packets
         match pack_type {
             PackType::UnconnectedPing1 | PackType::UnconnectedPing2 => {
                 read_buf!(buf, 32, unconnected::Packet::read_unconnected_ping(buf))
@@ -228,7 +218,7 @@ impl Packet<FramesMut> {
             PackType::OpenConnectionReply2 => unconnected::Packet::read_open_connection_reply2(buf),
             _ => Err(CodecError::InvalidPacketType(pack_type.into())),
         }
-        .map(|packet| Some(Self::Unconnected(packet)))
+        .map(Self::Unconnected)
     }
 }
 

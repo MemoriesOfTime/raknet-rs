@@ -15,14 +15,14 @@ Yet another project rewritten in Rust.
   - Support `Unreliable`, `Reliable` and `ReliableOrdered` packets.
   - Support multiple order channels.
   - Support `ACK`/`NACK` mechanism.
-- Full tracing powered by [fastrace](https://github.com/fastracelabs/fastrace).
+- Full tracing:
   - You can track a packet's span during deduplication, fragmentation, ...
 
 ## Roadmap
 
 > Ordered by priority
 
-- Add sliding window congestion control
+- Add RTT Estimator
 - Documentation
 - More fuzz testing
 - Bulk benchmark

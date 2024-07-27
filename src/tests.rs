@@ -9,7 +9,7 @@ use log::info;
 use tokio::net::UdpSocket;
 
 use crate::client::{self, ConnectTo};
-use crate::io::{Ping, TraceInfo, IO};
+use crate::io::{TraceInfo, IO};
 use crate::server::{self, MakeIncoming};
 use crate::utils::tests::test_trace_log_setup;
 use crate::{Message, Reliability};
@@ -93,16 +93,13 @@ async fn test_tokio_udp_works() {
             io.next().await.unwrap(),
             Bytes::from_iter(repeat(0xfe).take(1024))
         );
-        io.as_mut().ping().await.unwrap();
         io.send(Bytes::from_iter(repeat(0xfe).take(2048)))
             .await
             .unwrap();
-        io.as_mut().ping().await.unwrap();
         assert_eq!(
             io.next().await.unwrap(),
             Bytes::from_iter(repeat(0xfe).take(2048))
         );
-        io.as_mut().ping().await.unwrap();
         io.send(Bytes::from_iter(repeat(0xfe).take(4096)))
             .await
             .unwrap();

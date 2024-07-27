@@ -160,11 +160,12 @@ where
                     }
                     remain_mtu -= frame.size();
                     trace!(
-                        "[{}] send frame, seq_num: {}, reliable: {}, first byte: 0x{:02x}",
+                        "[{}] send frame, seq_num: {}, reliable: {}, first byte: 0x{:02x}, size: {}",
                         this.role,
                         *this.seq_num_write_index,
                         reliable,
                         frame.body[0],
+                        frame.size()
                     );
                     frames.push(this.buf.pop_back().unwrap());
                     continue;

@@ -107,8 +107,11 @@ impl<T: AsyncSocket> Stream for Framed<T> {
         loop {
             // Are there still bytes left in the read buffer to decode?
             if pin.is_readable {
+                pin.is_readable = false;
+
+                // decode one packet at a time
                 match Packet::read(&mut pin.rd) {
-                    Ok(Some(frame)) => {
+                    Ok(frame) => {
                         let current_addr = pin
                             .current_addr
                             .expect("will always be set before this line is called");
@@ -116,19 +119,20 @@ impl<T: AsyncSocket> Stream for Framed<T> {
                             format!("{:?} decoded", frame.pack_type()),
                             || [],
                         );
+
+                        pin.decode_span.take();
+                        pin.rd.clear();
+
                         return Poll::Ready(Some((frame, current_addr)));
                     }
                     Err(err) => {
                         Event::add_to_local_parent(err.to_string(), || []);
                         error!("failed to decode packet: {:?}", err);
-                    }
-                    Ok(None) => {}
-                }
-                // if this line has been reached then decode has returned `None` or an error
 
-                pin.decode_span.take(); // finish the decode span
-                pin.is_readable = false;
-                pin.rd.clear();
+                        pin.decode_span.take();
+                        pin.rd.clear();
+                    }
+                }
             }
 
             // We're out of data. Try and fetch more data to decode
