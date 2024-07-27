@@ -45,16 +45,18 @@ async fn test_tokio_udp_works() {
         loop {
             let io = incoming.next().await.unwrap();
             tokio::spawn(async move {
-                tokio::pin!(io);
-                let mut ticker = tokio::time::interval(Duration::from_millis(20));
+                let (reader, sender) = IO::split(io);
+                tokio::pin!(reader);
+                tokio::pin!(sender);
+                let mut ticker = tokio::time::interval(Duration::from_millis(5));
                 loop {
                     tokio::select! {
-                        Some(data) = io.next() => {
-                            io.feed(data).await.unwrap();
-                            info!("last trace id: {:?}", (*io).last_trace_id());
+                        Some(data) = reader.next() => {
+                            sender.feed(Message::new(Reliability::Reliable, 0, data)).await.unwrap();
+                            info!("last trace id: {:?}", reader.last_trace_id());
                         }
                         _ = ticker.tick() => {
-                            io.flush().await.unwrap();
+                            sender.flush().await.unwrap();
                         }
                     };
                 }
