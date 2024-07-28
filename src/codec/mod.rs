@@ -16,13 +16,13 @@ use std::net::SocketAddr;
 use std::task::{Context, Poll};
 
 use bytes::BytesMut;
-use futures::{Sink, StreamExt};
 use futures_core::Stream;
+use futures_lite::StreamExt;
 use log::{debug, trace};
 
 use self::decoder::{BodyDecoded, DeFragmented, Deduplicated, Ordered, TracePending};
 use self::encoder::{BodyEncoded, Fragmented};
-use crate::errors::CodecError;
+use crate::io::Writer;
 use crate::link::SharedLink;
 use crate::packet::connected::{Frame, FrameBody, FrameSet, FramesMut};
 use crate::utils::Logged;
@@ -117,19 +117,19 @@ pub(crate) trait Encoded {
         mtu: u16,
         config: Config,
         link: SharedLink,
-    ) -> impl Sink<Message, Error = CodecError> + Sink<FrameBody, Error = CodecError>;
+    ) -> impl Writer<Message> + Writer<FrameBody>;
 }
 
 impl<F> Encoded for F
 where
-    F: Sink<Frame, Error = CodecError>,
+    F: Writer<Frame>,
 {
     fn frame_encoded(
         self,
         mtu: u16,
         config: Config,
         link: SharedLink,
-    ) -> impl Sink<Message, Error = CodecError> + Sink<FrameBody, Error = CodecError> {
+    ) -> impl Writer<Message> + Writer<FrameBody> {
         self.fragmented(mtu, config.max_channels).body_encoded(link)
     }
 }

@@ -124,8 +124,6 @@ where
                 {
                     // promise that parted_index is always less than parted_size
                     if parted_index >= parted_size {
-                        // perhaps network bit-flips
-                        this.link.outgoing_nack(frame_set.seq_num);
                         let err = format!(
                             "parted_index {} >= parted_size {}",
                             parted_index, parted_size
@@ -188,8 +186,8 @@ where
 #[cfg(test)]
 mod test {
     use bytes::BytesMut;
-    use futures::StreamExt;
     use futures_async_stream::stream;
+    use futures_lite::StreamExt;
     use rand::seq::SliceRandom;
 
     use super::*;

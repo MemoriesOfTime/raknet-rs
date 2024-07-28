@@ -7,14 +7,10 @@ use std::task::{Context, Poll};
 
 use bytes::Bytes;
 use fastrace::collector::TraceId;
-use futures::{Sink, SinkExt};
 use futures_core::Stream;
 use pin_project_lite::pin_project;
 
 use crate::errors::Error;
-use crate::packet::connected::FrameBody;
-use crate::utils::timestamp;
-use crate::{Message, Reliability};
 
 // TODO: v0.2.0
 
@@ -22,7 +18,7 @@ use crate::{Message, Reliability};
 #[must_use = "reader do nothing unless polled"]
 pub trait Reader: Stream<Item = Bytes> {
     /// Get the remote address of the connection
-    fn get_remote_addr(self: Pin<&mut Self>) -> SocketAddr;
+    fn get_remote_addr(&self) -> SocketAddr;
 }
 
 /// Writer is a sink of bytes, which can be used to write data to the connection.
@@ -32,7 +28,7 @@ pub trait Writer<Pack> {
     /// Prepare the writer to receive a packet
     fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>>;
 
-    /// Send a packet
+    /// Feed a packet
     ///
     /// Packets encoding is deterministic, and this method will not return an error even when the
     /// internal buffer is full. You need to ensure [`Writer::poll_ready`] to prevent buffer
@@ -43,7 +39,8 @@ pub trait Writer<Pack> {
     ///
     /// This method will panic when unreasonable parameters are passed in. For example, the
     /// order channel exceeds the maximum value.
-    fn send(self: Pin<&mut Self>, pack: Pack);
+    /// This method will also panic when the connection is closed.
+    fn feed(self: Pin<&mut Self>, pack: Pack);
 
     /// Flush all buffered packets
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>>;
@@ -107,137 +104,46 @@ pub trait Ping {
     fn ping(self: Pin<&mut Self>) -> impl Future<Output = Result<(), Error>> + Send;
 }
 
-// TODO: v0.2.0 remove below lines
-
-/// The basic operation for each connection
-pub trait IO: Stream<Item = Bytes> + Sink<Bytes, Error = Error> + TraceInfo + Send {
-    fn set_default_reliability(self: Pin<&mut Self>, reliability: Reliability);
-    fn get_default_reliability(&self) -> Reliability;
-
-    fn set_default_order_channel(self: Pin<&mut Self>, order_channel: u8);
-    fn get_default_order_channel(&self) -> u8;
-
-    /// Split into a Stream and a Sink
-    fn split(
-        self,
-    ) -> (
-        impl Stream<Item = Bytes> + TraceInfo + Send,
-        impl Sink<Message, Error = Error> + Send,
-    );
-}
-
 pin_project! {
-    pub(crate) struct SeparatedIO<I, O> {
+    // A wrapper for the reader to add the remote address
+    pub(crate) struct ReaderWrapper<T> {
         #[pin]
-        src: I,
-        #[pin]
-        dst: O,
-        default_reliability: Reliability,
-        default_order_channel: u8,
+        reader: T,
+        remote_addr: SocketAddr,
     }
 }
 
-impl<I, O> SeparatedIO<I, O>
-where
-    I: Stream<Item = Bytes> + TraceInfo + Send,
-    O: Sink<Message, Error = Error> + Send,
-{
-    pub(crate) fn new(src: I, dst: O) -> Self {
-        SeparatedIO {
-            src,
-            dst,
-            default_reliability: Reliability::ReliableOrdered,
-            default_order_channel: 0,
+impl<T> ReaderWrapper<T> {
+    pub(crate) fn new(reader: T, remote_addr: SocketAddr) -> Self {
+        Self {
+            reader,
+            remote_addr,
         }
     }
 }
 
-impl<I, O> Stream for SeparatedIO<I, O>
+impl<T> Stream for ReaderWrapper<T>
 where
-    I: Stream<Item = Bytes>,
+    T: Stream<Item = Bytes>,
 {
     type Item = Bytes;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.project().src.poll_next(cx)
+        self.project().reader.poll_next(cx)
     }
 }
 
-impl<I, O> Sink<Bytes> for SeparatedIO<I, O>
+impl<T> Reader for ReaderWrapper<T>
 where
-    O: Sink<Message, Error = Error>,
+    T: Stream<Item = Bytes>,
 {
-    type Error = Error;
-
-    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.project().dst.poll_ready(cx)
-    }
-
-    fn start_send(self: Pin<&mut Self>, item: Bytes) -> Result<(), Self::Error> {
-        let msg = Message::new(self.default_reliability, self.default_order_channel, item);
-        self.project().dst.start_send(msg)
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.project().dst.poll_flush(cx)
-    }
-
-    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.project().dst.poll_close(cx)
+    fn get_remote_addr(&self) -> SocketAddr {
+        self.remote_addr
     }
 }
 
-impl<I, O> TraceInfo for SeparatedIO<I, O>
-where
-    I: TraceInfo,
-{
+impl<R: TraceInfo> TraceInfo for ReaderWrapper<R> {
     fn last_trace_id(&self) -> Option<TraceId> {
-        self.src.last_trace_id()
-    }
-}
-
-impl<I, O> crate::io::IO for SeparatedIO<I, O>
-where
-    O: Sink<Message, Error = Error> + Send,
-    I: Stream<Item = Bytes> + TraceInfo + Send,
-{
-    fn set_default_reliability(self: Pin<&mut Self>, reliability: Reliability) {
-        *self.project().default_reliability = reliability;
-    }
-
-    fn get_default_reliability(&self) -> Reliability {
-        self.default_reliability
-    }
-
-    fn set_default_order_channel(self: Pin<&mut Self>, order_channel: u8) {
-        *self.project().default_order_channel = order_channel;
-    }
-
-    fn get_default_order_channel(&self) -> u8 {
-        self.default_order_channel
-    }
-
-    fn split(
-        self,
-    ) -> (
-        impl Stream<Item = Bytes> + TraceInfo + Send,
-        impl Sink<Message, Error = Error> + Send,
-    ) {
-        (self.src, self.dst)
-    }
-}
-
-impl<I, O> Ping for SeparatedIO<I, O>
-where
-    O: Sink<Message, Error = Error> + Sink<FrameBody, Error = Error> + Send,
-    I: Stream<Item = Bytes> + TraceInfo + Send,
-{
-    async fn ping(self: Pin<&mut Self>) -> Result<(), Error> {
-        self.project()
-            .dst
-            .send(FrameBody::ConnectedPing {
-                client_timestamp: timestamp(),
-            })
-            .await
+        self.reader.last_trace_id()
     }
 }

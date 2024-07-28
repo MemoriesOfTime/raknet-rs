@@ -2,8 +2,8 @@ use std::net::ToSocketAddrs;
 
 use super::handler::offline;
 use crate::errors::Error;
-use crate::io::{Ping, IO};
-use crate::{codec, RoleContext};
+use crate::io::{Reader, Writer};
+use crate::{codec, Message, RoleContext};
 
 /// Connection implementation by using tokio's UDP framework
 #[cfg(feature = "tokio-udp")]
@@ -130,5 +130,5 @@ pub trait ConnectTo: Sized {
         self,
         addr: impl ToSocketAddrs,
         config: Config,
-    ) -> Result<impl IO + Ping, Error>;
+    ) -> Result<(impl Reader, impl Writer<Message>), Error>;
 }

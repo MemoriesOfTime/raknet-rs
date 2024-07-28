@@ -8,22 +8,22 @@ use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 
 use concurrent_queue::ConcurrentQueue;
-use futures::Sink;
 use futures_core::Stream;
 use log::warn;
 use pin_project_lite::pin_project;
 
-use crate::errors::{CodecError, Error};
+use crate::errors::Error;
+use crate::io::Writer;
 use crate::packet::connected::FrameBody;
 use crate::Message;
 
 enum OutgoingState {
     // before sending DisconnectNotification
     Connecting,
-    FirstCloseWait,
+    DeliveredWait,
     FinWait,
     // after sending DisconnectNotification
-    SecondCloseWait,
+    CloseWait,
     Closed,
 }
 
@@ -37,7 +37,7 @@ impl OutgoingState {
     fn before_finish(&self) -> bool {
         matches!(
             self,
-            OutgoingState::Connecting | OutgoingState::FirstCloseWait | OutgoingState::FinWait
+            OutgoingState::Connecting | OutgoingState::DeliveredWait | OutgoingState::FinWait
         )
     }
 }
@@ -78,17 +78,17 @@ pub(crate) trait OutgoingStateManage: Sized {
     fn manage_outgoing_state(
         self,
         close_on_drop: Option<CloseOnDrop>,
-    ) -> impl Sink<FrameBody, Error = Error> + Sink<Message, Error = Error>;
+    ) -> impl Writer<FrameBody> + Writer<Message>;
 }
 
 impl<F> OutgoingStateManage for F
 where
-    F: Sink<FrameBody, Error = CodecError> + Sink<Message, Error = CodecError>,
+    F: Writer<FrameBody> + Writer<Message>,
 {
     fn manage_outgoing_state(
         self,
         close_on_drop: Option<CloseOnDrop>,
-    ) -> impl Sink<FrameBody, Error = Error> + Sink<Message, Error = Error> {
+    ) -> impl Writer<FrameBody> + Writer<Message> {
         StateManager {
             frame: self,
             state: OutgoingState::Connecting,
@@ -123,32 +123,30 @@ where
     }
 }
 
-impl<F> Sink<FrameBody> for StateManager<F, OutgoingState>
+impl<F> Writer<FrameBody> for StateManager<F, OutgoingState>
 where
-    F: Sink<FrameBody, Error = CodecError>,
+    F: Writer<FrameBody>,
 {
-    type Error = Error;
-
-    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
         if !self.state.before_finish() {
             return Poll::Ready(Err(Error::ConnectionClosed));
         }
-        self.project().frame.poll_ready(cx).map_err(Into::into)
+        self.project().frame.poll_ready(cx)
     }
 
-    fn start_send(self: Pin<&mut Self>, item: FrameBody) -> Result<(), Self::Error> {
+    fn feed(self: Pin<&mut Self>, item: FrameBody) {
         if !self.state.before_finish() {
-            return Err(Error::ConnectionClosed);
+            panic!("you cannot send after you receive ConnectionClosed in poll_ready");
         }
-        self.project().frame.start_send(item).map_err(Into::into)
+        self.project().frame.feed(item);
     }
 
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
         // flush is allowed after the connection is closed, it will deliver ack.
         self.project().frame.poll_flush(cx).map_err(Into::into)
     }
 
-    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
         let mut this = self.project();
         if matches!(this.state, OutgoingState::Closed) {
             return Poll::Ready(Err(Error::ConnectionClosed));
@@ -156,22 +154,20 @@ where
         loop {
             match this.state {
                 OutgoingState::Connecting => {
-                    *this.state = OutgoingState::FirstCloseWait;
+                    *this.state = OutgoingState::DeliveredWait;
                 }
-                OutgoingState::FirstCloseWait => {
+                OutgoingState::DeliveredWait => {
                     // first wait all stales packets to receive by the peer
-                    ready!(this.frame.as_mut().poll_close(cx)?);
+                    ready!(this.frame.as_mut().poll_delivered(cx)?);
                     *this.state = OutgoingState::FinWait;
                 }
                 OutgoingState::FinWait => {
                     // then send the DisconnectNotification
                     ready!(this.frame.as_mut().poll_ready(cx)?);
-                    this.frame
-                        .as_mut()
-                        .start_send(FrameBody::DisconnectNotification)?;
-                    *this.state = OutgoingState::SecondCloseWait;
+                    this.frame.as_mut().feed(FrameBody::DisconnectNotification);
+                    *this.state = OutgoingState::CloseWait;
                 }
-                OutgoingState::SecondCloseWait => {
+                OutgoingState::CloseWait => {
                     // second wait the DisconnectNotification to receive by the peer
                     ready!(this.frame.as_mut().poll_close(cx)?);
                     *this.state = OutgoingState::Closed;
@@ -186,27 +182,24 @@ where
     }
 }
 
-impl<F> Sink<Message> for StateManager<F, OutgoingState>
+impl<F> Writer<Message> for StateManager<F, OutgoingState>
 where
-    F: Sink<FrameBody, Error = CodecError> + Sink<Message, Error = CodecError>,
+    F: Writer<FrameBody> + Writer<Message>,
 {
-    type Error = Error;
-
-    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Sink::<FrameBody>::poll_ready(self, cx)
+    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
+        Writer::<FrameBody>::poll_ready(self, cx)
     }
 
-    fn start_send(self: Pin<&mut Self>, item: Message) -> Result<(), Self::Error> {
-        self.project().frame.start_send(item)?;
-        Ok(())
+    fn feed(self: Pin<&mut Self>, item: Message) {
+        self.project().frame.feed(item);
     }
 
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Sink::<FrameBody>::poll_flush(self, cx)
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
+        Writer::<FrameBody>::poll_flush(self, cx)
     }
 
-    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Sink::<FrameBody>::poll_close(self, cx)
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
+        Writer::<FrameBody>::poll_close(self, cx)
     }
 }
 
@@ -222,8 +215,7 @@ where
             return Poll::Ready(None);
         }
         let Some(body) = ready!(this.frame.as_mut().poll_next(cx)) else {
-            // This happens when the incoming router is dropped on server side.
-            // On client side, the connection cannot be closed by UDP, this is unreachable.
+            // This happens when the router is dropped.
             warn!("router dropped before the connection is closed");
             *this.state = IncomingState::Closed;
             return Poll::Ready(None);
@@ -239,14 +231,15 @@ where
 
 #[cfg(test)]
 mod test {
+    use std::future::poll_fn;
     use std::pin::Pin;
     use std::sync::Arc;
     use std::task::{Context, Poll};
 
     use concurrent_queue::ConcurrentQueue;
-    use futures::{Sink, SinkExt};
 
-    use crate::errors::{CodecError, Error};
+    use crate::errors::Error;
+    use crate::io::Writer;
     use crate::packet::connected::FrameBody;
     use crate::state::CloseOnDrop;
     use crate::Message;
@@ -256,61 +249,36 @@ mod test {
         buf: Vec<FrameBody>,
     }
 
-    impl Sink<FrameBody> for DstSink {
-        type Error = CodecError;
-
-        fn poll_ready(
-            self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-        ) -> Poll<Result<(), Self::Error>> {
+    impl Writer<FrameBody> for DstSink {
+        fn poll_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
             Poll::Ready(Ok(()))
         }
 
-        fn start_send(mut self: Pin<&mut Self>, item: FrameBody) -> Result<(), Self::Error> {
+        fn feed(mut self: Pin<&mut Self>, item: FrameBody) {
             self.buf.push(item);
-            Ok(())
         }
 
-        fn poll_flush(
-            self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-        ) -> Poll<Result<(), Self::Error>> {
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
             Poll::Ready(Ok(()))
         }
 
-        fn poll_close(
-            self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-        ) -> Poll<Result<(), Self::Error>> {
+        fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
             Poll::Ready(Ok(()))
         }
     }
 
-    impl Sink<Message> for DstSink {
-        type Error = CodecError;
-
-        fn poll_ready(
-            self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-        ) -> Poll<Result<(), Self::Error>> {
+    impl Writer<Message> for DstSink {
+        fn poll_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
             Poll::Ready(Ok(()))
         }
 
-        fn start_send(self: Pin<&mut Self>, _item: Message) -> Result<(), Self::Error> {
-            Ok(())
-        }
+        fn feed(self: Pin<&mut Self>, _item: Message) {}
 
-        fn poll_flush(
-            self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-        ) -> Poll<Result<(), Self::Error>> {
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
             Poll::Ready(Ok(()))
         }
 
-        fn poll_close(
-            self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-        ) -> Poll<Result<(), Self::Error>> {
+        fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
             Poll::Ready(Ok(()))
         }
     }
@@ -319,29 +287,29 @@ mod test {
     async fn test_goodbye_works() {
         let queue = Arc::new(ConcurrentQueue::unbounded());
         let addr = "0.0.0.0:0".parse().unwrap();
-        let mut goodbye = super::StateManager {
+        let goodbye = super::StateManager {
             frame: DstSink::default(),
             state: crate::state::OutgoingState::Connecting,
             close_on_drop: Some(CloseOnDrop::new(addr, Arc::clone(&queue))),
         };
-        SinkExt::<FrameBody>::close(&mut goodbye).await.unwrap();
+
+        tokio::pin!(goodbye);
+
+        poll_fn(|cx| Writer::<FrameBody>::poll_close(goodbye.as_mut(), cx))
+            .await
+            .unwrap();
         assert_eq!(goodbye.frame.buf.len(), 1);
         assert!(matches!(
             goodbye.frame.buf[0],
             FrameBody::DisconnectNotification
         ));
 
-        let closed = SinkExt::<FrameBody>::close(&mut goodbye).await.unwrap_err();
-        // closed
-        assert!(matches!(closed, Error::ConnectionClosed));
-        // No more DisconnectNotification
-        assert_eq!(goodbye.frame.buf.len(), 1);
-
         // close event was pushed
         assert_eq!(queue.pop().unwrap(), addr);
         assert!(queue.is_empty());
 
-        std::future::poll_fn(|cx| SinkExt::<FrameBody>::poll_ready_unpin(&mut goodbye, cx))
+        // closed
+        poll_fn(|cx| Writer::<FrameBody>::poll_ready(goodbye.as_mut(), cx))
             .await
             .unwrap_err();
     }

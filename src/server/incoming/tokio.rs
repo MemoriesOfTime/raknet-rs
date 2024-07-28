@@ -7,7 +7,7 @@ use std::task::{ready, Context, Poll};
 use concurrent_queue::ConcurrentQueue;
 use fastrace::collector::SpanContext;
 use fastrace::Span;
-use futures::Stream;
+use futures_core::Stream;
 use log::{debug, error};
 use pin_project_lite::pin_project;
 use tokio::net::UdpSocket as TokioUdpSocket;
@@ -16,12 +16,13 @@ use super::{Config, MakeIncoming};
 use crate::codec::frame::Framed;
 use crate::codec::{Decoded, Encoded};
 use crate::guard::HandleOutgoing;
-use crate::io::{SeparatedIO, IO};
+use crate::io::{Reader, ReaderWrapper, TraceInfo, Writer};
 use crate::link::{Router, TransferLink};
 use crate::server::handler::offline::OfflineHandler;
 use crate::server::handler::online::HandleOnline;
 use crate::state::{CloseOnDrop, IncomingStateManage, OutgoingStateManage};
 use crate::utils::TraceStreamExt;
+use crate::Message;
 
 pin_project! {
     struct Incoming {
@@ -35,7 +36,10 @@ pin_project! {
 }
 
 impl MakeIncoming for TokioUdpSocket {
-    fn make_incoming(self, config: Config) -> impl Stream<Item = impl IO> {
+    fn make_incoming(
+        self,
+        config: Config,
+    ) -> impl Stream<Item = (impl Reader + TraceInfo, impl Writer<Message>)> {
         let socket = Arc::new(self);
         Incoming {
             offline: OfflineHandler::new(
@@ -51,7 +55,7 @@ impl MakeIncoming for TokioUdpSocket {
 }
 
 impl Stream for Incoming {
-    type Item = impl IO;
+    type Item = (impl Reader + TraceInfo, impl Writer<Message>);
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
@@ -107,7 +111,7 @@ impl Stream for Incoming {
                     })
                 });
 
-            return Poll::Ready(Some(SeparatedIO::new(src, dst)));
+            return Poll::Ready(Some((ReaderWrapper::new(src, peer.addr), dst)));
         }
     }
 }

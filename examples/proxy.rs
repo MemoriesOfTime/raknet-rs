@@ -1,13 +1,13 @@
 use std::error::Error;
+use std::future::poll_fn;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU8, Ordering};
 
 use bytes::Bytes;
-use futures::{SinkExt, StreamExt};
+use futures_lite::StreamExt;
 use raknet_rs::client::{self, ConnectTo};
-use raknet_rs::io::IO;
+use raknet_rs::io::{Reader, Writer};
 use raknet_rs::server::{self, MakeIncoming};
-use raknet_rs::Reliability;
+use raknet_rs::{Message, Reliability};
 use tokio::net::UdpSocket;
 
 #[tokio::main]
@@ -28,18 +28,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     tokio::spawn(async move {
         loop {
-            let io = incoming.next().await.unwrap();
+            let (reader, writer) = incoming.next().await.unwrap();
             tokio::spawn(async move {
-                static ORDER_CHANNEL: AtomicU8 = AtomicU8::new(0);
-
-                tokio::pin!(io);
-                println!("[server] set default reliability to Reliable");
-                io.as_mut().set_default_reliability(Reliability::Reliable);
+                tokio::pin!(reader);
+                tokio::pin!(writer);
                 loop {
-                    if let Some(data) = io.next().await {
+                    if let Some(data) = reader.next().await {
                         println!(
-                            "[server] got proxy data: '{}'",
-                            String::from_utf8_lossy(&data)
+                            "[server] got proxy data: '{}' from {}",
+                            String::from_utf8_lossy(&data),
+                            reader.get_remote_addr()
                         );
                         let client = reqwest::Client::new();
                         let res = client
@@ -48,10 +46,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             .send()
                             .await
                             .unwrap();
-                        let channel = ORDER_CHANNEL.fetch_add(1, Ordering::Relaxed);
-                        println!("[server] assign order channel: {}", channel);
-                        io.as_mut().set_default_order_channel(channel);
-                        io.send(res.bytes().await.unwrap()).await.unwrap();
+
+                        poll_fn(|cx| writer.as_mut().poll_ready(cx)).await.unwrap();
+                        writer.as_mut().feed(Message::new(
+                            Reliability::Reliable,
+                            0,
+                            res.bytes().await.unwrap(),
+                        ));
+                        poll_fn(|cx| writer.as_mut().poll_flush(cx)).await.unwrap();
+
                         continue;
                     }
                     break;
@@ -68,7 +71,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 async fn client(addr: SocketAddr, name: &str) -> Result<(), Box<dyn Error>> {
     let socket = UdpSocket::bind("0.0.0.0:0").await?;
     println!("[{name}] I am listening on {}", socket.local_addr()?);
-    let conn = socket
+    let (reader, writer) = socket
         .connect_to(
             addr,
             client::Config::new()
@@ -78,13 +81,22 @@ async fn client(addr: SocketAddr, name: &str) -> Result<(), Box<dyn Error>> {
                 .protocol_version(11),
         )
         .await?;
-    tokio::pin!(conn);
-    conn.send(Bytes::from_static(b"Hello, Anyone there?"))
-        .await?;
-    let res = conn.next().await.unwrap();
+    tokio::pin!(reader);
+    tokio::pin!(writer);
+
+    poll_fn(|cx| writer.as_mut().poll_ready(cx)).await.unwrap();
+    writer.as_mut().feed(Message::new(
+        Reliability::Reliable,
+        0,
+        Bytes::from_static(b"Hello, Anyone there?"),
+    ));
+    poll_fn(|cx| writer.as_mut().poll_flush(cx)).await.unwrap();
+
+    let res = reader.next().await.unwrap();
     println!(
         "[{name}] got server response: {}",
         String::from_utf8_lossy(&res)
     );
+
     Ok(())
 }

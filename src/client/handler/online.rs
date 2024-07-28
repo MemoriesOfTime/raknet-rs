@@ -3,7 +3,7 @@ use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
 use bytes::Bytes;
-use futures::Stream;
+use futures_core::Stream;
 use log::debug;
 use pin_project_lite::pin_project;
 

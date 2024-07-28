@@ -3,12 +3,12 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
-use futures::Sink;
 use futures_core::Stream;
 use log::debug;
 use pin_project_lite::pin_project;
 
-use crate::errors::{CodecError, Error};
+use crate::errors::Error;
+use crate::io::Writer;
 use crate::packet::connected::{self, FramesMut};
 use crate::packet::{unconnected, Packet};
 use crate::RoleContext;
@@ -33,7 +33,7 @@ pin_project! {
 impl<F> OfflineHandler<F>
 where
     F: Stream<Item = (Packet<FramesMut>, SocketAddr)>
-        + Sink<(unconnected::Packet, SocketAddr), Error = CodecError>
+        + Writer<(unconnected::Packet, SocketAddr)>
         + Unpin,
 {
     pub(crate) fn new(frame: F, server_addr: SocketAddr, config: Config) -> Self {
@@ -65,7 +65,7 @@ enum State {
 impl<F> Future for OfflineHandler<F>
 where
     F: Stream<Item = (Packet<FramesMut>, SocketAddr)>
-        + Sink<(unconnected::Packet, SocketAddr), Error = CodecError>
+        + Writer<(unconnected::Packet, SocketAddr)>
         + Unpin,
 {
     type Output = Result<impl Stream<Item = connected::Packet<FramesMut>>, Error>;
@@ -83,13 +83,7 @@ where
                         );
                         continue;
                     }
-                    if let Err(err) = frame.as_mut().start_send((pack.clone(), *this.server_addr)) {
-                        debug!(
-                            "[{}] SendingOpenConnectionRequest1 start_send error: {err}, retrying",
-                            this.role
-                        );
-                        continue;
-                    }
+                    frame.as_mut().feed((pack.clone(), *this.server_addr));
                     *this.state = State::SendOpenConnReq1Flush;
                 }
                 State::SendOpenConnReq1Flush => {
@@ -132,13 +126,7 @@ where
                         );
                         continue;
                     }
-                    if let Err(err) = frame.as_mut().start_send((pack.clone(), *this.server_addr)) {
-                        debug!(
-                            "[{}] SendOpenConnectionRequest2 start_send error: {err}, retrying",
-                            this.role
-                        );
-                        continue;
-                    }
+                    frame.as_mut().feed((pack.clone(), *this.server_addr));
                     *this.state = State::SendOpenConnReq2Flush;
                 }
                 State::SendOpenConnReq2Flush => {

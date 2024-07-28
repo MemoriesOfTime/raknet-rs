@@ -5,12 +5,12 @@ use std::task::{ready, Context, Poll};
 
 use bytes::{Buf, BytesMut};
 use fastrace::{Event, Span};
-use futures::Sink;
 use futures_core::Stream;
 use log::error;
 
 use super::AsyncSocket;
-use crate::errors::CodecError;
+use crate::errors::Error;
+use crate::io::Writer;
 use crate::packet::connected::{FramesMut, FramesRef};
 use crate::packet::{unconnected, Packet};
 
@@ -44,7 +44,7 @@ impl<T: AsyncSocket> Framed<T> {
     }
 
     #[inline]
-    fn poll_ready_0(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), CodecError>> {
+    fn poll_ready_0(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
         if !self.flushed {
             match self.poll_flush_0(cx)? {
                 Poll::Ready(()) => {}
@@ -56,10 +56,7 @@ impl<T: AsyncSocket> Framed<T> {
     }
 
     #[inline]
-    fn poll_flush_0(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Result<(), CodecError>> {
+    fn poll_flush_0(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
         if self.flushed {
             return Poll::Ready(Ok(()));
         }
@@ -91,9 +88,8 @@ impl<T: AsyncSocket> Framed<T> {
     }
 
     #[inline]
-    fn poll_close_0(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), CodecError>> {
-        ready!(self.poll_flush_0(cx))?;
-        Poll::Ready(Ok(()))
+    fn poll_close_0(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
+        self.poll_flush_0(cx)
     }
 }
 
@@ -148,7 +144,7 @@ impl<T: AsyncSocket> Stream for Framed<T> {
                     continue;
                 }
             };
-            // finish the read span
+            // finish the read span until we have read data
             pin.read_span.take();
             // start a new decode span
             pin.decode_span.get_or_insert_with(|| {
@@ -165,70 +161,53 @@ impl<T: AsyncSocket> Stream for Framed<T> {
     }
 }
 
-/// The `Sink` implementation for cheap buffer cloning (i.e. `bytes::Bytes`).
-impl<'a, B: Buf + Clone, T: AsyncSocket> Sink<(Packet<FramesRef<'a, B>>, SocketAddr)>
+impl<'a, B: Buf + Clone, T: AsyncSocket> Writer<(Packet<FramesRef<'a, B>>, SocketAddr)>
     for Framed<T>
 {
-    type Error = CodecError;
-
-    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
         self.poll_ready_0(cx)
     }
 
-    fn start_send(
-        self: Pin<&mut Self>,
-        item: (Packet<FramesRef<'a, B>>, SocketAddr),
-    ) -> Result<(), Self::Error> {
-        let (frame, out_addr) = item;
+    fn feed(self: Pin<&mut Self>, pack: (Packet<FramesRef<'a, B>>, SocketAddr)) {
+        let (frame, out_addr) = pack;
 
         let pin = self.get_mut();
 
         frame.write(&mut pin.wr);
         pin.out_addr = out_addr;
         pin.flushed = false;
-
-        Ok(())
     }
 
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
         self.poll_flush_0(cx)
     }
 
-    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
         self.poll_close_0(cx)
     }
 }
 
-// Separate the unconnected packets for offline and online states.
-// So the offline handler could take account of the unconnected packets and ignore the generic from
-// the connected packets.
-impl<T: AsyncSocket> Sink<(unconnected::Packet, SocketAddr)> for Framed<T> {
-    type Error = CodecError;
-
-    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+// Separate implementation for unconnected packets to simplify the generic from connected packets.
+impl<T: AsyncSocket> Writer<(unconnected::Packet, SocketAddr)> for Framed<T> {
+    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
         self.poll_ready_0(cx)
     }
 
-    fn start_send(
-        self: Pin<&mut Self>,
-        item: (unconnected::Packet, SocketAddr),
-    ) -> Result<(), Self::Error> {
-        let (frame, out_addr) = item;
+    fn feed(self: Pin<&mut Self>, pack: (unconnected::Packet, SocketAddr)) {
+        let (frame, out_addr) = pack;
 
         let pin = self.get_mut();
 
         frame.write(&mut pin.wr);
         pin.out_addr = out_addr;
         pin.flushed = false;
-
-        Ok(())
     }
 
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
         self.poll_flush_0(cx)
     }
 
-    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
         self.poll_close_0(cx)
     }
 }

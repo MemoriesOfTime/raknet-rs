@@ -3,7 +3,7 @@ use std::task::{Context, Poll};
 
 use fastrace::collector::{SpanContext, TraceId};
 use fastrace::Span;
-use futures::Stream;
+use futures_lite::Stream;
 use pin_project_lite::pin_project;
 
 use crate::io::TraceInfo;

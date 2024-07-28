@@ -2,10 +2,10 @@ use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
 use bytes::BytesMut;
-use futures::Sink;
 use pin_project_lite::pin_project;
 
-use crate::errors::CodecError;
+use crate::errors::Error;
+use crate::io::Writer;
 use crate::link::SharedLink;
 use crate::packet::connected::FrameBody;
 use crate::{Message, Reliability};
@@ -25,7 +25,7 @@ pub(crate) trait BodyEncoded: Sized {
 
 impl<F> BodyEncoded for F
 where
-    F: Sink<Message, Error = CodecError>,
+    F: Writer<Message>,
 {
     fn body_encoded(self, link: SharedLink) -> BodyEncoder<Self> {
         BodyEncoder { frame: self, link }
@@ -59,13 +59,13 @@ fn encode(body: FrameBody) -> Message {
 
 impl<F> BodyEncoder<F>
 where
-    F: Sink<Message, Error = CodecError>,
+    F: Writer<Message>,
 {
     /// Empty the link buffer all the frame body, insure the frame is ready to send
     pub(crate) fn poll_empty(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-    ) -> Poll<Result<(), CodecError>> {
+    ) -> Poll<Result<(), Error>> {
         let mut this = self.project();
         if this.link.frame_body_empty() {
             return Poll::Ready(Ok(()));
@@ -75,7 +75,7 @@ where
 
         // frame is now ready to send
         for body in this.link.process_frame_body() {
-            this.frame.as_mut().start_send(encode(body))?;
+            this.frame.as_mut().feed(encode(body));
             // ready for next frame
             ready!(this.frame.as_mut().poll_ready(cx))?;
         }
@@ -83,54 +83,50 @@ where
     }
 }
 
-impl<F> Sink<Message> for BodyEncoder<F>
+impl<F> Writer<Message> for BodyEncoder<F>
 where
-    F: Sink<Message, Error = CodecError>,
+    F: Writer<Message>,
 {
-    type Error = CodecError;
-
-    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Sink::<FrameBody>::poll_ready(self, cx)
+    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
+        Writer::<FrameBody>::poll_ready(self, cx)
     }
 
-    fn start_send(self: Pin<&mut Self>, item: Message) -> Result<(), Self::Error> {
+    fn feed(self: Pin<&mut Self>, item: Message) {
         // skip encode
-        self.project().frame.start_send(item)
+        self.project().frame.feed(item);
     }
 
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Sink::<FrameBody>::poll_flush(self, cx)
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
+        Writer::<FrameBody>::poll_flush(self, cx)
     }
 
-    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Sink::<FrameBody>::poll_close(self, cx)
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
+        Writer::<FrameBody>::poll_close(self, cx)
     }
 }
 
-impl<F> Sink<FrameBody> for BodyEncoder<F>
+impl<F> Writer<FrameBody> for BodyEncoder<F>
 where
-    F: Sink<Message, Error = CodecError>,
+    F: Writer<Message>,
 {
-    type Error = CodecError;
-
-    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
         ready!(self.as_mut().poll_empty(cx))?;
         // there is literally no buffer
         debug_assert!(self.link.frame_body_empty());
         Poll::Ready(Ok(()))
     }
 
-    fn start_send(self: Pin<&mut Self>, body: FrameBody) -> Result<(), Self::Error> {
-        self.project().frame.start_send(encode(body))
+    fn feed(self: Pin<&mut Self>, body: FrameBody) {
+        self.project().frame.feed(encode(body));
     }
 
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
         ready!(self.as_mut().poll_empty(cx))?;
         debug_assert!(self.link.frame_body_empty());
         self.project().frame.poll_flush(cx)
     }
 
-    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
         ready!(self.as_mut().poll_empty(cx))?;
         debug_assert!(self.link.frame_body_empty());
         self.project().frame.poll_close(cx)

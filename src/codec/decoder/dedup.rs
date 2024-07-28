@@ -119,8 +119,8 @@ mod test {
     use std::ops::Sub;
 
     use bytes::Bytes;
-    use futures::StreamExt;
     use futures_async_stream::stream;
+    use futures_lite::StreamExt;
     use indexmap::IndexSet;
 
     use super::*;

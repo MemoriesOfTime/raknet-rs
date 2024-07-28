@@ -136,8 +136,8 @@ where
 #[cfg(test)]
 mod test {
     use bytes::Bytes;
-    use futures::StreamExt;
     use futures_async_stream::stream;
+    use futures_lite::StreamExt;
 
     use super::Ordered;
     use crate::errors::CodecError;

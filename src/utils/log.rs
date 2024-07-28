@@ -1,7 +1,6 @@
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
-use futures::Sink;
 use futures_core::Stream;
 use pin_project_lite::pin_project;
 
@@ -25,18 +24,17 @@ where
         Log {
             source: self,
             err_f: Box::new(err_f),
-            ok_f: Some(Box::new(ok_f)),
+            ok_f: Box::new(ok_f),
         }
     }
 }
 
 pin_project! {
-    /// Log the error of the stream while reading.
     pub(crate) struct Log<F, T, E> {
         #[pin]
         source: F,
-        ok_f: Option<Box<dyn Fn(&T) + Send + Sync>>,
         err_f: Box<dyn Fn(&E) + Send + Sync>,
+        ok_f: Box<dyn Fn(&T) + Send + Sync>,
     }
 }
 
@@ -60,35 +58,8 @@ where
                     continue;
                 }
             };
-            if let Some(ok_f) = this.ok_f {
-                ok_f(&v);
-            }
+            (*this.ok_f)(&v);
             return Poll::Ready(Some(v));
         }
-    }
-}
-
-// Propagate sink for logged wrapper
-// Do not log error for sink as it already throws error to the user
-impl<F, T, E, Si> Sink<Si> for Log<F, T, E>
-where
-    F: Sink<Si, Error = E>,
-{
-    type Error = E;
-
-    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.project().source.poll_ready(cx)
-    }
-
-    fn start_send(self: Pin<&mut Self>, item: Si) -> Result<(), Self::Error> {
-        self.project().source.start_send(item)
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.project().source.poll_flush(cx)
-    }
-
-    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.project().source.poll_close(cx)
     }
 }

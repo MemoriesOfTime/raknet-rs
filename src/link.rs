@@ -3,9 +3,8 @@ use std::collections::{BinaryHeap, VecDeque};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use async_channel::Sender;
 use concurrent_queue::ConcurrentQueue;
-use futures::Stream;
+use futures_core::Stream;
 use log::{debug, trace, warn};
 
 use crate::packet::connected::{self, AckOrNack, Frame, FrameBody, FrameSet, FramesMut};
@@ -25,9 +24,9 @@ pub(crate) struct TransferLink {
     forward_waking: AtomicBool,
 
     outgoing_ack: parking_lot::Mutex<BinaryHeap<Reverse<u24>>>,
-    // TODO: nack channel should always be in order according to [`DeFragment::poll_next`], replace
-    // it with ConcurrentQueue if we cannot find a way to break the order
-    outgoing_nack: parking_lot::Mutex<BinaryHeap<Reverse<u24>>>,
+
+    // nack packets are always sent in order
+    outgoing_nack: ConcurrentQueue<u24>,
 
     unconnected: ConcurrentQueue<unconnected::Packet>,
     frame_body: ConcurrentQueue<FrameBody>,
@@ -64,7 +63,7 @@ impl TransferLink {
             incoming_nack: ConcurrentQueue::bounded(MAX_ACK_BUFFER),
             forward_waking: AtomicBool::new(false),
             outgoing_ack: parking_lot::Mutex::new(BinaryHeap::with_capacity(MAX_ACK_BUFFER)),
-            outgoing_nack: parking_lot::Mutex::new(BinaryHeap::with_capacity(MAX_ACK_BUFFER)),
+            outgoing_nack: ConcurrentQueue::bounded(MAX_ACK_BUFFER),
             unconnected: ConcurrentQueue::unbounded(),
             frame_body: ConcurrentQueue::unbounded(),
             role,
@@ -114,18 +113,6 @@ impl TransferLink {
         }
     }
 
-    pub(crate) fn outgoing_ack(&self, seq_num: u24) {
-        self.outgoing_ack.lock().push(Reverse(seq_num));
-    }
-
-    pub(crate) fn outgoing_nack(&self, seq_num: u24) {
-        self.outgoing_nack.lock().push(Reverse(seq_num));
-    }
-
-    pub(crate) fn outgoing_nack_batch(&self, t: impl IntoIterator<Item = u24>) {
-        self.outgoing_nack.lock().extend(t.into_iter().map(Reverse));
-    }
-
     pub(crate) fn send_unconnected(&self, packet: unconnected::Packet) {
         self.unconnected.push(packet).unwrap();
     }
@@ -167,7 +154,7 @@ impl TransferLink {
     }
 
     pub(crate) fn process_outgoing_nack(&self, mtu: u16) -> Option<AckOrNack> {
-        AckOrNack::extend_from(BatchRecv::new(self.outgoing_nack.lock()), mtu)
+        AckOrNack::extend_from(self.outgoing_nack.try_iter(), mtu)
     }
 
     pub(crate) fn process_unconnected(&self) -> impl Iterator<Item = unconnected::Packet> + '_ {
@@ -181,7 +168,7 @@ impl TransferLink {
     // Return whether the flush buffer is empty
     pub(crate) fn flush_empty(&self) -> bool {
         self.outgoing_ack.lock().is_empty()
-            && self.outgoing_nack.lock().is_empty()
+            && self.outgoing_nack.is_empty()
             && self.unconnected.is_empty()
     }
 
@@ -193,8 +180,9 @@ impl TransferLink {
 
 /// Router for incoming packets
 pub(crate) struct Router {
-    router_tx: Sender<FrameSet<FramesMut>>,
+    router_tx: async_channel::Sender<FrameSet<FramesMut>>,
     link: SharedLink,
+    // first unread sequence number
     seq_read: u24,
 }
 
@@ -214,20 +202,26 @@ impl Router {
     /// Deliver the packet to the corresponding route. Return false if the connection was dropped.
     pub(crate) fn deliver(&mut self, pack: connected::Packet<FramesMut>) -> bool {
         if self.router_tx.is_closed() {
-            debug_assert!(Arc::strong_count(&self.link) == 1);
             return false;
         }
         match pack {
             connected::Packet::FrameSet(frames) => {
-                self.link.outgoing_ack(frames.seq_num);
+                self.link.outgoing_ack.lock().push(Reverse(frames.seq_num));
 
                 let seq_num = frames.seq_num;
                 let pre_read = self.seq_read;
                 if pre_read <= seq_num {
                     self.seq_read = seq_num + 1;
-                    let nack = pre_read.to_u32()..seq_num.to_u32();
-                    if !nack.is_empty() {
-                        self.link.outgoing_nack_batch(nack.map(u24::from));
+                    // [pre_read, seq_num)
+                    for nack in pre_read.to_u32()..seq_num.to_u32() {
+                        if let Some(dropped) =
+                            self.link.outgoing_nack.force_push(u24::from(nack)).unwrap()
+                        {
+                            warn!(
+                                "[{}] discard sent nack {dropped:?}, total count: {}",
+                                self.link.role, dropped
+                            );
+                        }
                     }
                 }
 

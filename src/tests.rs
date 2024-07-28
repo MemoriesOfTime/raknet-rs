@@ -1,15 +1,17 @@
-#![allow(clippy::use_debug)]
+#![allow(dead_code)]
 
+use std::future::poll_fn;
 use std::iter::repeat;
+use std::pin::Pin;
 use std::time::Duration;
 
 use bytes::Bytes;
-use futures::{SinkExt, StreamExt};
-use log::info;
+use futures_lite::StreamExt;
+use log::{debug, info};
 use tokio::net::UdpSocket;
 
 use crate::client::{self, ConnectTo};
-use crate::io::{TraceInfo, IO};
+use crate::io::{Reader, Writer};
 use crate::server::{self, MakeIncoming};
 use crate::utils::tests::test_trace_log_setup;
 use crate::{Message, Reliability};
@@ -33,6 +35,47 @@ fn make_client_conf() -> client::Config {
         .protocol_version(11)
 }
 
+// Send data to the destination
+async fn send(dst: Pin<&mut impl Writer<Message>>, data: impl Iterator<Item = u8>) {
+    send_with_full(dst, data, Reliability::ReliableOrdered, 0).await;
+}
+
+async fn send_with_reliability(
+    dst: Pin<&mut impl Writer<Message>>,
+    data: impl Iterator<Item = u8>,
+    reliability: Reliability,
+) {
+    send_with_full(dst, data, reliability, 0).await;
+}
+
+async fn send_with_order(
+    dst: Pin<&mut impl Writer<Message>>,
+    data: impl Iterator<Item = u8>,
+    order: u8,
+) {
+    send_with_full(dst, data, Reliability::ReliableOrdered, order).await;
+}
+
+async fn send_with_full(
+    mut dst: Pin<&mut impl Writer<Message>>,
+    data: impl Iterator<Item = u8>,
+    reliability: Reliability,
+    order: u8,
+) {
+    poll_fn(|cx| dst.as_mut().poll_ready(cx)).await.unwrap();
+    dst.as_mut()
+        .feed(Message::new(reliability, order, Bytes::from_iter(data)));
+    poll_fn(|cx| dst.as_mut().poll_flush(cx)).await.unwrap();
+}
+
+async fn flush(mut dst: Pin<&mut impl Writer<Message>>) {
+    poll_fn(|cx| dst.as_mut().poll_flush(cx)).await.unwrap();
+}
+
+async fn close(mut dst: Pin<&mut impl Writer<Message>>) {
+    poll_fn(|cx| dst.as_mut().poll_close(cx)).await.unwrap();
+}
+
 #[tokio::test(unhandled_panic = "shutdown_runtime")]
 async fn test_tokio_udp_works() {
     let _guard = test_trace_log_setup();
@@ -43,20 +86,19 @@ async fn test_tokio_udp_works() {
             .unwrap()
             .make_incoming(make_server_conf());
         loop {
-            let io = incoming.next().await.unwrap();
+            let (src, dst) = incoming.next().await.unwrap();
             tokio::spawn(async move {
-                let (reader, sender) = IO::split(io);
-                tokio::pin!(reader);
-                tokio::pin!(sender);
+                tokio::pin!(src);
+                tokio::pin!(dst);
                 let mut ticker = tokio::time::interval(Duration::from_millis(5));
                 loop {
                     tokio::select! {
-                        Some(data) = reader.next() => {
-                            sender.feed(Message::new(Reliability::Reliable, 0, data)).await.unwrap();
-                            info!("last trace id: {:?}", reader.last_trace_id());
+                        Some(data) = src.next() => {
+                            debug!("received data from {}", src.get_remote_addr());
+                            send(dst.as_mut(), data.into_iter()).await;
                         }
                         _ = ticker.tick() => {
-                            sender.flush().await.unwrap();
+                            flush(dst.as_mut()).await;
                         }
                     };
                 }
@@ -67,46 +109,39 @@ async fn test_tokio_udp_works() {
     tokio::spawn(echo_server);
 
     let client = async {
-        let io = UdpSocket::bind("0.0.0.0:0")
+        let (src, dst) = UdpSocket::bind("0.0.0.0:0")
             .await
             .unwrap()
             .connect_to("127.0.0.1:19132", make_client_conf())
             .await
             .unwrap();
-        tokio::pin!(io);
-        io.send(Bytes::from_iter(repeat(0xfe).take(256)))
-            .await
-            .unwrap();
+
+        tokio::pin!(src);
+        tokio::pin!(dst);
+
+        send(dst.as_mut(), repeat(0xfe).take(256)).await;
         assert_eq!(
-            io.next().await.unwrap(),
+            src.next().await.unwrap(),
             Bytes::from_iter(repeat(0xfe).take(256))
         );
-        io.send(Bytes::from_iter(repeat(0xfe).take(512)))
-            .await
-            .unwrap();
+        send(dst.as_mut(), repeat(0xfe).take(512)).await;
         assert_eq!(
-            io.next().await.unwrap(),
+            src.next().await.unwrap(),
             Bytes::from_iter(repeat(0xfe).take(512))
         );
-        io.send(Bytes::from_iter(repeat(0xfe).take(1024)))
-            .await
-            .unwrap();
+        send(dst.as_mut(), repeat(0xfe).take(1024)).await;
         assert_eq!(
-            io.next().await.unwrap(),
+            src.next().await.unwrap(),
             Bytes::from_iter(repeat(0xfe).take(1024))
         );
-        io.send(Bytes::from_iter(repeat(0xfe).take(2048)))
-            .await
-            .unwrap();
+        send(dst.as_mut(), repeat(0xfe).take(2048)).await;
         assert_eq!(
-            io.next().await.unwrap(),
+            src.next().await.unwrap(),
             Bytes::from_iter(repeat(0xfe).take(2048))
         );
-        io.send(Bytes::from_iter(repeat(0xfe).take(4096)))
-            .await
-            .unwrap();
+        send(dst.as_mut(), repeat(0xfe).take(4096)).await;
         assert_eq!(
-            io.next().await.unwrap(),
+            src.next().await.unwrap(),
             Bytes::from_iter(repeat(0xfe).take(4096))
         );
     };
@@ -124,56 +159,49 @@ async fn test_4way_handshake_client_close() {
             .unwrap()
             .make_incoming(make_server_conf());
         loop {
-            let io = incoming.next().await.unwrap();
+            let (src, dst) = incoming.next().await.unwrap();
             tokio::spawn(async move {
-                tokio::pin!(io);
+                tokio::pin!(src);
+                tokio::pin!(dst);
                 let mut ticker = tokio::time::interval(Duration::from_millis(5));
                 loop {
                     tokio::select! {
-                        res = io.next() => {
+                        res = src.next() => {
                             if let Some(res) = res {
-                                io.feed(res).await.unwrap();
+                                send(dst.as_mut(), res.into_iter()).await;
                             } else {
                                 break;
                             }
                         }
                         _ = ticker.tick() => {
                             // flush periodically to ensure all missing packets/ack are sent
-                            io.flush().await.unwrap();
+                            flush(dst.as_mut()).await;
                         }
                     };
                 }
                 info!("connection closed by client, close the io");
-                io.close().await.unwrap();
+                close(dst.as_mut()).await;
                 info!("io closed");
             });
         }
     };
 
     let client = async {
-        let io = UdpSocket::bind("0.0.0.0:0")
+        let (src, dst) = UdpSocket::bind("0.0.0.0:0")
             .await
             .unwrap()
             .connect_to("127.0.0.1:19133", make_client_conf())
             .await
             .unwrap();
 
-        let (src, dst) = IO::split(io);
-
         tokio::pin!(src);
         tokio::pin!(dst);
 
         let huge_msg = Bytes::from_iter(repeat(0xfe).take(2048));
-        dst.send(Message::new(
-            Reliability::ReliableOrdered,
-            0,
-            huge_msg.clone(),
-        ))
-        .await
-        .unwrap();
+        send(dst.as_mut(), huge_msg.iter().copied()).await;
         assert_eq!(src.next().await.unwrap(), huge_msg);
 
-        dst.close().await.unwrap();
+        close(dst.as_mut()).await;
 
         info!("client closed the connection, wait for server to close");
 
@@ -189,7 +217,7 @@ async fn test_4way_handshake_client_close() {
                 }
                 _ = ticker.tick() => {
                     // flush periodically to ensure all missing packets/ack are sent
-                    dst.flush().await.unwrap();
+                    flush(dst.as_mut()).await;
                 }
                 _ = &mut last_timer, if last_2msl => {
                     break;

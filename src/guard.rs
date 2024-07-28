@@ -3,11 +3,11 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
-use futures::Sink;
 use log::trace;
 use pin_project_lite::pin_project;
 
-use crate::errors::CodecError;
+use crate::errors::Error;
+use crate::io::Writer;
 use crate::link::SharedLink;
 use crate::packet::connected::{self, Frame, FrameSet, FramesRef};
 use crate::packet::{Packet, FRAME_SET_HEADER_SIZE};
@@ -43,7 +43,7 @@ pub(crate) trait HandleOutgoing: Sized {
 
 impl<F> HandleOutgoing for F
 where
-    F: for<'a> Sink<(Packet<FramesRef<'a>>, SocketAddr), Error = CodecError>,
+    F: for<'a> Writer<(Packet<FramesRef<'a>>, SocketAddr)>,
 {
     fn handle_outgoing(
         self,
@@ -68,10 +68,10 @@ where
 
 impl<F> OutgoingGuard<F>
 where
-    F: for<'a> Sink<(Packet<FramesRef<'a>>, SocketAddr), Error = CodecError>,
+    F: for<'a> Writer<(Packet<FramesRef<'a>>, SocketAddr)>,
 {
     /// Try to empty the outgoing buffer
-    fn try_empty(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), CodecError>> {
+    fn try_empty(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
         let mut this = self.project();
 
         // empty incoming buffer
@@ -98,10 +98,10 @@ where
                     this.role,
                     nack.total_cnt()
                 );
-                this.frame.as_mut().start_send((
+                this.frame.as_mut().feed((
                     Packet::Connected(connected::Packet::Nack(nack)),
                     this.peer.addr,
-                ))?;
+                ));
                 sent = true;
             }
 
@@ -116,10 +116,10 @@ where
                     this.role,
                     ack.total_cnt()
                 );
-                this.frame.as_mut().start_send((
+                this.frame.as_mut().feed((
                     Packet::Connected(connected::Packet::Ack(ack)),
                     this.peer.addr,
-                ))?;
+                ));
                 sent = true;
             }
 
@@ -137,7 +137,7 @@ where
                 );
                 this.frame
                     .as_mut()
-                    .start_send((Packet::Unconnected(packet), this.peer.addr))?;
+                    .feed((Packet::Unconnected(packet), this.peer.addr));
                 sent = true;
             }
 
@@ -177,10 +177,10 @@ where
                     seq_num: *this.seq_num_write_index,
                     set: &frames[..],
                 };
-                this.frame.as_mut().start_send((
+                this.frame.as_mut().feed((
                     Packet::Connected(connected::Packet::FrameSet(frame_set)),
                     this.peer.addr,
-                ))?;
+                ));
                 sent = true;
                 if reliable {
                     // keep for resending
@@ -194,13 +194,11 @@ where
     }
 }
 
-impl<F> Sink<Frame> for OutgoingGuard<F>
+impl<F> Writer<Frame> for OutgoingGuard<F>
 where
-    F: for<'a> Sink<(Packet<FramesRef<'a>>, SocketAddr), Error = CodecError>,
+    F: for<'a> Writer<(Packet<FramesRef<'a>>, SocketAddr)>,
 {
-    type Error = CodecError;
-
-    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
         let upstream = self.as_mut().try_empty(cx)?;
 
         if self.buf.len() >= self.cap {
@@ -214,14 +212,12 @@ where
         }
     }
 
-    fn start_send(self: Pin<&mut Self>, frame: Frame) -> Result<(), Self::Error> {
+    fn feed(self: Pin<&mut Self>, frame: Frame) {
         let this = self.project();
         this.buf.push_front(frame);
-        // Always success
-        Ok(())
     }
 
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
         ready!(self.as_mut().try_empty(cx))?;
         debug_assert!(self.buf.is_empty() && self.link.flush_empty());
         self.project().frame.poll_flush(cx)
@@ -229,7 +225,7 @@ where
 
     /// Close the outgoing guard, notice that it may resend infinitely if you do not cancel it.
     /// Insure all frames are received by the peer at the point of closing
-    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
         // maybe go to sleep, turn on the waking
         self.link.turn_on_waking();
         loop {

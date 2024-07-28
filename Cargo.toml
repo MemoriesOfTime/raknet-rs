@@ -17,9 +17,9 @@ async-channel = "2.3.1"
 bytes = "1"
 concurrent-queue = "2.5.0"
 fastrace = "0.6"
-futures = "0.3"
 futures-async-stream = "0.2"
 futures-core = { version = "0.3.5", default-features = false }
+futures-lite = "2.3.0"
 log = "0.4"
 lru = "0.12"
 parking_lot = "0.12"
@@ -48,10 +48,6 @@ micro-bench = []
 name = "micro"
 harness = false
 required-features = ["micro-bench"]
-
-[[bench]]
-name = "bulk"
-harness = false
 
 [profile.bench]
 opt-level = 3

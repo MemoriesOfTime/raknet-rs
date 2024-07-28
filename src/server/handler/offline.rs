@@ -7,12 +7,11 @@ use std::task::{ready, Context, Poll};
 use bytes::Bytes;
 use fastrace::collector::SpanContext;
 use fastrace::Span;
-use futures::Sink;
 use futures_core::Stream;
 use log::{debug, error, trace, warn};
 use pin_project_lite::pin_project;
 
-use crate::errors::CodecError;
+use crate::io::Writer;
 use crate::packet::connected::{self, FramesMut};
 use crate::packet::{unconnected, Packet};
 use crate::{PeerContext, RoleContext};
@@ -51,8 +50,7 @@ pin_project! {
 
 impl<F> OfflineHandler<F>
 where
-    F: Stream<Item = (Packet<FramesMut>, SocketAddr)>
-        + Sink<(unconnected::Packet, SocketAddr), Error = CodecError>,
+    F: Stream<Item = (Packet<FramesMut>, SocketAddr)> + Writer<(unconnected::Packet, SocketAddr)>,
 {
     pub(crate) fn new(frame: F, config: Config) -> Self {
         Self {
@@ -101,8 +99,7 @@ where
 
 impl<F> Stream for OfflineHandler<F>
 where
-    F: Stream<Item = (Packet<FramesMut>, SocketAddr)>
-        + Sink<(unconnected::Packet, SocketAddr), Error = CodecError>,
+    F: Stream<Item = (Packet<FramesMut>, SocketAddr)> + Writer<(unconnected::Packet, SocketAddr)>,
 {
     type Item = (connected::Packet<FramesMut>, PeerContext);
 
@@ -117,11 +114,7 @@ where
                         *this.state = OfflineState::Listening;
                         continue;
                     }
-                    if let Err(err) = this.frame.as_mut().start_send(pack.take().unwrap()) {
-                        error!("[{}] send error: {err}", this.role);
-                        *this.state = OfflineState::Listening;
-                        continue;
-                    }
+                    this.frame.as_mut().feed(pack.take().unwrap());
                     *this.state = OfflineState::SendingFlush;
                     continue;
                 }
@@ -273,9 +266,10 @@ mod test {
     use std::collections::VecDeque;
 
     use connected::{FrameSet, Frames};
-    use futures::StreamExt;
+    use futures_lite::StreamExt;
 
     use super::*;
+    use crate::errors::Error;
     use crate::utils::tests::test_trace_log_setup;
 
     struct TestCase {
@@ -295,35 +289,20 @@ mod test {
         }
     }
 
-    impl Sink<(unconnected::Packet, SocketAddr)> for TestCase {
-        type Error = CodecError;
-
-        fn poll_ready(
-            self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-        ) -> Poll<Result<(), Self::Error>> {
+    impl Writer<(unconnected::Packet, SocketAddr)> for TestCase {
+        fn poll_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
             Poll::Ready(Ok(()))
         }
 
-        fn start_send(
-            mut self: Pin<&mut Self>,
-            item: (unconnected::Packet, SocketAddr),
-        ) -> Result<(), Self::Error> {
+        fn feed(mut self: Pin<&mut Self>, item: (unconnected::Packet, SocketAddr)) {
             self.dst.push(item.0);
-            Ok(())
         }
 
-        fn poll_flush(
-            self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-        ) -> Poll<Result<(), Self::Error>> {
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
             Poll::Ready(Ok(()))
         }
 
-        fn poll_close(
-            self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-        ) -> Poll<Result<(), Self::Error>> {
+        fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
             Poll::Ready(Ok(()))
         }
     }

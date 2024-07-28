@@ -41,7 +41,6 @@
 #![feature(coroutines, proc_macro_hygiene, stmt_expr_attributes)]
 #![feature(binary_heap_into_iter_sorted)]
 #![feature(let_chains)]
-#![feature(trait_alias)]
 
 /// Protocol codec
 mod codec;

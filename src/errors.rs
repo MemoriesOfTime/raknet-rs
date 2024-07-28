@@ -1,5 +1,7 @@
+/// Codec errors happen when decoding packets or processing frames.
+/// These errors are internal and will be logged. They are not exposed to the user.
 #[derive(thiserror::Error, Debug)]
-pub enum CodecError {
+pub(crate) enum CodecError {
     #[error("io error {0}")]
     IO(#[from] std::io::Error),
     #[error("invalid ip version {0}")]
@@ -22,12 +24,11 @@ pub enum CodecError {
     MagicNotMatched(usize, u8),
 }
 
+/// Errors exposed to the user.
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
     #[error("io error {0}")]
     IO(#[from] std::io::Error),
-    #[error(transparent)]
-    Codec(#[from] CodecError),
     #[error("connection closed")]
     ConnectionClosed,
 }

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::error::Error;
+use std::future::poll_fn;
 use std::net::SocketAddr;
 use std::process::exit;
 use std::time::Duration;
@@ -7,9 +8,10 @@ use std::time::Duration;
 use bytes::Bytes;
 use fastrace::collector::{SpanContext, SpanId, SpanRecord, TraceId};
 use fastrace::Span;
-use futures::{SinkExt, StreamExt};
+use futures_lite::StreamExt;
+use log::debug;
 use raknet_rs::client::{self, ConnectTo};
-use raknet_rs::io::{TraceInfo, IO};
+use raknet_rs::io::{Reader, TraceInfo, Writer};
 use raknet_rs::server::{self, MakeIncoming};
 use raknet_rs::{Message, Reliability};
 use tokio::net::UdpSocket;
@@ -37,14 +39,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     tokio::spawn(async move {
         loop {
-            let io = incoming.next().await.unwrap();
+            let (reader, writer) = incoming.next().await.unwrap();
             tokio::spawn(async move {
-                let (read, write) = IO::split(io);
-                tokio::pin!(read);
-                tokio::pin!(write);
+                tokio::pin!(reader);
+                tokio::pin!(writer);
                 loop {
-                    if let Some(data) = read.next().await {
-                        let trace_id = read.last_trace_id().unwrap_or_else(|| {
+                    if let Some(data) = reader.next().await {
+                        debug!(
+                            "[server] got data: '{}' from {}",
+                            String::from_utf8_lossy(&data),
+                            reader.get_remote_addr()
+                        );
+                        let trace_id = reader.last_trace_id().unwrap_or_else(|| {
                             eprintln!("Please run with `--features fastrace/enable` and try again");
                             exit(0)
                         });
@@ -55,10 +61,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         // do something with data
                         tokio::time::sleep(Duration::from_millis(10)).await;
                         let _span = Span::enter_with_parent("user child span", &root_span);
-                        write
-                            .send(Message::new(Reliability::ReliableOrdered, 0, data))
-                            .await
-                            .unwrap();
+
+                        poll_fn(|cx| writer.as_mut().poll_ready(cx)).await.unwrap();
+                        writer
+                            .as_mut()
+                            .feed(Message::new(Reliability::Reliable, 0, data));
+                        poll_fn(|cx| writer.as_mut().poll_flush(cx)).await.unwrap();
+
                         continue;
                     }
                     break;
@@ -76,7 +85,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
 async fn client(addr: SocketAddr) -> Result<(), Box<dyn Error>> {
     let socket = UdpSocket::bind("0.0.0.0:0").await?;
-    let conn = socket
+    let (reader, writer) = socket
         .connect_to(
             addr,
             client::Config::new()
@@ -86,13 +95,26 @@ async fn client(addr: SocketAddr) -> Result<(), Box<dyn Error>> {
                 .protocol_version(11),
         )
         .await?;
-    tokio::pin!(conn);
-    conn.send(Bytes::from_static(b"User pack1")).await?;
-    conn.send(Bytes::from_static(b"User pack2")).await?;
-    let pack1 = conn.next().await.unwrap();
-    let pack2 = conn.next().await.unwrap();
-    assert_eq!(pack1, Bytes::from_static(b"User pack1"));
-    assert_eq!(pack2, Bytes::from_static(b"User pack2"));
+
+    tokio::pin!(reader);
+    tokio::pin!(writer);
+
+    poll_fn(|cx| writer.as_mut().poll_ready(cx)).await.unwrap();
+    writer.as_mut().feed(Message::new(
+        Reliability::Reliable,
+        0,
+        Bytes::from_static(b"User pack1"),
+    ));
+    // buffered
+    writer.as_mut().feed(Message::new(
+        Reliability::Reliable,
+        0,
+        Bytes::from_static(b"User pack1"),
+    ));
+    poll_fn(|cx| writer.as_mut().poll_flush(cx)).await.unwrap();
+
+    reader.next().await.unwrap();
+    reader.next().await.unwrap();
     Ok(())
 }
 
