@@ -2,12 +2,13 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::task::{ready, Context, Poll};
 
 use bytes::Bytes;
 use fastrace::collector::SpanContext;
 use fastrace::Span;
-use futures::{ready, Sink, Stream};
+use futures::Sink;
+use futures_core::Stream;
 use log::{debug, error, trace, warn};
 use pin_project_lite::pin_project;
 

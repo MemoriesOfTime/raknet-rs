@@ -5,7 +5,8 @@ use std::task::{ready, Context, Poll};
 
 use bytes::{Buf, BytesMut};
 use fastrace::{Event, Span};
-use futures::{Sink, Stream};
+use futures::Sink;
+use futures_core::Stream;
 use log::error;
 
 use super::AsyncSocket;

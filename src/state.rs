@@ -8,7 +8,8 @@ use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 
 use concurrent_queue::ConcurrentQueue;
-use futures::{Sink, Stream};
+use futures::Sink;
+use futures_core::Stream;
 use log::warn;
 use pin_project_lite::pin_project;
 

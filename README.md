@@ -36,7 +36,7 @@ See [examples](examples/) for basic usage.
 
 ### Server
 
-[IO](src/io.rs) is a hidden type that implements the traits `Stream` and `Sink`.
+[IO](src/io) is a hidden type that implements the traits `Stream` and `Sink`.
 
 Keep polling `incoming` because it also serves as the router to every IOs.
 Apply `Sink::poll_flush` to IO will trigger to flush all pending packets, `ACK`/`NACK`, and stale packets.

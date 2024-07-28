@@ -2,11 +2,11 @@ use std::cmp::Reverse;
 use std::collections::{BinaryHeap, VecDeque};
 use std::num::NonZeroUsize;
 use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::task::{ready, Context, Poll};
 
 use bytes::BufMut;
 use fastrace::{Event, Span};
-use futures::{ready, Stream, StreamExt};
+use futures_core::Stream;
 use lru::LruCache;
 use pin_project_lite::pin_project;
 
@@ -104,7 +104,7 @@ where
                 this.span.take();
                 return Poll::Ready(Some(Ok(frame_set)));
             }
-            let Some(frame_set) = ready!(this.frame.poll_next_unpin(cx)?) else {
+            let Some(frame_set) = ready!(this.frame.as_mut().poll_next(cx)?) else {
                 return Poll::Ready(None);
             };
             this.span.get_or_insert_with(|| {

@@ -16,7 +16,8 @@ use std::net::SocketAddr;
 use std::task::{Context, Poll};
 
 use bytes::BytesMut;
-use futures::{Sink, Stream, StreamExt};
+use futures::{Sink, StreamExt};
+use futures_core::Stream;
 use log::{debug, trace};
 
 use self::decoder::{BodyDecoded, DeFragmented, Deduplicated, Ordered, TracePending};

@@ -61,6 +61,7 @@ impl BitVecQueue {
         }
     }
 
+    #[inline]
     pub(crate) fn push_back(&mut self, v: bool) {
         if let Some(back) = self.store.back_mut()
             && self.tail & 127 != 0
@@ -77,6 +78,7 @@ impl BitVecQueue {
         self.tail += 1;
     }
 
+    #[inline]
     pub(crate) fn front(&self) -> Option<bool> {
         self.store.front().map(|front| {
             let mask = 1 << self.head;
@@ -84,6 +86,7 @@ impl BitVecQueue {
         })
     }
 
+    #[inline]
     pub(crate) fn pop_front(&mut self) {
         if self.head == self.tail {
             self.clear();
@@ -98,6 +101,7 @@ impl BitVecQueue {
     }
 
     /// Clear the bit queue
+    #[inline]
     pub(crate) fn clear(&mut self) {
         self.head = 0;
         self.tail = 0;

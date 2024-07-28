@@ -1,8 +1,10 @@
+use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
-use futures::{Future, Sink, SinkExt, Stream, StreamExt};
+use futures::Sink;
+use futures_core::Stream;
 use log::debug;
 use pin_project_lite::pin_project;
 
@@ -70,18 +72,18 @@ where
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
-        let frame = this.frame.as_mut().unwrap();
+        let mut frame = Pin::new(this.frame.as_mut().unwrap());
         loop {
             match this.state {
                 State::SendOpenConnReq1(pack) => {
-                    if let Err(err) = ready!(frame.poll_ready_unpin(cx)) {
+                    if let Err(err) = ready!(frame.as_mut().poll_ready(cx)) {
                         debug!(
                             "[{}] SendingOpenConnectionRequest1 poll_ready error: {err}, retrying",
                             this.role
                         );
                         continue;
                     }
-                    if let Err(err) = frame.start_send_unpin((pack.clone(), *this.server_addr)) {
+                    if let Err(err) = frame.as_mut().start_send((pack.clone(), *this.server_addr)) {
                         debug!(
                             "[{}] SendingOpenConnectionRequest1 start_send error: {err}, retrying",
                             this.role
@@ -91,7 +93,7 @@ where
                     *this.state = State::SendOpenConnReq1Flush;
                 }
                 State::SendOpenConnReq1Flush => {
-                    if let Err(err) = ready!(frame.poll_flush_unpin(cx)) {
+                    if let Err(err) = ready!(frame.as_mut().poll_flush(cx)) {
                         debug!(
                             "[{}] SendingOpenConnectionRequest1 poll_flush error: {err}, retrying",
                             this.role
@@ -102,7 +104,7 @@ where
                 }
                 State::WaitOpenConnReply1 => {
                     // TODO: Add timeout
-                    let Some((pack, addr)) = ready!(frame.poll_next_unpin(cx)) else {
+                    let Some((pack, addr)) = ready!(frame.as_mut().poll_next(cx)) else {
                         return Poll::Ready(Err(Error::ConnectionClosed));
                     };
                     if addr != *this.server_addr {
@@ -123,14 +125,14 @@ where
                     *this.state = State::SendOpenConnReq2(next);
                 }
                 State::SendOpenConnReq2(pack) => {
-                    if let Err(err) = ready!(frame.poll_ready_unpin(cx)) {
+                    if let Err(err) = ready!(frame.as_mut().poll_ready(cx)) {
                         debug!(
                             "[{}] SendOpenConnectionRequest2 poll_ready error: {err}, retrying",
                             this.role
                         );
                         continue;
                     }
-                    if let Err(err) = frame.start_send_unpin((pack.clone(), *this.server_addr)) {
+                    if let Err(err) = frame.as_mut().start_send((pack.clone(), *this.server_addr)) {
                         debug!(
                             "[{}] SendOpenConnectionRequest2 start_send error: {err}, retrying",
                             this.role
@@ -140,7 +142,7 @@ where
                     *this.state = State::SendOpenConnReq2Flush;
                 }
                 State::SendOpenConnReq2Flush => {
-                    if let Err(err) = ready!(frame.poll_flush_unpin(cx)) {
+                    if let Err(err) = ready!(frame.as_mut().poll_flush(cx)) {
                         debug!(
                             "[{}] SendOpenConnectionRequest2 poll_flush error: {err}, retrying",
                             this.role
@@ -151,7 +153,7 @@ where
                 }
                 State::WaitOpenConnReply2 => {
                     // TODO: Add timeout
-                    let Some((pack, addr)) = ready!(frame.poll_next_unpin(cx)) else {
+                    let Some((pack, addr)) = ready!(frame.as_mut().poll_next(cx)) else {
                         return Poll::Ready(Err(Error::ConnectionClosed));
                     };
                     if addr != *this.server_addr {
@@ -189,7 +191,7 @@ where
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.project();
         loop {
-            let Some((pack, addr)) = ready!(this.frame.poll_next_unpin(cx)) else {
+            let Some((pack, addr)) = ready!(Pin::new(&mut *this.frame).poll_next(cx)) else {
                 return Poll::Ready(None);
             };
             if addr != *this.server_addr {

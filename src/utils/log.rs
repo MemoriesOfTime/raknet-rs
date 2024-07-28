@@ -1,7 +1,8 @@
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
-use futures::{Sink, Stream};
+use futures::Sink;
+use futures_core::Stream;
 use pin_project_lite::pin_project;
 
 pub(crate) trait Logged<T, E>: Sized {
