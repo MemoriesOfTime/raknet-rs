@@ -36,9 +36,9 @@ See [examples](examples/) for basic usage.
 
 ### Server
 
-[IO](src/io.rs) is a hidden type that implements the traits `Stream` and `Sink`.
+Most operations are performed on `Stream` and `Sink`.
 
-Keep polling `incoming` because it also serves as the router to every IOs.
+Keep polling `incoming` because it also serves as the router to every connections.
 Apply `Sink::poll_flush` to IO will trigger to flush all pending packets, `ACK`/`NACK`, and stale packets.
 Apply `Sink::poll_close` to IO will ensure that all data is received by the peer before returning (i.e It may keep resending infinitely.).
 
@@ -56,9 +56,9 @@ let config = server::Config::new()
     .advertisement(&b"Hello, I am server"[..])
     ...
 let mut incoming = socket.make_incoming(config);
-let mut io = incoming.next().await.unwrap();
-let data: Bytes = io.next().await.unwrap();
-io.send(data).await.unwrap();
+let (reader, _) = incoming.next().await.unwrap();
+tokio::pin!(reader);
+let data: Bytes = reader.next().await.unwrap();
 ```
 
 ### Client
@@ -69,14 +69,15 @@ io.send(data).await.unwrap();
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
 use raknet_rs::client::{self, ConnectTo};
+use raknet_rs::Reliability;
 
 let socket = tokio::net::UdpSocket::bind("0.0.0.0:0").await?;
 let config = client::Config::new()
     .send_buf_cap(1024)
     .client_guid(1919810)
     ...
-let mut conn = socket.connect_to(<addr>, config).await?;
-conn.send(Bytes::from_static(b"Hello, Anyone there?"))
+let (_, writer) = socket.connect_to(<addr>, config).await?;
+tokio::pin!(writer);
+writer.send(Message::new(Reliability::Reliable, 0, Bytes::from_static(b"Hello, Anyone there?")))
     .await?;
-let res: Bytes = conn.next().await.unwrap();
 ```
