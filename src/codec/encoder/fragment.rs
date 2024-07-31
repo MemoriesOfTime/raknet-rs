@@ -67,10 +67,9 @@ where
         let mut body = msg.into_data();
 
         // max_len is the maximum size of the frame body (excluding the fragment part option)
-        let max_len = *this.mtu - FRAME_SET_HEADER_SIZE - reliability.size();
-        let exceed = body.len() > max_len;
+        let mut max_len = *this.mtu - FRAME_SET_HEADER_SIZE - reliability.size();
 
-        if exceed {
+        if body.len() > max_len {
             // adjust reliability when packet needs splitting
             reliability = match reliability {
                 Reliability::Unreliable => Reliability::Reliable,
@@ -79,6 +78,9 @@ where
                 _ => reliability,
             };
         }
+
+        // calculate again as we may have adjusted reliability
+        max_len = *this.mtu - FRAME_SET_HEADER_SIZE - reliability.size();
 
         // get reliable_frame_index and ordered part for each frame
         let mut indices_for_frame = || {
@@ -97,7 +99,7 @@ where
             (reliable_frame_index, ordered)
         };
 
-        if !exceed {
+        if body.len() <= max_len {
             // not exceeding the mss, no need to split.
             let (reliable_frame_index, ordered) = indices_for_frame();
             if reliability.is_sequenced_or_ordered() {

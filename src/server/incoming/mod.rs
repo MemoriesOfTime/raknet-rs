@@ -1,9 +1,11 @@
+use std::io;
+
 use bytes::{Buf, Bytes};
-use futures::Stream;
+use futures::{Sink, Stream};
 
 use super::handler::offline;
-use crate::io::IO;
-use crate::{codec, Role};
+use crate::opts::TraceInfo;
+use crate::{codec, Message, Role};
 
 /// Incoming implementation by using tokio's UDP framework
 #[cfg(feature = "tokio-udp")]
@@ -166,5 +168,13 @@ impl Config {
 }
 
 pub trait MakeIncoming: Sized {
-    fn make_incoming(self, config: Config) -> impl Stream<Item = impl IO>;
+    fn make_incoming(
+        self,
+        config: Config,
+    ) -> impl Stream<
+        Item = (
+            impl Stream<Item = Bytes> + TraceInfo,
+            impl Sink<Message, Error = io::Error>,
+        ),
+    >;
 }

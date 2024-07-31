@@ -176,6 +176,10 @@ where
                 }
                 break;
             }
+            debug_assert!(
+                this.buf.is_empty() || !frames.is_empty(),
+                "every frame size should not exceed MTU"
+            );
             if !frames.is_empty() {
                 let frame_set = FrameSet {
                     seq_num: *this.seq_num_write_index,

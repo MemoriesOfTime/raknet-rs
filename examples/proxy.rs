@@ -4,9 +4,8 @@ use std::net::SocketAddr;
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
 use raknet_rs::client::{self, ConnectTo};
-use raknet_rs::io::IO;
 use raknet_rs::server::{self, MakeIncoming};
-use raknet_rs::Reliability;
+use raknet_rs::{Message, Reliability};
 use tokio::net::UdpSocket;
 
 #[tokio::main]
@@ -27,13 +26,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     tokio::spawn(async move {
         loop {
-            let io = incoming.next().await.unwrap();
+            let (src, dst) = incoming.next().await.unwrap();
             tokio::spawn(async move {
-                tokio::pin!(io);
-                println!("[server] set default reliability to Reliable");
-                io.as_mut().set_default_reliability(Reliability::Reliable);
+                tokio::pin!(src);
+                tokio::pin!(dst);
                 loop {
-                    if let Some(data) = io.next().await {
+                    if let Some(data) = src.next().await {
                         println!(
                             "[server] got proxy data: '{}'",
                             String::from_utf8_lossy(&data)
@@ -45,7 +43,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             .send()
                             .await
                             .unwrap();
-                        io.send(res.bytes().await.unwrap()).await.unwrap();
+                        dst.send(Message::new(
+                            Reliability::Reliable,
+                            0,
+                            res.bytes().await.unwrap(),
+                        ))
+                        .await
+                        .unwrap();
                         continue;
                     }
                     break;
@@ -62,7 +66,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 async fn client(addr: SocketAddr, name: &str) -> Result<(), Box<dyn Error>> {
     let socket = UdpSocket::bind("0.0.0.0:0").await?;
     println!("[{name}] I am listening on {}", socket.local_addr()?);
-    let conn = socket
+    let (src, dst) = socket
         .connect_to(
             addr,
             client::Config::new()
@@ -72,10 +76,15 @@ async fn client(addr: SocketAddr, name: &str) -> Result<(), Box<dyn Error>> {
                 .protocol_version(11),
         )
         .await?;
-    tokio::pin!(conn);
-    conn.send(Bytes::from_static(b"Hello, Anyone there?"))
-        .await?;
-    let res = conn.next().await.unwrap();
+    tokio::pin!(src);
+    tokio::pin!(dst);
+    dst.send(Message::new(
+        Reliability::Reliable,
+        0,
+        Bytes::from_static(b"Hello, Anyone there?"),
+    ))
+    .await?;
+    let res = src.next().await.unwrap();
     println!(
         "[{name}] got server response: {}",
         String::from_utf8_lossy(&res)

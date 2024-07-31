@@ -154,7 +154,7 @@ where
                     if let Some(peer) = this.connected.get(&addr) {
                         drop(guard);
                         this.read_span.take();
-                        return Poll::Ready(Some((pack, peer.clone())));
+                        return Poll::Ready(Some((pack, *peer)));
                     }
                     debug!(
                         "[{}] ignore packet {:?} from unconnected client {addr}",

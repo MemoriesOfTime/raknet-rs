@@ -124,14 +124,14 @@ impl ResendMap {
         } else {
             return Poll::Ready(());
         }
+        let c_id = ConnId::new(self.role.guid(), self.peer.guid);
         trace!(
-            "[{}]: wait for resend seq_num {} for {} within {:?}",
+            "[{}]: wait on {c_id:?} for resend seq_num {} to {} within {:?}",
             self.role,
             seq_num,
             self.peer,
             expired_at - now
         );
-        let c_id = ConnId::new(self.role.guid(), self.peer.guid);
         Reactor::get().insert_timer(c_id, expired_at, cx.waker());
         Poll::Pending
     }

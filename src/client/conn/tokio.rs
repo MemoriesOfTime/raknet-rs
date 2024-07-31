@@ -2,8 +2,8 @@ use std::io;
 use std::net::ToSocketAddrs;
 use std::sync::Arc;
 
-use fastrace::Span;
-use futures::StreamExt;
+use bytes::Bytes;
+use futures::{Sink, Stream, StreamExt};
 use log::{error, trace};
 use tokio::net::UdpSocket as TokioUdpSocket;
 
@@ -13,17 +13,21 @@ use crate::client::handler::online::HandleOnline;
 use crate::codec::frame::Framed;
 use crate::codec::{Decoded, Encoded};
 use crate::guard::HandleOutgoing;
-use crate::io::{Ping, SeparatedIO, IO};
 use crate::link::{Router, TransferLink};
+use crate::opts::Ping;
 use crate::state::{IncomingStateManage, OutgoingStateManage};
-use crate::utils::{Logged, TraceStreamExt};
+use crate::utils::Logged;
+use crate::Message;
 
 impl ConnectTo for TokioUdpSocket {
     async fn connect_to(
         self,
         addrs: impl ToSocketAddrs,
         config: super::Config,
-    ) -> io::Result<impl IO + Ping> {
+    ) -> io::Result<(
+        impl Stream<Item = Bytes>,
+        impl Sink<Message, Error = io::Error> + Ping,
+    )> {
         let socket = Arc::new(self);
         let mut lookups = addrs.to_socket_addrs()?;
         let addr = loop {
@@ -68,9 +72,8 @@ impl ConnectTo for TokioUdpSocket {
                 move |err| error!("[{role}] decode error: {err} from {peer}"),
             )
             .manage_incoming_state()
-            .handle_online(addr, config.client_guid, Arc::clone(&link))
-            .enter_on_item(Span::noop);
+            .handle_online(addr, config.client_guid, Arc::clone(&link));
 
-        Ok(SeparatedIO::new(src, dst))
+        Ok((src, dst))
     }
 }

@@ -1,13 +1,15 @@
 use std::collections::HashMap;
+use std::io;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 
+use bytes::Bytes;
 use concurrent_queue::ConcurrentQueue;
 use fastrace::collector::SpanContext;
 use fastrace::Span;
-use futures::Stream;
+use futures::{Sink, Stream};
 use log::{debug, error, trace};
 use pin_project_lite::pin_project;
 use tokio::net::UdpSocket as TokioUdpSocket;
@@ -16,12 +18,13 @@ use super::{Config, MakeIncoming};
 use crate::codec::frame::Framed;
 use crate::codec::{Decoded, Encoded};
 use crate::guard::HandleOutgoing;
-use crate::io::{SeparatedIO, IO};
 use crate::link::{Router, TransferLink};
+use crate::opts::TraceInfo;
 use crate::server::handler::offline::OfflineHandler;
 use crate::server::handler::online::HandleOnline;
 use crate::state::{CloseOnDrop, IncomingStateManage, OutgoingStateManage};
 use crate::utils::{Logged, TraceStreamExt};
+use crate::Message;
 
 pin_project! {
     struct Incoming {
@@ -35,7 +38,15 @@ pin_project! {
 }
 
 impl MakeIncoming for TokioUdpSocket {
-    fn make_incoming(self, config: Config) -> impl Stream<Item = impl IO> {
+    fn make_incoming(
+        self,
+        config: Config,
+    ) -> impl Stream<
+        Item = (
+            impl Stream<Item = Bytes> + TraceInfo,
+            impl Sink<Message, Error = io::Error>,
+        ),
+    > {
         let socket = Arc::new(self);
         Incoming {
             offline: OfflineHandler::new(
@@ -51,7 +62,10 @@ impl MakeIncoming for TokioUdpSocket {
 }
 
 impl Stream for Incoming {
-    type Item = impl IO;
+    type Item = (
+        impl Stream<Item = Bytes> + TraceInfo,
+        impl Sink<Message, Error = io::Error>,
+    );
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
@@ -107,7 +121,7 @@ impl Stream for Incoming {
                     })
                 });
 
-            return Poll::Ready(Some(SeparatedIO::new(src, dst)));
+            return Poll::Ready(Some((src, dst)));
         }
     }
 }

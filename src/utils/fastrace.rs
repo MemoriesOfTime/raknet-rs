@@ -6,7 +6,7 @@ use fastrace::Span;
 use futures::Stream;
 use pin_project_lite::pin_project;
 
-use crate::io::TraceInfo;
+use crate::opts::TraceInfo;
 
 pub(crate) trait TraceStreamExt: Stream + Sized {
     /// It starts a span at every time an item is generating from the stream, and the span will end

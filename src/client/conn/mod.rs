@@ -1,9 +1,12 @@
 use std::io;
 use std::net::ToSocketAddrs;
 
+use bytes::Bytes;
+use futures::{Sink, Stream};
+
 use super::handler::offline;
-use crate::io::{Ping, IO};
-use crate::{codec, Role};
+use crate::opts::Ping;
+use crate::{codec, Message, Role};
 
 /// Connection implementation by using tokio's UDP framework
 #[cfg(feature = "tokio-udp")]
@@ -130,5 +133,8 @@ pub trait ConnectTo: Sized {
         self,
         addr: impl ToSocketAddrs,
         config: Config,
-    ) -> io::Result<impl IO + Ping>;
+    ) -> io::Result<(
+        impl Stream<Item = Bytes>,
+        impl Sink<Message, Error = io::Error> + Ping,
+    )>;
 }

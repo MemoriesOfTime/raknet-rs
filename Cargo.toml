@@ -43,11 +43,3 @@ micro-bench = []
 name = "micro"
 harness = false
 required-features = ["micro-bench"]
-
-[[bench]]
-name = "bulk"
-harness = false
-
-[profile.bench]
-opt-level = 3
-lto = true

@@ -75,8 +75,8 @@ pub mod server;
 /// Raknet client
 pub mod client;
 
-/// The basic operation API
-pub mod io;
+/// Connection options
+pub mod opts;
 
 #[cfg(feature = "micro-bench")]
 pub mod micro_bench {

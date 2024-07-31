@@ -9,7 +9,7 @@ use fastrace::collector::{SpanContext, SpanId, SpanRecord, TraceId};
 use fastrace::Span;
 use futures::{SinkExt, StreamExt};
 use raknet_rs::client::{self, ConnectTo};
-use raknet_rs::io::{TraceInfo, IO};
+use raknet_rs::opts::TraceInfo;
 use raknet_rs::server::{self, MakeIncoming};
 use raknet_rs::{Message, Reliability};
 use tokio::net::UdpSocket;
@@ -37,14 +37,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     tokio::spawn(async move {
         loop {
-            let io = incoming.next().await.unwrap();
+            let (reader, writer) = incoming.next().await.unwrap();
             tokio::spawn(async move {
-                let (read, write) = IO::split(io);
-                tokio::pin!(read);
-                tokio::pin!(write);
+                tokio::pin!(reader);
+                tokio::pin!(writer);
                 loop {
-                    if let Some(data) = read.next().await {
-                        let trace_id = read.last_trace_id().unwrap_or_else(|| {
+                    if let Some(data) = reader.next().await {
+                        let trace_id = reader.last_trace_id().unwrap_or_else(|| {
                             eprintln!("Please run with `--features fastrace/enable` and try again");
                             exit(0)
                         });
@@ -55,7 +54,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         // do something with data
                         tokio::time::sleep(Duration::from_millis(10)).await;
                         let _span = Span::enter_with_parent("user child span", &root_span);
-                        write
+                        writer
                             .send(Message::new(Reliability::ReliableOrdered, 0, data))
                             .await
                             .unwrap();
@@ -76,7 +75,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
 async fn client(addr: SocketAddr) -> Result<(), Box<dyn Error>> {
     let socket = UdpSocket::bind("0.0.0.0:0").await?;
-    let conn = socket
+    let (src, dst) = socket
         .connect_to(
             addr,
             client::Config::new()
@@ -86,11 +85,22 @@ async fn client(addr: SocketAddr) -> Result<(), Box<dyn Error>> {
                 .protocol_version(11),
         )
         .await?;
-    tokio::pin!(conn);
-    conn.send(Bytes::from_static(b"User pack1")).await?;
-    conn.send(Bytes::from_static(b"User pack2")).await?;
-    let pack1 = conn.next().await.unwrap();
-    let pack2 = conn.next().await.unwrap();
+    tokio::pin!(src);
+    tokio::pin!(dst);
+    dst.send(Message::new(
+        Reliability::ReliableOrdered,
+        0,
+        Bytes::from_static(b"User pack1"),
+    ))
+    .await?;
+    dst.send(Message::new(
+        Reliability::ReliableOrdered,
+        0,
+        Bytes::from_static(b"User pack2"),
+    ))
+    .await?;
+    let pack1 = src.next().await.unwrap();
+    let pack2 = src.next().await.unwrap();
     assert_eq!(pack1, Bytes::from_static(b"User pack1"));
     assert_eq!(pack2, Bytes::from_static(b"User pack2"));
     Ok(())
