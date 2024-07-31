@@ -5,7 +5,7 @@ use futures::{Sink, Stream};
 use pin_project_lite::pin_project;
 
 pub(crate) trait Logged<T, E>: Sized {
-    fn logged_all(
+    fn logged(
         self,
         ok_f: impl Fn(&T) + Send + Sync + 'static,
         err_f: impl Fn(&E) + Send + Sync + 'static,
@@ -16,7 +16,7 @@ impl<F, T, E> Logged<T, E> for F
 where
     F: Stream<Item = Result<T, E>>,
 {
-    fn logged_all(
+    fn logged(
         self,
         ok_f: impl Fn(&T) + Send + Sync + 'static,
         err_f: impl Fn(&E) + Send + Sync + 'static,
@@ -24,7 +24,7 @@ where
         Log {
             source: self,
             err_f: Box::new(err_f),
-            ok_f: Some(Box::new(ok_f)),
+            ok_f: Box::new(ok_f),
         }
     }
 }
@@ -34,7 +34,7 @@ pin_project! {
     pub(crate) struct Log<F, T, E> {
         #[pin]
         source: F,
-        ok_f: Option<Box<dyn Fn(&T) + Send + Sync>>,
+        ok_f: Box<dyn Fn(&T) + Send + Sync>,
         err_f: Box<dyn Fn(&E) + Send + Sync>,
     }
 }
@@ -59,9 +59,7 @@ where
                     continue;
                 }
             };
-            if let Some(ok_f) = this.ok_f {
-                ok_f(&v);
-            }
+            (*this.ok_f)(&v);
             return Poll::Ready(Some(v));
         }
     }

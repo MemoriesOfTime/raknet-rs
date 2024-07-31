@@ -61,7 +61,7 @@ impl ConnectTo for TokioUdpSocket {
         });
 
         let src = route
-            .frame_decoded(config.codec_config(), role)
+            .frame_decoded(config.codec_config(), role, peer)
             .manage_incoming_state()
             .handle_online(addr, config.client_guid, Arc::clone(&link))
             .enter_on_item(Span::noop);

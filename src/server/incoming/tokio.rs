@@ -90,7 +90,7 @@ impl Stream for Incoming {
                 )));
 
             let src = route
-                .frame_decoded(this.config.codec_config(), role)
+                .frame_decoded(this.config.codec_config(), role, peer)
                 .manage_incoming_state()
                 .handle_online(role, peer.addr, Arc::clone(&link))
                 .enter_on_item(move || {

@@ -213,35 +213,45 @@ mod test {
         let dst = DstSink::default().fragmented(50, 8);
         tokio::pin!(dst);
         // 1
-        dst.as_mut().start_send(Message::new(
-            Reliability::ReliableOrdered,
-            0,
-            Bytes::from_static(b"hello world"),
-        )).unwrap();
+        dst.as_mut()
+            .start_send(Message::new(
+                Reliability::ReliableOrdered,
+                0,
+                Bytes::from_static(b"hello world"),
+            ))
+            .unwrap();
         // 2
-        dst.as_mut().start_send(Message::new(
-            Reliability::ReliableOrdered,
-            1,
-            Bytes::from_static(b"hello world, hello world, hello world, hello world"),
-        )).unwrap();
+        dst.as_mut()
+            .start_send(Message::new(
+                Reliability::ReliableOrdered,
+                1,
+                Bytes::from_static(b"hello world, hello world, hello world, hello world"),
+            ))
+            .unwrap();
         // 1
-        dst.as_mut().start_send(Message::new(
-            Reliability::Reliable,
-            0,
-            Bytes::from_static(b"hello world"),
-        )).unwrap();
+        dst.as_mut()
+            .start_send(Message::new(
+                Reliability::Reliable,
+                0,
+                Bytes::from_static(b"hello world"),
+            ))
+            .unwrap();
         // 2
-        dst.as_mut().start_send(Message::new(
-            Reliability::Unreliable, // adjust to reliable
-            0,
-            Bytes::from_static(b"hello world, hello world, hello world, hello world"),
-        )).unwrap();
+        dst.as_mut()
+            .start_send(Message::new(
+                Reliability::Unreliable, // adjust to reliable
+                0,
+                Bytes::from_static(b"hello world, hello world, hello world, hello world"),
+            ))
+            .unwrap();
         // 1
-        dst.as_mut().start_send(Message::new(
-            Reliability::Unreliable,
-            0,
-            Bytes::from_static(b"hello world"),
-        )).unwrap();
+        dst.as_mut()
+            .start_send(Message::new(
+                Reliability::Unreliable,
+                0,
+                Bytes::from_static(b"hello world"),
+            ))
+            .unwrap();
 
         assert_eq!(dst.order_write_index[0].to_u32(), 1); // 1 message on channel 0 requires ordering, next ordered frame index is 1
         assert_eq!(dst.order_write_index[1].to_u32(), 1); // 1 message on channel 1 requires ordering, next ordered frame index is 1
@@ -258,22 +268,26 @@ mod test {
     fn test_fragmented_panic() {
         let dst = DstSink::default().fragmented(50, 8);
         tokio::pin!(dst);
-        dst.as_mut().start_send(Message::new(
-            Reliability::ReliableOrdered,
-            100,
-            Bytes::from_static(b"hello world"),
-        )).unwrap();
+        dst.as_mut()
+            .start_send(Message::new(
+                Reliability::ReliableOrdered,
+                100,
+                Bytes::from_static(b"hello world"),
+            ))
+            .unwrap();
     }
 
     #[test]
     fn test_fragmented_fulfill_one_packet() {
         let dst = DstSink::default().fragmented(50, 8);
         tokio::pin!(dst);
-        dst.as_mut().start_send(Message::new(
-            Reliability::ReliableOrdered,
-            0,
-            Bytes::from_iter(std::iter::repeat(0xfe).take(50 - FRAME_SET_HEADER_SIZE - 10)),
-        )).unwrap();
+        dst.as_mut()
+            .start_send(Message::new(
+                Reliability::ReliableOrdered,
+                0,
+                Bytes::from_iter(std::iter::repeat(0xfe).take(50 - FRAME_SET_HEADER_SIZE - 10)),
+            ))
+            .unwrap();
         assert_eq!(dst.frame.buf.len(), 1);
         assert!(dst.frame.buf[0].fragment.is_none());
         assert_eq!(dst.frame.buf[0].size(), 50 - FRAME_SET_HEADER_SIZE);
@@ -283,11 +297,13 @@ mod test {
     fn test_fragmented_split_packet() {
         let dst = DstSink::default().fragmented(50, 8);
         tokio::pin!(dst);
-        dst.as_mut().start_send(Message::new(
-            Reliability::ReliableOrdered,
-            0,
-            Bytes::from_iter(std::iter::repeat(0xfe).take(50)),
-        )).unwrap();
+        dst.as_mut()
+            .start_send(Message::new(
+                Reliability::ReliableOrdered,
+                0,
+                Bytes::from_iter(std::iter::repeat(0xfe).take(50)),
+            ))
+            .unwrap();
         assert_eq!(dst.frame.buf.len(), 2);
         let mut fragment = dst.frame.buf[0].fragment.unwrap();
         let r = dst.frame.buf[0].flags.reliability.size();
