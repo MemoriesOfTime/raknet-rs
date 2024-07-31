@@ -1,5 +1,5 @@
 #[derive(thiserror::Error, Debug)]
-pub enum CodecError {
+pub(crate) enum CodecError {
     #[error("io error {0}")]
     IO(#[from] std::io::Error),
     #[error("invalid ip version {0}")]
@@ -20,14 +20,4 @@ pub enum CodecError {
     AckCountExceed,
     #[error("magic number not matched, pos {0}, byte {1}")]
     MagicNotMatched(usize, u8),
-}
-
-#[derive(thiserror::Error, Debug)]
-pub enum Error {
-    #[error("io error {0}")]
-    IO(#[from] std::io::Error),
-    #[error(transparent)]
-    Codec(#[from] CodecError),
-    #[error("connection closed")]
-    ConnectionClosed,
 }

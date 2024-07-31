@@ -1,12 +1,11 @@
+use std::io;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
 use futures::{Future, Sink, SinkExt, Stream, StreamExt};
-use log::debug;
 use pin_project_lite::pin_project;
 
-use crate::errors::{CodecError, Error};
 use crate::packet::connected::{self, FramesMut};
 use crate::packet::{unconnected, Packet};
 use crate::RoleContext;
@@ -31,7 +30,7 @@ pin_project! {
 impl<F> OfflineHandler<F>
 where
     F: Stream<Item = (Packet<FramesMut>, SocketAddr)>
-        + Sink<(unconnected::Packet, SocketAddr), Error = CodecError>
+        + Sink<(unconnected::Packet, SocketAddr), Error = io::Error>
         + Unpin,
 {
     pub(crate) fn new(frame: F, server_addr: SocketAddr, config: Config) -> Self {
@@ -63,10 +62,10 @@ enum State {
 impl<F> Future for OfflineHandler<F>
 where
     F: Stream<Item = (Packet<FramesMut>, SocketAddr)>
-        + Sink<(unconnected::Packet, SocketAddr), Error = CodecError>
+        + Sink<(unconnected::Packet, SocketAddr), Error = io::Error>
         + Unpin,
 {
-    type Output = Result<impl Stream<Item = connected::Packet<FramesMut>>, Error>;
+    type Output = Result<impl Stream<Item = connected::Packet<FramesMut>>, io::Error>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
@@ -74,37 +73,20 @@ where
         loop {
             match this.state {
                 State::SendOpenConnReq1(pack) => {
-                    if let Err(err) = ready!(frame.poll_ready_unpin(cx)) {
-                        debug!(
-                            "[{}] SendingOpenConnectionRequest1 poll_ready error: {err}, retrying",
-                            this.role
-                        );
-                        continue;
-                    }
-                    if let Err(err) = frame.start_send_unpin((pack.clone(), *this.server_addr)) {
-                        debug!(
-                            "[{}] SendingOpenConnectionRequest1 start_send error: {err}, retrying",
-                            this.role
-                        );
-                        continue;
-                    }
+                    ready!(frame.poll_ready_unpin(cx))?;
+                    frame.start_send_unpin((pack.clone(), *this.server_addr))?;
                     *this.state = State::SendOpenConnReq1Flush;
                 }
                 State::SendOpenConnReq1Flush => {
-                    if let Err(err) = ready!(frame.poll_flush_unpin(cx)) {
-                        debug!(
-                            "[{}] SendingOpenConnectionRequest1 poll_flush error: {err}, retrying",
-                            this.role
-                        );
-                        continue;
-                    }
+                    ready!(frame.poll_flush_unpin(cx))?;
                     *this.state = State::WaitOpenConnReply1;
                 }
                 State::WaitOpenConnReply1 => {
                     // TODO: Add timeout
-                    let Some((pack, addr)) = ready!(frame.poll_next_unpin(cx)) else {
-                        return Poll::Ready(Err(Error::ConnectionClosed));
-                    };
+                    let (pack, addr) = ready!(frame.poll_next_unpin(cx)).ok_or(io::Error::new(
+                        io::ErrorKind::ConnectionReset,
+                        "connection reset by peer",
+                    ))?;
                     if addr != *this.server_addr {
                         continue;
                     }
@@ -123,37 +105,20 @@ where
                     *this.state = State::SendOpenConnReq2(next);
                 }
                 State::SendOpenConnReq2(pack) => {
-                    if let Err(err) = ready!(frame.poll_ready_unpin(cx)) {
-                        debug!(
-                            "[{}] SendOpenConnectionRequest2 poll_ready error: {err}, retrying",
-                            this.role
-                        );
-                        continue;
-                    }
-                    if let Err(err) = frame.start_send_unpin((pack.clone(), *this.server_addr)) {
-                        debug!(
-                            "[{}] SendOpenConnectionRequest2 start_send error: {err}, retrying",
-                            this.role
-                        );
-                        continue;
-                    }
+                    ready!(frame.poll_ready_unpin(cx))?;
+                    frame.start_send_unpin((pack.clone(), *this.server_addr))?;
                     *this.state = State::SendOpenConnReq2Flush;
                 }
                 State::SendOpenConnReq2Flush => {
-                    if let Err(err) = ready!(frame.poll_flush_unpin(cx)) {
-                        debug!(
-                            "[{}] SendOpenConnectionRequest2 poll_flush error: {err}, retrying",
-                            this.role
-                        );
-                        continue;
-                    }
+                    ready!(frame.poll_flush_unpin(cx))?;
                     *this.state = State::WaitOpenConnReply2;
                 }
                 State::WaitOpenConnReply2 => {
                     // TODO: Add timeout
-                    let Some((pack, addr)) = ready!(frame.poll_next_unpin(cx)) else {
-                        return Poll::Ready(Err(Error::ConnectionClosed));
-                    };
+                    let (pack, addr) = ready!(frame.poll_next_unpin(cx)).ok_or(io::Error::new(
+                        io::ErrorKind::ConnectionReset,
+                        "connection reset by peer",
+                    ))?;
                     if addr != *this.server_addr {
                         continue;
                     }

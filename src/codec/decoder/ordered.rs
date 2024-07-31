@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::task::{ready, Context, Poll};
 
 use bytes::Buf;
 use fastrace::{Event, Span};
-use futures::{ready, Stream, StreamExt};
+use futures::Stream;
 use log::warn;
 use pin_project_lite::pin_project;
 
@@ -89,7 +89,7 @@ where
                 }
             }
 
-            let Some(frame_set) = ready!(this.frame.poll_next_unpin(cx)?) else {
+            let Some(frame_set) = ready!(this.frame.as_mut().poll_next(cx)?) else {
                 return Poll::Ready(None);
             };
             this.span.get_or_insert_with(|| {

@@ -9,7 +9,6 @@ use futures::{Sink, Stream};
 use log::error;
 
 use super::AsyncSocket;
-use crate::errors::CodecError;
 use crate::packet::connected::{FramesMut, FramesRef};
 use crate::packet::{unconnected, Packet};
 
@@ -31,7 +30,7 @@ impl<T: AsyncSocket> Framed<T> {
         Self {
             socket,
             max_mtu,
-            rd: BytesMut::with_capacity(max_mtu),
+            rd: BytesMut::new(), // we may never use rd at all
             wr: BytesMut::with_capacity(max_mtu),
             out_addr: SocketAddr::from(([0, 0, 0, 0], 0)),
             flushed: true,
@@ -43,22 +42,7 @@ impl<T: AsyncSocket> Framed<T> {
     }
 
     #[inline]
-    fn poll_ready_0(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), CodecError>> {
-        if !self.flushed {
-            match self.poll_flush_0(cx)? {
-                Poll::Ready(()) => {}
-                Poll::Pending => return Poll::Pending,
-            }
-        }
-
-        Poll::Ready(Ok(()))
-    }
-
-    #[inline]
-    fn poll_flush_0(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Result<(), CodecError>> {
+    fn poll_flush_0(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
         if self.flushed {
             return Poll::Ready(Ok(()));
         }
@@ -82,17 +66,10 @@ impl<T: AsyncSocket> Framed<T> {
             Err(io::Error::new(
                 io::ErrorKind::Other,
                 "failed to write entire datagram to socket",
-            )
-            .into())
+            ))
         };
 
         Poll::Ready(res)
-    }
-
-    #[inline]
-    fn poll_close_0(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), CodecError>> {
-        ready!(self.poll_flush_0(cx))?;
-        Poll::Ready(Ok(()))
     }
 }
 
@@ -168,10 +145,10 @@ impl<T: AsyncSocket> Stream for Framed<T> {
 impl<'a, B: Buf + Clone, T: AsyncSocket> Sink<(Packet<FramesRef<'a, B>>, SocketAddr)>
     for Framed<T>
 {
-    type Error = CodecError;
+    type Error = io::Error;
 
     fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.poll_ready_0(cx)
+        self.poll_flush_0(cx)
     }
 
     fn start_send(
@@ -194,7 +171,7 @@ impl<'a, B: Buf + Clone, T: AsyncSocket> Sink<(Packet<FramesRef<'a, B>>, SocketA
     }
 
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.poll_close_0(cx)
+        self.poll_flush_0(cx)
     }
 }
 
@@ -202,10 +179,10 @@ impl<'a, B: Buf + Clone, T: AsyncSocket> Sink<(Packet<FramesRef<'a, B>>, SocketA
 // So the offline handler could take account of the unconnected packets and ignore the generic from
 // the connected packets.
 impl<T: AsyncSocket> Sink<(unconnected::Packet, SocketAddr)> for Framed<T> {
-    type Error = CodecError;
+    type Error = io::Error;
 
     fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.poll_ready_0(cx)
+        self.poll_flush_0(cx)
     }
 
     fn start_send(
@@ -228,6 +205,6 @@ impl<T: AsyncSocket> Sink<(unconnected::Packet, SocketAddr)> for Framed<T> {
     }
 
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.poll_close_0(cx)
+        self.poll_flush_0(cx)
     }
 }

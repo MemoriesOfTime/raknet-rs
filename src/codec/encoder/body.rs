@@ -1,3 +1,4 @@
+use std::io;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
@@ -5,7 +6,6 @@ use bytes::BytesMut;
 use futures::Sink;
 use pin_project_lite::pin_project;
 
-use crate::errors::CodecError;
 use crate::link::SharedLink;
 use crate::packet::connected::FrameBody;
 use crate::{Message, Reliability};
@@ -25,7 +25,7 @@ pub(crate) trait BodyEncoded: Sized {
 
 impl<F> BodyEncoded for F
 where
-    F: Sink<Message, Error = CodecError>,
+    F: Sink<Message, Error = io::Error>,
 {
     fn body_encoded(self, link: SharedLink) -> BodyEncoder<Self> {
         BodyEncoder { frame: self, link }
@@ -59,13 +59,13 @@ fn encode(body: FrameBody) -> Message {
 
 impl<F> BodyEncoder<F>
 where
-    F: Sink<Message, Error = CodecError>,
+    F: Sink<Message, Error = io::Error>,
 {
     /// Empty the link buffer all the frame body, insure the frame is ready to send
     pub(crate) fn poll_empty(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-    ) -> Poll<Result<(), CodecError>> {
+    ) -> Poll<Result<(), io::Error>> {
         let mut this = self.project();
         if this.link.frame_body_empty() {
             return Poll::Ready(Ok(()));
@@ -85,9 +85,9 @@ where
 
 impl<F> Sink<Message> for BodyEncoder<F>
 where
-    F: Sink<Message, Error = CodecError>,
+    F: Sink<Message, Error = io::Error>,
 {
-    type Error = CodecError;
+    type Error = io::Error;
 
     fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Sink::<FrameBody>::poll_ready(self, cx)
@@ -109,9 +109,9 @@ where
 
 impl<F> Sink<FrameBody> for BodyEncoder<F>
 where
-    F: Sink<Message, Error = CodecError>,
+    F: Sink<Message, Error = io::Error>,
 {
-    type Error = CodecError;
+    type Error = io::Error;
 
     fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         ready!(self.as_mut().poll_empty(cx))?;

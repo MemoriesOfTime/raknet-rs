@@ -1,3 +1,4 @@
+use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -6,7 +7,6 @@ use fastrace::collector::TraceId;
 use futures::{Future, Sink, SinkExt, Stream};
 use pin_project_lite::pin_project;
 
-use crate::errors::Error;
 use crate::packet::connected::FrameBody;
 use crate::utils::timestamp;
 use crate::{Message, Reliability};
@@ -17,9 +17,7 @@ pub trait TraceInfo {
 }
 
 /// The basic operation for each connection
-pub trait IO:
-    Stream<Item = Bytes> + Sink<Bytes, Error = crate::errors::Error> + TraceInfo + Send
-{
+pub trait IO: Stream<Item = Bytes> + Sink<Bytes, Error = io::Error> + TraceInfo + Send {
     fn set_default_reliability(self: Pin<&mut Self>, reliability: Reliability);
     fn get_default_reliability(&self) -> Reliability;
 
@@ -31,7 +29,7 @@ pub trait IO:
         self,
     ) -> (
         impl Stream<Item = Bytes> + TraceInfo + Send,
-        impl Sink<Message, Error = Error> + Send,
+        impl Sink<Message, Error = io::Error> + Send,
     );
 }
 
@@ -49,7 +47,7 @@ pin_project! {
 impl<I, O> SeparatedIO<I, O>
 where
     I: Stream<Item = Bytes> + TraceInfo + Send,
-    O: Sink<Message, Error = Error> + Send,
+    O: Sink<Message, Error = io::Error> + Send,
 {
     pub(crate) fn new(src: I, dst: O) -> Self {
         SeparatedIO {
@@ -74,9 +72,9 @@ where
 
 impl<I, O> Sink<Bytes> for SeparatedIO<I, O>
 where
-    O: Sink<Message, Error = Error>,
+    O: Sink<Message, Error = io::Error>,
 {
-    type Error = Error;
+    type Error = io::Error;
 
     fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.project().dst.poll_ready(cx)
@@ -107,7 +105,7 @@ where
 
 impl<I, O> crate::io::IO for SeparatedIO<I, O>
 where
-    O: Sink<Message, Error = Error> + Send,
+    O: Sink<Message, Error = io::Error> + Send,
     I: Stream<Item = Bytes> + TraceInfo + Send,
 {
     fn set_default_reliability(self: Pin<&mut Self>, reliability: Reliability) {
@@ -130,7 +128,7 @@ where
         self,
     ) -> (
         impl Stream<Item = Bytes> + TraceInfo + Send,
-        impl Sink<Message, Error = Error> + Send,
+        impl Sink<Message, Error = io::Error> + Send,
     ) {
         (self.src, self.dst)
     }
@@ -138,15 +136,15 @@ where
 
 /// Ping extension for client, experimental
 pub trait Ping {
-    fn ping(self: Pin<&mut Self>) -> impl Future<Output = Result<(), Error>> + Send;
+    fn ping(self: Pin<&mut Self>) -> impl Future<Output = Result<(), io::Error>> + Send;
 }
 
 impl<I, O> Ping for SeparatedIO<I, O>
 where
-    O: Sink<Message, Error = Error> + Sink<FrameBody, Error = Error> + Send,
+    O: Sink<Message, Error = io::Error> + Sink<FrameBody, Error = io::Error> + Send,
     I: Stream<Item = Bytes> + TraceInfo + Send,
 {
-    async fn ping(self: Pin<&mut Self>) -> Result<(), Error> {
+    async fn ping(self: Pin<&mut Self>) -> Result<(), io::Error> {
         self.project()
             .dst
             .send(FrameBody::ConnectedPing {

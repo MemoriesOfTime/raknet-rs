@@ -1,7 +1,7 @@
+use std::io;
 use std::net::ToSocketAddrs;
 
 use super::handler::offline;
-use crate::errors::Error;
 use crate::io::{Ping, IO};
 use crate::{codec, RoleContext};
 
@@ -130,5 +130,5 @@ pub trait ConnectTo: Sized {
         self,
         addr: impl ToSocketAddrs,
         config: Config,
-    ) -> Result<impl IO + Ping, Error>;
+    ) -> io::Result<impl IO + Ping>;
 }

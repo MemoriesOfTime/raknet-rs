@@ -21,7 +21,6 @@ use log::{debug, trace};
 
 use self::decoder::{BodyDecoded, DeFragmented, Deduplicated, Ordered, TracePending};
 use self::encoder::{BodyEncoded, Fragmented};
-use crate::errors::CodecError;
 use crate::link::SharedLink;
 use crate::packet::connected::{Frame, FrameBody, FrameSet, FramesMut};
 use crate::utils::Logged;
@@ -116,20 +115,21 @@ pub(crate) trait Encoded {
         mtu: u16,
         config: Config,
         link: SharedLink,
-    ) -> impl Sink<Message, Error = CodecError> + Sink<FrameBody, Error = CodecError>;
+    ) -> impl Sink<Message, Error = io::Error> + Sink<FrameBody, Error = io::Error>;
 }
 
 impl<F> Encoded for F
 where
-    F: Sink<Frame, Error = CodecError>,
+    F: Sink<Frame, Error = io::Error>,
 {
     fn frame_encoded(
         self,
         mtu: u16,
         config: Config,
         link: SharedLink,
-    ) -> impl Sink<Message, Error = CodecError> + Sink<FrameBody, Error = CodecError> {
-        self.fragmented(mtu, config.max_channels).body_encoded(link)
+    ) -> impl Sink<Message, Error = io::Error> + Sink<FrameBody, Error = io::Error> {
+        self.fragmented(mtu as usize, config.max_channels)
+            .body_encoded(link)
     }
 }
 

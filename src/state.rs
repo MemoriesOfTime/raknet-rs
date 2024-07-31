@@ -2,6 +2,7 @@
 //! Perform the 4-ways handshake for the connection close.
 //! Reflect the operation in the APIs of Sink and Stream when the connection stops.
 
+use std::io;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -12,7 +13,6 @@ use futures::{Sink, Stream};
 use log::warn;
 use pin_project_lite::pin_project;
 
-use crate::errors::{CodecError, Error};
 use crate::packet::connected::FrameBody;
 use crate::Message;
 
@@ -72,22 +72,20 @@ pin_project! {
 
 pub(crate) trait OutgoingStateManage: Sized {
     /// Manage the outgoing state of the connection.
-    /// Take a sink of `FrameBody` and `Message` and return a sink of `FrameBody` and `Message`,
-    /// mapping the `CodecError` to the `Error`.
     fn manage_outgoing_state(
         self,
         close_on_drop: Option<CloseOnDrop>,
-    ) -> impl Sink<FrameBody, Error = Error> + Sink<Message, Error = Error>;
+    ) -> impl Sink<FrameBody, Error = io::Error> + Sink<Message, Error = io::Error>;
 }
 
 impl<F> OutgoingStateManage for F
 where
-    F: Sink<FrameBody, Error = CodecError> + Sink<Message, Error = CodecError>,
+    F: Sink<FrameBody, Error = io::Error> + Sink<Message, Error = io::Error>,
 {
     fn manage_outgoing_state(
         self,
         close_on_drop: Option<CloseOnDrop>,
-    ) -> impl Sink<FrameBody, Error = Error> + Sink<Message, Error = Error> {
+    ) -> impl Sink<FrameBody, Error = io::Error> + Sink<Message, Error = io::Error> {
         StateManager {
             frame: self,
             state: OutgoingState::Connecting,
@@ -124,33 +122,42 @@ where
 
 impl<F> Sink<FrameBody> for StateManager<F, OutgoingState>
 where
-    F: Sink<FrameBody, Error = CodecError>,
+    F: Sink<FrameBody, Error = io::Error>,
 {
-    type Error = Error;
+    type Error = io::Error;
 
     fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         if !self.state.before_finish() {
-            return Poll::Ready(Err(Error::ConnectionClosed));
+            return Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "connection was closed before",
+            )));
         }
-        self.project().frame.poll_ready(cx).map_err(Into::into)
+        self.project().frame.poll_ready(cx)
     }
 
     fn start_send(self: Pin<&mut Self>, item: FrameBody) -> Result<(), Self::Error> {
         if !self.state.before_finish() {
-            return Err(Error::ConnectionClosed);
+            return Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "connection was closed before",
+            ));
         }
-        self.project().frame.start_send(item).map_err(Into::into)
+        self.project().frame.start_send(item)
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         // flush is allowed after the connection is closed, it will deliver ack.
-        self.project().frame.poll_flush(cx).map_err(Into::into)
+        self.project().frame.poll_flush(cx)
     }
 
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         let mut this = self.project();
         if matches!(this.state, OutgoingState::Closed) {
-            return Poll::Ready(Err(Error::ConnectionClosed));
+            return Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "connection was closed before",
+            )));
         }
         loop {
             match this.state {
@@ -187,9 +194,9 @@ where
 
 impl<F> Sink<Message> for StateManager<F, OutgoingState>
 where
-    F: Sink<FrameBody, Error = CodecError> + Sink<Message, Error = CodecError>,
+    F: Sink<FrameBody, Error = io::Error> + Sink<Message, Error = io::Error>,
 {
-    type Error = Error;
+    type Error = io::Error;
 
     fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Sink::<FrameBody>::poll_ready(self, cx)
@@ -238,6 +245,7 @@ where
 
 #[cfg(test)]
 mod test {
+    use std::io::{self, ErrorKind};
     use std::pin::Pin;
     use std::sync::Arc;
     use std::task::{Context, Poll};
@@ -245,7 +253,6 @@ mod test {
     use concurrent_queue::ConcurrentQueue;
     use futures::{Sink, SinkExt};
 
-    use crate::errors::{CodecError, Error};
     use crate::packet::connected::FrameBody;
     use crate::state::CloseOnDrop;
     use crate::Message;
@@ -256,7 +263,7 @@ mod test {
     }
 
     impl Sink<FrameBody> for DstSink {
-        type Error = CodecError;
+        type Error = io::Error;
 
         fn poll_ready(
             self: Pin<&mut Self>,
@@ -286,7 +293,7 @@ mod test {
     }
 
     impl Sink<Message> for DstSink {
-        type Error = CodecError;
+        type Error = io::Error;
 
         fn poll_ready(
             self: Pin<&mut Self>,
@@ -332,7 +339,7 @@ mod test {
 
         let closed = SinkExt::<FrameBody>::close(&mut goodbye).await.unwrap_err();
         // closed
-        assert!(matches!(closed, Error::ConnectionClosed));
+        assert!(matches!(closed.kind(), ErrorKind::NotConnected));
         // No more DisconnectNotification
         assert_eq!(goodbye.frame.buf.len(), 1);
 

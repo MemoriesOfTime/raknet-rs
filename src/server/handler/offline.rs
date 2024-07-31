@@ -1,17 +1,17 @@
 use std::collections::HashMap;
+use std::io;
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::task::{ready, Context, Poll};
 
 use bytes::Bytes;
 use fastrace::collector::SpanContext;
 use fastrace::Span;
-use futures::{ready, Sink, Stream};
+use futures::{Sink, Stream};
 use log::{debug, error, trace, warn};
 use pin_project_lite::pin_project;
 
-use crate::errors::CodecError;
 use crate::packet::connected::{self, FramesMut};
 use crate::packet::{unconnected, Packet};
 use crate::{PeerContext, RoleContext};
@@ -51,7 +51,7 @@ pin_project! {
 impl<F> OfflineHandler<F>
 where
     F: Stream<Item = (Packet<FramesMut>, SocketAddr)>
-        + Sink<(unconnected::Packet, SocketAddr), Error = CodecError>,
+        + Sink<(unconnected::Packet, SocketAddr), Error = io::Error>,
 {
     pub(crate) fn new(frame: F, config: Config) -> Self {
         Self {
@@ -101,7 +101,7 @@ where
 impl<F> Stream for OfflineHandler<F>
 where
     F: Stream<Item = (Packet<FramesMut>, SocketAddr)>
-        + Sink<(unconnected::Packet, SocketAddr), Error = CodecError>,
+        + Sink<(unconnected::Packet, SocketAddr), Error = io::Error>,
 {
     type Item = (connected::Packet<FramesMut>, PeerContext);
 
@@ -295,7 +295,7 @@ mod test {
     }
 
     impl Sink<(unconnected::Packet, SocketAddr)> for TestCase {
-        type Error = CodecError;
+        type Error = io::Error;
 
         fn poll_ready(
             self: Pin<&mut Self>,

@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::io;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
@@ -7,7 +8,6 @@ use futures::Sink;
 use log::trace;
 use pin_project_lite::pin_project;
 
-use crate::errors::CodecError;
 use crate::link::SharedLink;
 use crate::packet::connected::{self, Frame, FrameSet, FramesRef};
 use crate::packet::{Packet, FRAME_SET_HEADER_SIZE};
@@ -43,7 +43,7 @@ pub(crate) trait HandleOutgoing: Sized {
 
 impl<F> HandleOutgoing for F
 where
-    F: for<'a> Sink<(Packet<FramesRef<'a>>, SocketAddr), Error = CodecError>,
+    F: for<'a> Sink<(Packet<FramesRef<'a>>, SocketAddr), Error = io::Error>,
 {
     fn handle_outgoing(
         self,
@@ -68,10 +68,10 @@ where
 
 impl<F> OutgoingGuard<F>
 where
-    F: for<'a> Sink<(Packet<FramesRef<'a>>, SocketAddr), Error = CodecError>,
+    F: for<'a> Sink<(Packet<FramesRef<'a>>, SocketAddr), Error = io::Error>,
 {
     /// Try to empty the outgoing buffer
-    fn try_empty(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), CodecError>> {
+    fn try_empty(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
         let mut this = self.project();
 
         // empty incoming buffer
@@ -196,9 +196,9 @@ where
 
 impl<F> Sink<Frame> for OutgoingGuard<F>
 where
-    F: for<'a> Sink<(Packet<FramesRef<'a>>, SocketAddr), Error = CodecError>,
+    F: for<'a> Sink<(Packet<FramesRef<'a>>, SocketAddr), Error = io::Error>,
 {
-    type Error = CodecError;
+    type Error = io::Error;
 
     fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         let upstream = self.as_mut().try_empty(cx)?;

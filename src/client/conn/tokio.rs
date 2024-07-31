@@ -11,7 +11,6 @@ use crate::client::handler::offline::OfflineHandler;
 use crate::client::handler::online::HandleOnline;
 use crate::codec::frame::Framed;
 use crate::codec::{Decoded, Encoded};
-use crate::errors::Error;
 use crate::guard::HandleOutgoing;
 use crate::io::{Ping, SeparatedIO, IO};
 use crate::link::{Router, TransferLink};
@@ -24,7 +23,7 @@ impl ConnectTo for TokioUdpSocket {
         self,
         addrs: impl ToSocketAddrs,
         config: super::Config,
-    ) -> Result<impl IO + Ping, Error> {
+    ) -> io::Result<impl IO + Ping> {
         let socket = Arc::new(self);
         let mut lookups = addrs.to_socket_addrs()?;
         let addr = loop {
@@ -34,7 +33,10 @@ impl ConnectTo for TokioUdpSocket {
                 }
                 continue;
             }
-            return Err(io::Error::new(io::ErrorKind::AddrNotAvailable, "invalid address").into());
+            return Err(io::Error::new(
+                io::ErrorKind::AddrNotAvailable,
+                "invalid address",
+            ));
         };
 
         let mut incoming = OfflineHandler::new(

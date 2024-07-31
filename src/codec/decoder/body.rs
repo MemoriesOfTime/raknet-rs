@@ -1,9 +1,9 @@
 use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::task::{ready, Context, Poll};
 
 use fastrace::local::LocalSpan;
 use fastrace::Event;
-use futures::{ready, Stream, StreamExt};
+use futures::Stream;
 use pin_project_lite::pin_project;
 
 use crate::errors::CodecError;
@@ -38,7 +38,7 @@ where
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
 
-        let Some(frame_set) = ready!(this.frame.poll_next_unpin(cx)?) else {
+        let Some(frame_set) = ready!(this.frame.as_mut().poll_next(cx)?) else {
             return Poll::Ready(None);
         };
 
