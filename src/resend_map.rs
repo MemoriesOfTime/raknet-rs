@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 use log::trace;
 
 use crate::packet::connected::{AckOrNack, Frame, Frames, Record};
-use crate::utils::{u24, Reactor};
-use crate::RoleContext;
+use crate::utils::{u24, ConnId, Reactor};
+use crate::{Peer, Role};
 
 // TODO: use RTTEstimator to get adaptive RTO
 const RTO: Duration = Duration::from_secs(1);
@@ -18,15 +18,17 @@ struct ResendEntry {
 
 pub(crate) struct ResendMap {
     map: HashMap<u24, ResendEntry>,
-    role: RoleContext,
+    role: Role,
+    peer: Peer,
     last_record_expired_at: Instant,
 }
 
 impl ResendMap {
-    pub(crate) fn new(role: RoleContext) -> Self {
+    pub(crate) fn new(role: Role, peer: Peer) -> Self {
         Self {
             map: HashMap::new(),
             role,
+            peer,
             last_record_expired_at: Instant::now(),
         }
     }
@@ -42,6 +44,7 @@ impl ResendMap {
     }
 
     pub(crate) fn on_ack(&mut self, ack: AckOrNack) {
+        trace!("[{}] receive ACKs {ack:?} from {}", self.role, self.peer);
         for record in ack.records {
             match record {
                 Record::Range(start, end) => {
@@ -57,6 +60,7 @@ impl ResendMap {
     }
 
     pub(crate) fn on_nack_into(&mut self, nack: AckOrNack, buffer: &mut VecDeque<Frame>) {
+        trace!("[{}] receive NACKs {nack:?} from {}", self.role, self.peer);
         for record in nack.records {
             match record {
                 Record::Range(start, end) => {
@@ -121,12 +125,14 @@ impl ResendMap {
             return Poll::Ready(());
         }
         trace!(
-            "[{}]: wait for resend seq_num {} within {:?}",
+            "[{}]: wait for resend seq_num {} for {} within {:?}",
             self.role,
             seq_num,
+            self.peer,
             expired_at - now
         );
-        Reactor::get().insert_timer(self.role.guid(), expired_at, cx.waker());
+        let c_id = ConnId::new(self.role.guid(), self.peer.guid);
+        Reactor::get().insert_timer(c_id, expired_at, cx.waker());
         Poll::Pending
     }
 }
@@ -142,13 +148,13 @@ mod test {
     use super::ResendMap;
     use crate::packet::connected::{AckOrNack, Flags, Frame};
     use crate::utils::tests::{test_trace_log_setup, TestWaker};
-    use crate::{Reliability, RoleContext};
+    use crate::{Peer, Reliability, Role};
 
     const TEST_RTO: Duration = Duration::from_millis(1200);
 
     #[test]
     fn test_resend_map_works() {
-        let mut map = ResendMap::new(RoleContext::test_server());
+        let mut map = ResendMap::new(Role::test_server(), Peer::test());
         map.record(0.into(), vec![]);
         map.record(1.into(), vec![]);
         map.record(2.into(), vec![]);
@@ -203,7 +209,7 @@ mod test {
 
     #[test]
     fn test_resend_map_stales() {
-        let mut map = ResendMap::new(RoleContext::test_server());
+        let mut map = ResendMap::new(Role::test_server(), Peer::test());
         map.record(0.into(), vec![]);
         map.record(1.into(), vec![]);
         map.record(2.into(), vec![]);
@@ -218,7 +224,7 @@ mod test {
     async fn test_resend_map_poll_wait() {
         let _guard = test_trace_log_setup();
 
-        let mut map = ResendMap::new(RoleContext::test_server());
+        let mut map = ResendMap::new(Role::test_server(), Peer::test());
         map.record(0.into(), vec![]);
         std::thread::sleep(TEST_RTO);
         map.record(1.into(), vec![]);

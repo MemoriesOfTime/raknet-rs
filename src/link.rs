@@ -1,38 +1,35 @@
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, VecDeque};
+use std::collections::{BTreeSet, BinaryHeap};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use async_channel::Sender;
 use concurrent_queue::ConcurrentQueue;
 use futures::Stream;
-use log::{debug, trace, warn};
+use log::{debug, warn};
 
-use crate::packet::connected::{self, AckOrNack, Frame, FrameBody, FrameSet, FramesMut};
+use crate::packet::connected::{self, AckOrNack, FrameBody, FrameSet, FramesMut};
 use crate::packet::unconnected;
-use crate::resend_map::ResendMap;
-use crate::utils::{u24, Reactor};
-use crate::RoleContext;
+use crate::utils::{u24, ConnId, Reactor};
+use crate::{Peer, Role};
 
 /// Shared link between stream and sink
 pub(crate) type SharedLink = Arc<TransferLink>;
 
 /// Transfer data and task between stream and sink.
-/// It is thread-safe under immutable reference
 pub(crate) struct TransferLink {
     incoming_ack: ConcurrentQueue<AckOrNack>,
     incoming_nack: ConcurrentQueue<AckOrNack>,
     forward_waking: AtomicBool,
 
     outgoing_ack: parking_lot::Mutex<BinaryHeap<Reverse<u24>>>,
-    // TODO: nack channel should always be in order according to [`DeFragment::poll_next`], replace
-    // it with ConcurrentQueue if we cannot find a way to break the order
-    outgoing_nack: parking_lot::Mutex<BinaryHeap<Reverse<u24>>>,
+    outgoing_nack: parking_lot::Mutex<BTreeSet<Reverse<u24>>>,
 
     unconnected: ConcurrentQueue<unconnected::Packet>,
     frame_body: ConcurrentQueue<FrameBody>,
 
-    role: RoleContext,
+    role: Role,
+    peer: Peer,
 }
 
 /// Pop priority queue while holding the lock
@@ -55,7 +52,7 @@ impl<'a, T: Ord> Iterator for BatchRecv<'a, T> {
 }
 
 impl TransferLink {
-    pub(crate) fn new_arc(role: RoleContext) -> SharedLink {
+    pub(crate) fn new_arc(role: Role, peer: Peer) -> SharedLink {
         // avoiding ack flood, the overwhelming ack will be dropped and new ack will be displaced
         const MAX_ACK_BUFFER: usize = 1024;
 
@@ -64,10 +61,11 @@ impl TransferLink {
             incoming_nack: ConcurrentQueue::bounded(MAX_ACK_BUFFER),
             forward_waking: AtomicBool::new(false),
             outgoing_ack: parking_lot::Mutex::new(BinaryHeap::with_capacity(MAX_ACK_BUFFER)),
-            outgoing_nack: parking_lot::Mutex::new(BinaryHeap::with_capacity(MAX_ACK_BUFFER)),
+            outgoing_nack: parking_lot::Mutex::new(BTreeSet::new()),
             unconnected: ConcurrentQueue::unbounded(),
             frame_body: ConcurrentQueue::unbounded(),
             role,
+            peer,
         })
     }
 
@@ -89,17 +87,22 @@ impl TransferLink {
     pub(crate) fn incoming_ack(&self, records: AckOrNack) {
         if let Some(dropped) = self.incoming_ack.force_push(records).unwrap() {
             warn!(
-                "[{}] discard received ack {dropped:?}, total count: {}",
+                "[{}] discard received ack {dropped:?} from {}, total count: {}",
                 self.role,
+                self.peer,
                 dropped.total_cnt()
             );
         }
         // wake up after sends ack
         if self.should_waking() {
-            for waker in Reactor::get().cancel_all_timers(self.role.guid()) {
+            let c_id = ConnId::new(self.role.guid(), self.peer.guid);
+            for waker in Reactor::get().cancel_all_timers(c_id) {
                 // safe to panic
                 waker.wake();
-                debug!("[{}] wake up a certain waker after receives ack", self.role,);
+                debug!(
+                    "[{}] wake up a certain waker after receives ack on connection: {c_id:?}",
+                    self.role
+                );
             }
         }
     }
@@ -107,23 +110,12 @@ impl TransferLink {
     pub(crate) fn incoming_nack(&self, records: AckOrNack) {
         if let Some(dropped) = self.incoming_nack.force_push(records).unwrap() {
             warn!(
-                "[{}] discard received nack {dropped:?}, total count: {}",
+                "[{}] discard received nack {dropped:?} from {}, total count: {}",
                 self.role,
+                self.peer,
                 dropped.total_cnt()
             );
         }
-    }
-
-    pub(crate) fn outgoing_ack(&self, seq_num: u24) {
-        self.outgoing_ack.lock().push(Reverse(seq_num));
-    }
-
-    pub(crate) fn outgoing_nack(&self, seq_num: u24) {
-        self.outgoing_nack.lock().push(Reverse(seq_num));
-    }
-
-    pub(crate) fn outgoing_nack_batch(&self, t: impl IntoIterator<Item = u24>) {
-        self.outgoing_nack.lock().extend(t.into_iter().map(Reverse));
     }
 
     pub(crate) fn send_unconnected(&self, packet: unconnected::Packet) {
@@ -134,32 +126,12 @@ impl TransferLink {
         self.frame_body.push(body).unwrap();
     }
 
-    // Clear all acknowledged frames
-    pub(crate) fn process_ack(&self, resend: &mut ResendMap) {
-        for ack in self.incoming_ack.try_iter() {
-            trace!(
-                "[{}] receive ack {ack:?}, total count: {}",
-                self.role,
-                ack.total_cnt()
-            );
-            resend.on_ack(ack);
-        }
+    pub(crate) fn process_ack(&self) -> impl Iterator<Item = AckOrNack> + '_ {
+        self.incoming_ack.try_iter()
     }
 
-    /// Push all missing frames into buffer
-    /// Notice this method should be called after serval invoking of
-    /// [`Acknowledgement::process_ack`]. Otherwise, some packets that do not need to be resent
-    /// may be sent. As for how many times to invoke [`Acknowledgement::process_ack`] before
-    /// this, it depends.
-    pub(crate) fn process_resend(&self, resend: &mut ResendMap, buffer: &mut VecDeque<Frame>) {
-        for nack in self.incoming_nack.try_iter() {
-            trace!(
-                "[{}] receive nack {nack:?}, total count: {}",
-                self.role,
-                nack.total_cnt()
-            );
-            resend.on_nack_into(nack, buffer);
-        }
+    pub(crate) fn process_nack(&self) -> impl Iterator<Item = AckOrNack> + '_ {
+        self.incoming_nack.try_iter()
     }
 
     pub(crate) fn process_outgoing_ack(&self, mtu: u16) -> Option<AckOrNack> {
@@ -167,7 +139,7 @@ impl TransferLink {
     }
 
     pub(crate) fn process_outgoing_nack(&self, mtu: u16) -> Option<AckOrNack> {
-        AckOrNack::extend_from(BatchRecv::new(self.outgoing_nack.lock()), mtu)
+        AckOrNack::extend_from(self.outgoing_nack.lock().iter().map(|v| v.0), mtu)
     }
 
     pub(crate) fn process_unconnected(&self) -> impl Iterator<Item = unconnected::Packet> + '_ {
@@ -219,15 +191,18 @@ impl Router {
         }
         match pack {
             connected::Packet::FrameSet(frames) => {
-                self.link.outgoing_ack(frames.seq_num);
+                // TODO: use lock free concurrent queue to avoid lock
 
+                self.link.outgoing_ack.lock().push(Reverse(frames.seq_num));
+
+                let mut nack = self.link.outgoing_nack.lock();
                 let seq_num = frames.seq_num;
+                nack.remove(&Reverse(seq_num));
                 let pre_read = self.seq_read;
                 if pre_read <= seq_num {
                     self.seq_read = seq_num + 1;
-                    let nack = pre_read.to_u32()..seq_num.to_u32();
-                    if !nack.is_empty() {
-                        self.link.outgoing_nack_batch(nack.map(u24::from));
+                    for n in pre_read.to_u32()..seq_num.to_u32() {
+                        nack.insert(Reverse(n.into()));
                     }
                 }
 

@@ -76,18 +76,13 @@ impl Stream for Incoming {
                 continue;
             }
 
-            let link = TransferLink::new_arc(role);
+            let link = TransferLink::new_arc(role, peer);
             let (mut entry, route) = Router::new(Arc::clone(&link));
             entry.deliver(pack);
             this.routers.insert(peer.addr, entry);
 
             let dst = Framed::new(Arc::clone(this.socket), this.config.max_mtu as usize)
-                .handle_outgoing(
-                    Arc::clone(&link),
-                    this.config.send_buf_cap,
-                    peer.clone(),
-                    role,
-                )
+                .handle_outgoing(Arc::clone(&link), this.config.send_buf_cap, peer, role)
                 .frame_encoded(peer.mtu, this.config.codec_config(), Arc::clone(&link))
                 .manage_outgoing_state(Some(CloseOnDrop::new(
                     peer.addr,
@@ -95,14 +90,15 @@ impl Stream for Incoming {
                 )));
 
             let src = route
-                .frame_decoded(this.config.codec_config(), Arc::clone(&link), role)
+                .frame_decoded(this.config.codec_config(), role)
                 .manage_incoming_state()
                 .handle_online(role, peer.addr, Arc::clone(&link))
                 .enter_on_item(move || {
                     Span::root("online", SpanContext::random()).with_properties(|| {
                         [
-                            ("peer", peer.addr.to_string()),
-                            ("mtu", peer.mtu.to_string()),
+                            ("peer_guid", peer.guid.to_string()),
+                            ("peer_addr", peer.addr.to_string()),
+                            ("conn_mtu", peer.mtu.to_string()),
                         ]
                     })
                 });

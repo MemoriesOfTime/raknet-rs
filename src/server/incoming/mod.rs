@@ -3,7 +3,7 @@ use futures::Stream;
 
 use super::handler::offline;
 use crate::io::IO;
-use crate::{codec, RoleContext};
+use crate::{codec, Role};
 
 /// Incoming implementation by using tokio's UDP framework
 #[cfg(feature = "tokio-udp")]
@@ -158,8 +158,8 @@ impl Config {
         }
     }
 
-    fn server_role(&self) -> RoleContext {
-        RoleContext::Server {
+    fn server_role(&self) -> Role {
+        Role::Server {
             guid: self.sever_guid,
         }
     }

@@ -1,6 +1,5 @@
 use std::error::Error;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU8, Ordering};
 
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
@@ -30,8 +29,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         loop {
             let io = incoming.next().await.unwrap();
             tokio::spawn(async move {
-                static ORDER_CHANNEL: AtomicU8 = AtomicU8::new(0);
-
                 tokio::pin!(io);
                 println!("[server] set default reliability to Reliable");
                 io.as_mut().set_default_reliability(Reliability::Reliable);
@@ -48,9 +45,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             .send()
                             .await
                             .unwrap();
-                        let channel = ORDER_CHANNEL.fetch_add(1, Ordering::Relaxed);
-                        println!("[server] assign order channel: {}", channel);
-                        io.as_mut().set_default_order_channel(channel);
                         io.send(res.bytes().await.unwrap()).await.unwrap();
                         continue;
                     }

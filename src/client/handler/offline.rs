@@ -8,7 +8,7 @@ use pin_project_lite::pin_project;
 
 use crate::packet::connected::{self, FramesMut};
 use crate::packet::{unconnected, Packet};
-use crate::RoleContext;
+use crate::{Peer, Role};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Config {
@@ -23,7 +23,7 @@ pin_project! {
         state: State,
         server_addr: SocketAddr,
         config: Config,
-        role: RoleContext,
+        role: Role,
     }
 }
 
@@ -42,7 +42,7 @@ where
                 mtu: config.mtu,
             }),
             server_addr,
-            role: RoleContext::Client {
+            role: Role::Client {
                 guid: config.client_guid,
             },
             config,
@@ -65,7 +65,7 @@ where
         + Sink<(unconnected::Packet, SocketAddr), Error = io::Error>
         + Unpin,
 {
-    type Output = Result<impl Stream<Item = connected::Packet<FramesMut>>, io::Error>;
+    type Output = Result<(impl Stream<Item = connected::Packet<FramesMut>>, Peer), io::Error>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
@@ -124,14 +124,23 @@ where
                     }
                     match pack {
                         Packet::Unconnected(unconnected::Packet::OpenConnectionReply2 {
+                            server_guid: guid,
                             ..
-                        }) => {}
+                        }) => {
+                            return Poll::Ready(Ok((
+                                FilterConnected {
+                                    frame: this.frame.take().unwrap(),
+                                    server_addr: *this.server_addr,
+                                },
+                                Peer {
+                                    addr: *this.server_addr,
+                                    mtu: this.config.mtu,
+                                    guid,
+                                },
+                            )))
+                        }
                         _ => continue,
                     };
-                    return Poll::Ready(Ok(FilterConnected {
-                        frame: this.frame.take().unwrap(),
-                        server_addr: *this.server_addr,
-                    }));
                 }
             }
         }

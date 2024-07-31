@@ -16,7 +16,6 @@ use crate::io::{Ping, SeparatedIO, IO};
 use crate::link::{Router, TransferLink};
 use crate::state::{IncomingStateManage, OutgoingStateManage};
 use crate::utils::TraceStreamExt;
-use crate::PeerContext;
 
 impl ConnectTo for TokioUdpSocket {
     async fn connect_to(
@@ -39,25 +38,18 @@ impl ConnectTo for TokioUdpSocket {
             ));
         };
 
-        let mut incoming = OfflineHandler::new(
+        let (mut incoming, peer) = OfflineHandler::new(
             Framed::new(Arc::clone(&socket), config.mtu as usize), // TODO: discover MTU
             addr,
             config.offline_config(),
         )
         .await?;
+        let role = config.client_role();
 
-        let link = TransferLink::new_arc(config.client_role());
-        let dst = Framed::new(Arc::clone(&socket), config.mtu as usize)
-            .handle_outgoing(
-                Arc::clone(&link),
-                config.send_buf_cap,
-                PeerContext {
-                    addr,
-                    mtu: config.mtu,
-                },
-                config.client_role(),
-            )
-            .frame_encoded(config.mtu, config.codec_config(), Arc::clone(&link))
+        let link = TransferLink::new_arc(role, peer);
+        let dst = Framed::new(Arc::clone(&socket), peer.mtu as usize)
+            .handle_outgoing(Arc::clone(&link), config.send_buf_cap, peer, role)
+            .frame_encoded(peer.mtu, config.codec_config(), Arc::clone(&link))
             .manage_outgoing_state(None);
 
         let (mut router, route) = Router::new(Arc::clone(&link));
@@ -69,11 +61,7 @@ impl ConnectTo for TokioUdpSocket {
         });
 
         let src = route
-            .frame_decoded(
-                config.codec_config(),
-                Arc::clone(&link),
-                config.client_role(),
-            )
+            .frame_decoded(config.codec_config(), role)
             .manage_incoming_state()
             .handle_online(addr, config.client_guid, Arc::clone(&link))
             .enter_on_item(Span::noop);

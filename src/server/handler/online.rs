@@ -11,12 +11,12 @@ use crate::link::SharedLink;
 use crate::packet::connected::FrameBody;
 use crate::packet::unconnected;
 use crate::utils::timestamp;
-use crate::RoleContext;
+use crate::Role;
 
 pub(crate) trait HandleOnline: Sized {
     fn handle_online(
         self,
-        role: RoleContext,
+        role: Role,
         client_addr: SocketAddr,
         link: SharedLink,
     ) -> OnlineHandler<Self>;
@@ -28,7 +28,7 @@ where
 {
     fn handle_online(
         self,
-        role: RoleContext,
+        role: Role,
         client_addr: SocketAddr,
         link: SharedLink,
     ) -> OnlineHandler<Self> {
@@ -46,7 +46,7 @@ pin_project! {
     pub(crate) struct OnlineHandler<F> {
         #[pin]
         frame: F,
-        role: RoleContext,
+        role: Role,
         client_addr: SocketAddr,
         state: HandshakeState,
         link: SharedLink,

@@ -3,7 +3,7 @@ use std::net::ToSocketAddrs;
 
 use super::handler::offline;
 use crate::io::{Ping, IO};
-use crate::{codec, RoleContext};
+use crate::{codec, Role};
 
 /// Connection implementation by using tokio's UDP framework
 #[cfg(feature = "tokio-udp")]
@@ -117,8 +117,8 @@ impl Config {
         }
     }
 
-    fn client_role(&self) -> RoleContext {
-        RoleContext::Client {
+    fn client_role(&self) -> Role {
+        Role::Client {
             guid: self.client_guid,
         }
     }

@@ -11,7 +11,6 @@ use lru::LruCache;
 use pin_project_lite::pin_project;
 
 use crate::errors::CodecError;
-use crate::link::SharedLink;
 use crate::packet::connected::{Fragment, Frame, FrameMut, FrameSet, FramesMut};
 
 const DEFAULT_DEFRAGMENT_BUF_SIZE: usize = 512;
@@ -55,36 +54,24 @@ pin_project! {
         // users sending a large number of parted IDs.
         parts: LruCache<u16, BinaryHeap<FramePart>>,
         buffer: VecDeque<FrameSet<Frame>>,
-        link: SharedLink,
         span: Option<Span>,
     }
 }
 
 pub(crate) trait DeFragmented: Sized {
-    fn defragmented(
-        self,
-        limit_size: u32,
-        limit_parted: usize,
-        link: SharedLink,
-    ) -> DeFragment<Self>;
+    fn defragmented(self, limit_size: u32, limit_parted: usize) -> DeFragment<Self>;
 }
 
 impl<F> DeFragmented for F
 where
     F: Stream<Item = Result<FrameSet<FramesMut>, CodecError>>,
 {
-    fn defragmented(
-        self,
-        limit_size: u32,
-        limit_parted: usize,
-        link: SharedLink,
-    ) -> DeFragment<Self> {
+    fn defragmented(self, limit_size: u32, limit_parted: usize) -> DeFragment<Self> {
         DeFragment {
             frame: self,
             limit_size,
             parts: LruCache::new(NonZeroUsize::new(limit_parted).expect("limit_parted > 0")),
             buffer: VecDeque::with_capacity(DEFAULT_DEFRAGMENT_BUF_SIZE),
-            link,
             span: None,
         }
     }
@@ -124,8 +111,6 @@ where
                 {
                     // promise that parted_index is always less than parted_size
                     if parted_index >= parted_size {
-                        // perhaps network bit-flips
-                        this.link.outgoing_nack(frame_set.seq_num);
                         let err = format!(
                             "parted_index {} >= parted_size {}",
                             parted_index, parted_size
@@ -194,7 +179,6 @@ mod test {
 
     use super::*;
     use crate::errors::CodecError;
-    use crate::link::TransferLink;
     use crate::packet::connected::{Flags, Fragment, Frame, FrameSet, FramesMut};
 
     fn frame_set<'a, T: AsRef<str> + 'a>(
@@ -253,11 +237,7 @@ mod test {
         };
 
         tokio::pin!(frame);
-        let mut frag = frame.map(Ok).defragmented(
-            0,
-            512,
-            TransferLink::new_arc(crate::RoleContext::test_server()),
-        );
+        let mut frag = frame.map(Ok).defragmented(0, 512);
         let set = frag.next().await.unwrap().unwrap();
 
         // frames should be merged
@@ -280,11 +260,7 @@ mod test {
             }
         };
         tokio::pin!(frame);
-        let mut frag = frame.map(Ok).defragmented(
-            20,
-            512,
-            TransferLink::new_arc(crate::RoleContext::test_server()),
-        );
+        let mut frag = frame.map(Ok).defragmented(20, 512);
         assert!(matches!(
             frag.next().await.unwrap(),
             Err(CodecError::PartedFrame(..))
@@ -313,11 +289,7 @@ mod test {
         };
 
         tokio::pin!(frame);
-        let mut frag = frame.map(Ok).defragmented(
-            0,
-            2,
-            TransferLink::new_arc(crate::RoleContext::test_server()),
-        );
+        let mut frag = frame.map(Ok).defragmented(0, 2);
         assert!(frag.next().await.is_none());
         assert_eq!(frag.parts.len(), 2);
         assert_eq!(frag.parts.peek(&0).unwrap().len(), 2);
@@ -341,11 +313,7 @@ mod test {
         };
 
         tokio::pin!(frame);
-        let mut frag = frame.map(Ok).defragmented(
-            0,
-            2,
-            TransferLink::new_arc(crate::RoleContext::test_server()),
-        );
+        let mut frag = frame.map(Ok).defragmented(0, 2);
 
         {
             let set = frag.next().await.unwrap().unwrap();
@@ -382,11 +350,7 @@ mod test {
         };
 
         tokio::pin!(frame);
-        let mut frag = frame.map(Ok).defragmented(
-            0,
-            1,
-            TransferLink::new_arc(crate::RoleContext::test_server()),
-        );
+        let mut frag = frame.map(Ok).defragmented(0, 1);
 
         let set = frag.next().await.unwrap().unwrap();
         assert_eq!(

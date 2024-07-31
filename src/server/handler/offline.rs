@@ -14,7 +14,7 @@ use pin_project_lite::pin_project;
 
 use crate::packet::connected::{self, FramesMut};
 use crate::packet::{unconnected, Packet};
-use crate::{PeerContext, RoleContext};
+use crate::{Peer, Role};
 
 #[derive(Debug, Clone)]
 pub(crate) struct Config {
@@ -41,9 +41,9 @@ pin_project! {
         config: Config,
         // Half-connected queue
         pending: lru::LruCache<SocketAddr, u8>,
-        connected: HashMap<SocketAddr, PeerContext>,
+        connected: HashMap<SocketAddr, Peer>,
         state: OfflineState,
-        role: RoleContext,
+        role: Role,
         read_span: Option<Span>,
     }
 }
@@ -59,7 +59,7 @@ where
             pending: lru::LruCache::new(
                 NonZeroUsize::new(config.max_pending).expect("max_pending > 0"),
             ),
-            role: RoleContext::Server {
+            role: Role::Server {
                 guid: config.sever_guid,
             },
             config,
@@ -103,7 +103,7 @@ where
     F: Stream<Item = (Packet<FramesMut>, SocketAddr)>
         + Sink<(unconnected::Packet, SocketAddr), Error = io::Error>,
 {
-    type Item = (connected::Packet<FramesMut>, PeerContext);
+    type Item = (connected::Packet<FramesMut>, Peer);
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
@@ -218,7 +218,11 @@ where
                         mtu: final_mtu,
                     }
                 }
-                unconnected::Packet::OpenConnectionRequest2 { mtu, .. } => {
+                unconnected::Packet::OpenConnectionRequest2 {
+                    mtu,
+                    client_guid: guid,
+                    ..
+                } => {
                     if this.pending.pop(&addr).is_none() {
                         debug!("[{}] received open connection request 2 from {addr} without open connection request 1", this.role);
                         *this.state = OfflineState::SendingPrepare(Some((
@@ -244,7 +248,7 @@ where
                         continue;
                     }
                     debug!("[{}] client {addr} connected with mtu {mtu}", this.role);
-                    this.connected.insert(addr, PeerContext { addr, mtu });
+                    this.connected.insert(addr, Peer { addr, mtu, guid });
                     unconnected::Packet::OpenConnectionReply2 {
                         magic: (),
                         server_guid: this.config.sever_guid,

@@ -10,7 +10,7 @@ use pin_project_lite::pin_project;
 use crate::link::SharedLink;
 use crate::packet::connected::FrameBody;
 use crate::utils::timestamp;
-use crate::RoleContext;
+use crate::Role;
 
 pub(crate) trait HandleOnline: Sized {
     fn handle_online(
@@ -41,7 +41,7 @@ where
             state: State::WaitConnRes,
             addr,
             link,
-            role: RoleContext::Client { guid: client_guid },
+            role: Role::Client { guid: client_guid },
         }
     }
 }
@@ -53,7 +53,7 @@ pin_project! {
         state: State,
         addr: SocketAddr,
         link: SharedLink,
-        role: RoleContext,
+        role: Role,
     }
 }
 

@@ -13,7 +13,7 @@ use crate::packet::connected::{self, Frame, FrameSet, FramesRef};
 use crate::packet::{Packet, FRAME_SET_HEADER_SIZE};
 use crate::resend_map::ResendMap;
 use crate::utils::u24;
-use crate::{PeerContext, RoleContext};
+use crate::{Peer, Role};
 
 pin_project! {
     // OutgoingGuard equips with Acknowledgement handler and packets buffer and provides
@@ -24,8 +24,8 @@ pin_project! {
         link: SharedLink,
         seq_num_write_index: u24,
         buf: VecDeque<Frame>,
-        peer: PeerContext,
-        role: RoleContext,
+        peer: Peer,
+        role: Role,
         cap: usize,
         resend: ResendMap,
     }
@@ -36,8 +36,8 @@ pub(crate) trait HandleOutgoing: Sized {
         self,
         link: SharedLink,
         cap: usize,
-        peer: PeerContext,
-        role: RoleContext,
+        peer: Peer,
+        role: Role,
     ) -> OutgoingGuard<Self>;
 }
 
@@ -49,8 +49,8 @@ where
         self,
         link: SharedLink,
         cap: usize,
-        peer: PeerContext,
-        role: RoleContext,
+        peer: Peer,
+        role: Role,
     ) -> OutgoingGuard<Self> {
         assert!(cap > 0, "cap must larger than 0");
         OutgoingGuard {
@@ -61,7 +61,7 @@ where
             peer,
             role,
             cap,
-            resend: ResendMap::new(role),
+            resend: ResendMap::new(role, peer),
         }
     }
 }
@@ -74,9 +74,12 @@ where
     fn try_empty(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
         let mut this = self.project();
 
-        // empty incoming buffer
-        this.link.process_ack(this.resend);
-        this.link.process_resend(this.resend, this.buf);
+        this.link
+            .process_ack()
+            .for_each(|ack| this.resend.on_ack(ack));
+        this.link
+            .process_nack()
+            .for_each(|nack| this.resend.on_nack_into(nack, this.buf));
 
         // poll stale frames into buffer
         this.resend.process_stales(this.buf);
@@ -85,7 +88,6 @@ where
         let mut sent = false;
 
         // TODO: Weighted Round-Robin
-
         while !this.link.flush_empty() || !this.buf.is_empty() {
             // 1st. empty the nack
             if sent {
@@ -94,8 +96,9 @@ where
             }
             if let Some(nack) = this.link.process_outgoing_nack(this.peer.mtu) {
                 trace!(
-                    "[{}] send ack {nack:?}, total count: {}",
+                    "[{}] send nack {nack:?} to {}, total count: {}",
                     this.role,
+                    this.peer,
                     nack.total_cnt()
                 );
                 this.frame.as_mut().start_send((
@@ -112,8 +115,9 @@ where
             }
             if let Some(ack) = this.link.process_outgoing_ack(this.peer.mtu) {
                 trace!(
-                    "[{}] send ack {ack:?}, total count: {}",
+                    "[{}] send ack {ack:?} to {}, total count: {}",
                     this.role,
+                    this.peer,
                     ack.total_cnt()
                 );
                 this.frame.as_mut().start_send((
@@ -131,8 +135,9 @@ where
             // only poll one packet each time
             if let Some(packet) = this.link.process_unconnected().next() {
                 trace!(
-                    "[{}] send unconnected packet, type: {:?}",
+                    "[{}] send unconnected packet to {}, type: {:?}",
                     this.role,
+                    this.peer,
                     packet.pack_type()
                 );
                 this.frame
@@ -147,21 +152,20 @@ where
                 sent = false;
             }
 
-            let mut frames = vec![];
+            let mut frames = Vec::with_capacity(this.buf.len());
             let mut reliable = false;
 
-            // TODO: implement sliding window congestion control to select a proper transmission
-            // bandwidth
-            let mut remain_mtu = this.peer.mtu as usize - FRAME_SET_HEADER_SIZE;
+            let mut remain = this.peer.mtu as usize - FRAME_SET_HEADER_SIZE;
             while let Some(frame) = this.buf.back() {
-                if remain_mtu >= frame.size() {
+                if remain >= frame.size() {
                     if frame.flags.reliability.is_reliable() {
                         reliable = true;
                     }
-                    remain_mtu -= frame.size();
+                    remain -= frame.size();
                     trace!(
-                        "[{}] send frame, seq_num: {}, reliable: {}, first byte: 0x{:02x}, size: {}",
+                        "[{}] send frame to {}, seq_num: {}, reliable: {}, first byte: 0x{:02x}, size: {}",
                         this.role,
+                        this.peer,
                         *this.seq_num_write_index,
                         reliable,
                         frame.body[0],
@@ -238,8 +242,9 @@ where
             ready!(self.as_mut().project().frame.poll_flush(cx))?;
             if self.resend.is_empty() {
                 trace!(
-                    "[{}] all frames are received by the peer, close the outgoing guard",
-                    self.role
+                    "[{}] all frames are received by {}, close the outgoing guard",
+                    self.role,
+                    self.peer,
                 );
                 break;
             }

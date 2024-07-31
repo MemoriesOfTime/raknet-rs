@@ -94,39 +94,56 @@ use std::net::SocketAddr;
 use bytes::Bytes;
 
 #[derive(Debug, Clone, Copy)]
-enum RoleContext {
+enum Role {
     Client { guid: u64 },
     Server { guid: u64 },
 }
 
-impl RoleContext {
+impl Role {
     #[cfg(any(test, feature = "micro-bench"))]
     fn test_server() -> Self {
-        // There is always a server
-        RoleContext::Server { guid: 0 }
+        Role::Server { guid: 114514 }
     }
 
     fn guid(&self) -> u64 {
         match self {
-            RoleContext::Client { guid } => *guid,
-            RoleContext::Server { guid } => *guid,
+            Role::Client { guid } => *guid,
+            Role::Server { guid } => *guid,
         }
     }
 }
 
-impl std::fmt::Display for RoleContext {
+impl std::fmt::Display for Role {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            RoleContext::Client { guid } => write!(f, "client({guid})"),
-            RoleContext::Server { guid } => write!(f, "server({guid})"),
+            Role::Client { guid } => write!(f, "client({guid})"),
+            Role::Server { guid } => write!(f, "server({guid})"),
         }
     }
 }
 
-#[derive(Debug, Clone)]
-struct PeerContext {
+#[derive(Debug, Clone, Copy)]
+struct Peer {
+    guid: u64,
     addr: SocketAddr,
     mtu: u16,
+}
+
+impl Peer {
+    #[cfg(any(test, feature = "micro-bench"))]
+    fn test() -> Self {
+        Self {
+            guid: 114514,
+            addr: SocketAddr::from(([11, 45, 14, 19], 19810)),
+            mtu: 1919,
+        }
+    }
+}
+
+impl std::fmt::Display for Peer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{guid}@{addr}", guid = self.guid, addr = self.addr,)
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Copy)]

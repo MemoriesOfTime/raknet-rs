@@ -9,10 +9,20 @@ use std::{mem, panic, thread};
 /// the timer.
 type Timers = BTreeMap<(Instant, usize), Waker>;
 
+/// A distinct identifier for a connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct ConnId(u64, u64);
+
+impl ConnId {
+    pub(crate) fn new(from_guid: u64, to_guid: u64) -> Self {
+        ConnId(from_guid, to_guid)
+    }
+}
+
 /// A reactor that manages timers.
 pub(crate) struct Reactor {
-    /// Map of registered timers, distinguished by their guid.
-    region_timers: parking_lot::Mutex<HashMap<u64, Timers>>,
+    /// Map of registered timers, distinguished by their connection id.
+    conn_timers: parking_lot::Mutex<HashMap<ConnId, Timers>>,
     /// A condvar used to wake up the reactor when timers changed.
     cond: parking_lot::Condvar,
 }
@@ -36,26 +46,25 @@ impl Reactor {
                 .expect("cannot spawn timer-reactor thread");
 
             Reactor {
-                region_timers: parking_lot::Mutex::new(HashMap::new()),
+                conn_timers: parking_lot::Mutex::new(HashMap::new()),
                 cond: parking_lot::Condvar::new(),
             }
         })
     }
 
     /// Insert a timer with the given `guid` and `when` to fire.
-    pub(crate) fn insert_timer(&self, guid: u64, when: Instant, waker: &Waker) {
-        let mut timers = self.region_timers.lock();
-        let timers = timers.entry(guid).or_default();
-        let id = timers.len();
-        timers.insert((when, id), waker.clone());
+    pub(crate) fn insert_timer(&self, c_id: ConnId, when: Instant, waker: &Waker) {
+        let mut timers = self.conn_timers.lock();
+        let timers = timers.entry(c_id).or_default();
+        timers.insert((when, timers.len()), waker.clone());
         self.cond.notify_one();
     }
 
     /// Cancel all timers with the given `guid`.
-    pub(crate) fn cancel_all_timers(&self, guid: u64) -> impl Iterator<Item = Waker> {
-        let mut timers = self.region_timers.lock();
+    pub(crate) fn cancel_all_timers(&self, c_id: ConnId) -> impl Iterator<Item = Waker> {
+        let mut timers = self.conn_timers.lock();
         let res = timers
-            .remove(&guid)
+            .remove(&c_id)
             .into_iter()
             .flat_map(BTreeMap::into_values);
         self.cond.notify_one();
@@ -64,7 +73,7 @@ impl Reactor {
 
     /// Processes ready timers and waits for the next timer changed.
     fn process_timers(&self) {
-        let mut region_timers = self.region_timers.lock();
+        let mut region_timers = self.conn_timers.lock();
         let now = Instant::now();
 
         let mut dur: Option<Duration> = None;
@@ -112,16 +121,16 @@ mod test {
         let when = Instant::now() + dur;
         {
             let (waker, test) = TestWaker::pair();
-            reactor.insert_timer(1, when, &waker);
-            assert_eq!(reactor.cancel_all_timers(1).count(), 1);
+            reactor.insert_timer(ConnId(1, 1), when, &waker);
+            assert_eq!(reactor.cancel_all_timers(ConnId(1, 1)).count(), 1);
             assert!(!test.woken.load(std::sync::atomic::Ordering::Relaxed));
         }
 
         {
             let (waker, test) = TestWaker::pair();
-            reactor.insert_timer(2, when, &waker);
+            reactor.insert_timer(ConnId(2, 2), when, &waker);
             std::thread::sleep(dur + Duration::from_millis(10));
-            assert_eq!(reactor.cancel_all_timers(2).count(), 0);
+            assert_eq!(reactor.cancel_all_timers(ConnId(2, 2)).count(), 0);
             assert!(test.woken.load(std::sync::atomic::Ordering::Relaxed));
         }
     }
