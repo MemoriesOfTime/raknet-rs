@@ -8,7 +8,7 @@ use concurrent_queue::ConcurrentQueue;
 use fastrace::collector::SpanContext;
 use fastrace::Span;
 use futures::Stream;
-use log::{debug, error};
+use log::{debug, error, trace};
 use pin_project_lite::pin_project;
 use tokio::net::UdpSocket as TokioUdpSocket;
 
@@ -21,7 +21,7 @@ use crate::link::{Router, TransferLink};
 use crate::server::handler::offline::OfflineHandler;
 use crate::server::handler::online::HandleOnline;
 use crate::state::{CloseOnDrop, IncomingStateManage, OutgoingStateManage};
-use crate::utils::TraceStreamExt;
+use crate::utils::{Logged, TraceStreamExt};
 
 pin_project! {
     struct Incoming {
@@ -90,7 +90,11 @@ impl Stream for Incoming {
                 )));
 
             let src = route
-                .frame_decoded(this.config.codec_config(), role, peer)
+                .frame_decoded(this.config.codec_config())
+                .logged(
+                    move |frame| trace!("[{role}] received {frame:?} from {peer}"),
+                    move |err| error!("[{role}] decode error: {err} from {peer}"),
+                )
                 .manage_incoming_state()
                 .handle_online(role, peer.addr, Arc::clone(&link))
                 .enter_on_item(move || {

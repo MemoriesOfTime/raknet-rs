@@ -17,14 +17,13 @@ use std::task::{Context, Poll};
 
 use bytes::BytesMut;
 use futures::{Sink, Stream, StreamExt};
-use log::{debug, trace};
 
 use self::decoder::{BodyDecoded, DeFragmented, Deduplicated, Ordered, TracePending};
 use self::encoder::{BodyEncoded, Fragmented};
+use crate::errors::CodecError;
 use crate::link::SharedLink;
 use crate::packet::connected::{Frame, FrameBody, FrameSet, FramesMut};
-use crate::utils::Logged;
-use crate::{Message, Peer, Role};
+use crate::Message;
 
 /// Codec config
 #[derive(Clone, Copy, Debug)]
@@ -72,34 +71,20 @@ pub(crate) trait AsyncSocket: Unpin {
 /// Frames pipeline decoder
 /// It will convert the stream of raw frames into defragmented, deduplicated and ordered frames.
 pub(crate) trait Decoded {
-    fn frame_decoded(self, config: Config, role: Role, peer: Peer)
-        -> impl Stream<Item = FrameBody>;
+    fn frame_decoded(self, config: Config) -> impl Stream<Item = Result<FrameBody, CodecError>>;
 }
 
 impl<F> Decoded for F
 where
     F: Stream<Item = FrameSet<FramesMut>>,
 {
-    fn frame_decoded(
-        self,
-        config: Config,
-        role: Role,
-        peer: Peer,
-    ) -> impl Stream<Item = FrameBody> {
+    fn frame_decoded(self, config: Config) -> impl Stream<Item = Result<FrameBody, CodecError>> {
         self.map(Ok)
             .trace_pending()
             .deduplicated()
             .defragmented(config.max_parted_size, config.max_parted_count)
             .ordered(config.max_channels)
             .body_decoded()
-            .logged(
-                move |pack| {
-                    trace!("[{role}] received packet: {:?} from {peer}", pack);
-                },
-                move |err| {
-                    debug!("[{role}] got codec error: {err} when pipelining packets from {peer}");
-                },
-            )
     }
 }
 
@@ -139,7 +124,7 @@ pub mod micro_bench {
 
     use super::{Config, Decoded, FrameSet, FramesMut, Stream};
     use crate::packet::connected::{Flags, Fragment, Frame, Ordered};
-    use crate::{Peer, Reliability, Role};
+    use crate::Reliability;
 
     #[derive(Debug, Clone)]
     pub struct Options {
@@ -262,14 +247,11 @@ pub mod micro_bench {
 
             let config = self.config;
             let data = self.data.clone();
-            let link = TransferLink::new_arc(Role::test_server());
 
-            let stream = self
-                .into_stream()
-                .frame_decoded(config, link, Role::test_server());
+            let stream = self.into_stream().frame_decoded(config);
             #[futures_async_stream::for_await]
             for res in stream {
-                let body = match res {
+                let body = match res.unwrap() {
                     crate::packet::connected::FrameBody::User(body) => body,
                     _ => unreachable!("unexpected decoded result"),
                 };
@@ -280,9 +262,7 @@ pub mod micro_bench {
         #[allow(clippy::semicolon_if_nothing_returned)]
         pub async fn bench_decoded(self) {
             let config = self.config;
-            let stream =
-                self.into_stream()
-                    .frame_decoded(config, Role::test_server(), Peer::test());
+            let stream = self.into_stream().frame_decoded(config);
             #[futures_async_stream::for_await]
             for _r in stream {}
         }

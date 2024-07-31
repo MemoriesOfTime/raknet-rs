@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use fastrace::Span;
 use futures::StreamExt;
+use log::{error, trace};
 use tokio::net::UdpSocket as TokioUdpSocket;
 
 use super::ConnectTo;
@@ -15,7 +16,7 @@ use crate::guard::HandleOutgoing;
 use crate::io::{Ping, SeparatedIO, IO};
 use crate::link::{Router, TransferLink};
 use crate::state::{IncomingStateManage, OutgoingStateManage};
-use crate::utils::TraceStreamExt;
+use crate::utils::{Logged, TraceStreamExt};
 
 impl ConnectTo for TokioUdpSocket {
     async fn connect_to(
@@ -61,7 +62,11 @@ impl ConnectTo for TokioUdpSocket {
         });
 
         let src = route
-            .frame_decoded(config.codec_config(), role, peer)
+            .frame_decoded(config.codec_config())
+            .logged(
+                move |frame| trace!("[{role}] received {frame:?} from {peer}"),
+                move |err| error!("[{role}] decode error: {err} from {peer}"),
+            )
             .manage_incoming_state()
             .handle_online(addr, config.client_guid, Arc::clone(&link))
             .enter_on_item(Span::noop);

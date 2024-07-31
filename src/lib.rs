@@ -100,7 +100,7 @@ enum Role {
 }
 
 impl Role {
-    #[cfg(any(test, feature = "micro-bench"))]
+    #[cfg(test)]
     fn test_server() -> Self {
         Role::Server { guid: 114514 }
     }
@@ -130,7 +130,7 @@ struct Peer {
 }
 
 impl Peer {
-    #[cfg(any(test, feature = "micro-bench"))]
+    #[cfg(test)]
     fn test() -> Self {
         Self {
             guid: 114514,
