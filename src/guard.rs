@@ -9,6 +9,7 @@ use log::trace;
 use pin_project_lite::pin_project;
 
 use crate::link::SharedLink;
+use crate::opts::FlushStrategy;
 use crate::packet::connected::{self, Frame, FrameSet, FramesRef};
 use crate::packet::{Packet, FRAME_SET_HEADER_SIZE};
 use crate::resend_map::ResendMap;
@@ -16,8 +17,8 @@ use crate::utils::u24;
 use crate::{Peer, Role};
 
 pin_project! {
-    // OutgoingGuard equips with Acknowledgement handler and packets buffer and provides
-    // resending policies and
+    // OutgoingGuard equips with ACK/NACK flusher and packets buffer and provides
+    // resending policies and flush strategies.
     pub(crate) struct OutgoingGuard<F> {
         #[pin]
         frame: F,
@@ -80,58 +81,60 @@ where
         this.link
             .process_nack()
             .for_each(|nack| this.resend.on_nack_into(nack, this.buf));
-
-        // poll stale frames into buffer
         this.resend.process_stales(this.buf);
+        let strategy = cx
+            .ext()
+            .downcast_ref::<FlushStrategy>()
+            .copied()
+            .unwrap_or_default();
+        let mut ack_cnt = 0;
+        let mut nack_cnt = 0;
+        let mut pack_cnt = 0;
 
-        ready!(this.frame.as_mut().poll_ready(cx))?;
-        let mut sent = false;
-
-        // TODO: Weighted Round-Robin
-        while !this.link.flush_empty() || !this.buf.is_empty() {
+        while !strategy.check_flushed(this.link, this.buf) {
             // 1st. empty the nack
-            if sent {
-                ready!(this.frame.as_mut().poll_ready(cx))?;
-                sent = false;
-            }
-            if let Some(nack) = this.link.process_outgoing_nack(this.peer.mtu) {
+            ready!(this.frame.as_mut().poll_ready(cx))?;
+            if strategy.flush_nack()
+                && let Some(nack) = this.link.process_outgoing_nack(this.peer.mtu)
+            {
                 trace!(
                     "[{}] send nack {nack:?} to {}, total count: {}",
                     this.role,
                     this.peer,
                     nack.total_cnt()
                 );
+                nack_cnt += nack.total_cnt();
                 this.frame.as_mut().start_send((
                     Packet::Connected(connected::Packet::Nack(nack)),
                     this.peer.addr,
                 ))?;
-                sent = true;
             }
 
             // 2nd. empty the ack
-            if sent {
-                ready!(this.frame.as_mut().poll_ready(cx))?;
-                sent = false;
-            }
-            if let Some(ack) = this.link.process_outgoing_ack(this.peer.mtu) {
+            ready!(this.frame.as_mut().poll_ready(cx))?;
+            if strategy.flush_ack()
+                && let Some(ack) = this.link.process_outgoing_ack(this.peer.mtu)
+            {
                 trace!(
                     "[{}] send ack {ack:?} to {}, total count: {}",
                     this.role,
                     this.peer,
                     ack.total_cnt()
                 );
+                ack_cnt += ack.total_cnt();
                 this.frame.as_mut().start_send((
                     Packet::Connected(connected::Packet::Ack(ack)),
                     this.peer.addr,
                 ))?;
-                sent = true;
+            }
+
+            if !strategy.flush_pack() {
+                // skip flushing packets
+                continue;
             }
 
             // 3rd. empty the unconnected packets
-            if sent {
-                ready!(this.frame.as_mut().poll_ready(cx))?;
-                sent = false;
-            }
+            ready!(this.frame.as_mut().poll_ready(cx))?;
             // only poll one packet each time
             if let Some(packet) = this.link.process_unconnected().next() {
                 trace!(
@@ -143,18 +146,13 @@ where
                 this.frame
                     .as_mut()
                     .start_send((Packet::Unconnected(packet), this.peer.addr))?;
-                sent = true;
+                pack_cnt += 1;
             }
 
             // 4th. empty the frame set
-            if sent {
-                ready!(this.frame.as_mut().poll_ready(cx))?;
-                sent = false;
-            }
-
+            ready!(this.frame.as_mut().poll_ready(cx))?;
             let mut frames = Vec::with_capacity(this.buf.len());
             let mut reliable = false;
-
             let mut remain = this.peer.mtu as usize - FRAME_SET_HEADER_SIZE;
             while let Some(frame) = this.buf.back() {
                 if remain >= frame.size() {
@@ -189,13 +187,20 @@ where
                     Packet::Connected(connected::Packet::FrameSet(frame_set)),
                     this.peer.addr,
                 ))?;
-                sent = true;
                 if reliable {
                     // keep for resending
                     this.resend.record(*this.seq_num_write_index, frames);
                 }
                 *this.seq_num_write_index += 1;
+                pack_cnt += 1;
             }
+        }
+
+        // mark flushed count
+        if let Some(strategy_) = cx.ext().downcast_mut::<FlushStrategy>() {
+            strategy_.mark_flushed_ack(ack_cnt);
+            strategy_.mark_flushed_nack(nack_cnt);
+            strategy_.mark_flushed_pack(pack_cnt);
         }
 
         Poll::Ready(Ok(()))
@@ -231,7 +236,6 @@ where
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         ready!(self.as_mut().try_empty(cx))?;
-        debug_assert!(self.buf.is_empty() && self.link.flush_empty());
         self.project().frame.poll_flush(cx)
     }
 
@@ -242,7 +246,12 @@ where
         self.link.turn_on_waking();
         loop {
             ready!(self.as_mut().try_empty(cx))?;
-            debug_assert!(self.buf.is_empty() && self.link.flush_empty());
+            debug_assert!(
+                self.buf.is_empty()
+                    && self.link.unconnected_empty()
+                    && self.link.outgoing_ack_empty()
+                    && self.link.outgoing_nack_empty()
+            );
             ready!(self.as_mut().project().frame.poll_flush(cx))?;
             if self.resend.is_empty() {
                 trace!(

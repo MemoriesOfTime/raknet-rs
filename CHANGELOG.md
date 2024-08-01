@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Split `IO` into `Stream` and `Sink`
+- Fix some fragmentation bugs
+- Add `FlushStrategy`
+
 ---
 ## 0.1.3
 
@@ -12,7 +16,7 @@
 - Reduced the overhead when calling `poll_close`
   - By introducing a simple time reactor
 - Add examples for E2E tracing
-- Fixed some API call issues.
+- Fixed some API call issues
 
 ---
 ## 0.1.2

@@ -35,9 +35,9 @@ reqwest = "0.12"
 tokio = { version = "1", features = ["full"] }
 
 [features]
-default = ["tokio-udp"]
-tokio-udp = ["dep:tokio"]
-micro-bench = []
+default = ["tokio-rt"]
+tokio-rt = ["dep:tokio"]
+micro-bench = []         # for benchmark, do not enable it in normal use
 
 [[bench]]
 name = "micro"

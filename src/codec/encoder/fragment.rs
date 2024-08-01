@@ -290,9 +290,9 @@ mod test {
                 Bytes::from_iter(std::iter::repeat(0xfe).take(50 - FRAME_SET_HEADER_SIZE - 10)),
             ))
             .unwrap();
-        assert_eq!(dst.frame.buf.len(), 1);
-        assert!(dst.frame.buf[0].fragment.is_none());
-        assert_eq!(dst.frame.buf[0].size(), 50 - FRAME_SET_HEADER_SIZE);
+        assert_eq!(dst.frame.buf.len(), 1); // 1 frame
+        assert!(dst.frame.buf[0].fragment.is_none()); // not fragmented
+        assert_eq!(dst.frame.buf[0].size(), 50 - FRAME_SET_HEADER_SIZE); // full size
     }
 
     #[test]
@@ -322,5 +322,24 @@ mod test {
         assert_eq!(fragment.parted_size, 2);
         assert_eq!(fragment.parted_id, 0);
         assert_eq!(fragment.parted_index, 1);
+    }
+
+    #[test]
+    fn test_fragmented_adjust_not_exceed() {
+        let dst = DstSink::default().fragmented(50, 8);
+        tokio::pin!(dst);
+        dst.as_mut()
+            .start_send(Message::new(
+                Reliability::Unreliable,
+                0,
+                Bytes::from_iter(std::iter::repeat(0xfe).take(50)),
+            ))
+            .unwrap();
+        assert_eq!(dst.frame.buf.len(), 2); // 2 frames
+        assert_eq!(dst.frame.buf[0].flags.reliability, Reliability::Reliable); // adjusted
+        assert_eq!(dst.frame.buf[1].flags.reliability, Reliability::Reliable); // adjusted
+
+        // after adjusting reliability, the size does not exceed the MTU
+        assert_eq!(dst.frame.buf[0].size(), 50 - FRAME_SET_HEADER_SIZE);
     }
 }

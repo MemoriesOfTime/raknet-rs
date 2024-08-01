@@ -8,7 +8,7 @@ mod decoder;
 mod encoder;
 
 /// Tokio codec helper
-#[cfg(feature = "tokio-udp")]
+#[cfg(feature = "tokio-rt")]
 pub(crate) mod tokio;
 
 use std::io;

@@ -8,7 +8,7 @@ use crate::opts::TraceInfo;
 use crate::{codec, Message, Role};
 
 /// Incoming implementation by using tokio's UDP framework
-#[cfg(feature = "tokio-udp")]
+#[cfg(feature = "tokio-rt")]
 mod tokio;
 
 /// Incoming config

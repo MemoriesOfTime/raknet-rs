@@ -150,11 +150,16 @@ impl TransferLink {
         self.frame_body.try_iter()
     }
 
-    // Return whether the flush buffer is empty
-    pub(crate) fn flush_empty(&self) -> bool {
+    pub(crate) fn outgoing_ack_empty(&self) -> bool {
         self.outgoing_ack.lock().is_empty()
-            && self.outgoing_nack.lock().is_empty()
-            && self.unconnected.is_empty()
+    }
+
+    pub(crate) fn outgoing_nack_empty(&self) -> bool {
+        self.outgoing_nack.lock().is_empty()
+    }
+
+    pub(crate) fn unconnected_empty(&self) -> bool {
+        self.unconnected.is_empty()
     }
 
     /// Return whether the frame body buffer is empty

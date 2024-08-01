@@ -1,6 +1,6 @@
-#![allow(clippy::use_debug)]
-
+use std::future::poll_fn;
 use std::iter::repeat;
+use std::task::ContextBuilder;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -9,7 +9,7 @@ use log::info;
 use tokio::net::UdpSocket;
 
 use crate::client::{self, ConnectTo};
-use crate::opts::TraceInfo;
+use crate::opts::{FlushStrategy, TraceInfo};
 use crate::server::{self, MakeIncoming};
 use crate::utils::tests::test_trace_log_setup;
 use crate::{Message, Reliability};
@@ -209,4 +209,61 @@ async fn test_4way_handshake_client_close() {
 
     tokio::spawn(server);
     tokio::spawn(client).await.unwrap();
+}
+
+#[tokio::test(unhandled_panic = "shutdown_runtime")]
+async fn test_flush_strategy_works() {
+    let _guard = test_trace_log_setup();
+
+    let oneshot = async {
+        let mut incoming = UdpSocket::bind("0.0.0.0:19134")
+            .await
+            .unwrap()
+            .make_incoming(make_server_conf());
+        loop {
+            let (reader, sender) = incoming.next().await.unwrap();
+            tokio::spawn(async move {
+                tokio::pin!(reader);
+                tokio::pin!(sender);
+                let data = reader.next().await.unwrap();
+                sender
+                    .feed(Message::new(Reliability::Reliable, 0, data))
+                    .await
+                    .unwrap();
+                let mut strategy = FlushStrategy::new(false, false, true);
+                poll_fn(|cx| {
+                    let mut cx = ContextBuilder::from(cx).ext(&mut strategy).build();
+                    // flush strategy only works in poll_flush
+                    sender.poll_flush_unpin(&mut cx)
+                })
+                .await
+                .unwrap();
+                assert_eq!(strategy.flushed_pack(), 1); // flushed the packet feed before
+
+                // not enabled, should panic
+                std::panic::catch_unwind(|| strategy.flushed_ack()).unwrap_err();
+                std::panic::catch_unwind(|| strategy.flushed_nack()).unwrap_err();
+            });
+        }
+    };
+
+    tokio::spawn(oneshot);
+
+    let (src, dst) = UdpSocket::bind("0.0.0.0:0")
+        .await
+        .unwrap()
+        .connect_to("127.0.0.1:19134", make_client_conf())
+        .await
+        .unwrap();
+
+    tokio::pin!(src);
+    tokio::pin!(dst);
+
+    dst.send(Bytes::from_iter(repeat(0xfe).take(256)).into())
+        .await
+        .unwrap();
+    assert_eq!(
+        src.next().await.unwrap(),
+        Bytes::from_iter(repeat(0xfe).take(256))
+    );
 }

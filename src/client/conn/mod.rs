@@ -9,7 +9,7 @@ use crate::opts::Ping;
 use crate::{codec, Message, Role};
 
 /// Connection implementation by using tokio's UDP framework
-#[cfg(feature = "tokio-udp")]
+#[cfg(feature = "tokio-rt")]
 mod tokio;
 
 #[derive(Debug, Clone, Copy)]

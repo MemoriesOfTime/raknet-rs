@@ -32,11 +32,11 @@ Yet another project rewritten in Rust.
 
 ## Getting Started
 
-See [examples](examples/) for basic usage.
+See [examples](examples/) or [integration testing](src/tests.rs) for basic usage.
 
 ### Server
 
-Most operations are performed on `Stream` and `Sink`.
+Most operations are performed on `Stream` and `Sink`. There will be some optional options in [opts](src/opts.rs).
 
 Keep polling `incoming` because it also serves as the router to every connections.
 Apply `Sink::poll_flush` to IO will trigger to flush all pending packets, `ACK`/`NACK`, and stale packets.
