@@ -2,6 +2,7 @@ use std::cmp::Reverse;
 use std::collections::{BTreeSet, BinaryHeap};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::time::Instant;
 
 use async_channel::Sender;
 use concurrent_queue::ConcurrentQueue;
@@ -18,7 +19,7 @@ pub(crate) type SharedLink = Arc<TransferLink>;
 
 /// Transfer data and task between stream and sink.
 pub(crate) struct TransferLink {
-    incoming_ack: ConcurrentQueue<AckOrNack>,
+    incoming_ack: ConcurrentQueue<(AckOrNack, Instant)>,
     incoming_nack: ConcurrentQueue<AckOrNack>,
     forward_waking: AtomicBool,
 
@@ -85,7 +86,11 @@ impl TransferLink {
     }
 
     pub(crate) fn incoming_ack(&self, records: AckOrNack) {
-        if let Some(dropped) = self.incoming_ack.force_push(records).unwrap() {
+        if let Some((dropped, _)) = self
+            .incoming_ack
+            .force_push((records, Instant::now()))
+            .unwrap()
+        {
             warn!(
                 "[{}] discard received ack {dropped:?} from {}, total count: {}",
                 self.role,
@@ -126,7 +131,7 @@ impl TransferLink {
         self.frame_body.push(body).unwrap();
     }
 
-    pub(crate) fn process_ack(&self) -> impl Iterator<Item = AckOrNack> + '_ {
+    pub(crate) fn process_ack(&self) -> impl Iterator<Item = (AckOrNack, Instant)> + '_ {
         self.incoming_ack.try_iter()
     }
 

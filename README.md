@@ -22,9 +22,8 @@ Yet another project rewritten in Rust.
 
 > Ordered by priority
 
-- Add RTT Estimator
 - Documentation
-- More fuzz testing
+- Simulation testing
 - Bulk benchmark
 - Optimize performance for single thread runtime (IO without Send)
 - Robust client implementation

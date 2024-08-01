@@ -68,9 +68,6 @@ mod link;
 /// Estimators
 mod estimator;
 
-/// Resend map
-mod resend_map;
-
 /// Raknet server
 pub mod server;
 

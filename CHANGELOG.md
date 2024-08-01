@@ -5,6 +5,7 @@
 - Split `IO` into `Stream` and `Sink`
 - Fix some fragmentation bugs
 - Add `FlushStrategy`
+- Add `Estimator` based on RFC6298
 
 ---
 ## 0.1.3
