@@ -97,7 +97,7 @@ where
             this.span.get_or_insert_with(|| {
                 Span::enter_with_local_parent("codec.defragment").with_properties(|| {
                     [
-                        ("buffer_size", this.buffer.len().to_string()),
+                        ("buf_size", this.buffer.len().to_string()),
                         ("pending", this.parts.len().to_string()),
                     ]
                 })

@@ -18,7 +18,7 @@ pub fn codec_benchmark(c: &mut Criterion) {
         let opts = micro_bench::codec::Options {
             frame_per_set: 1,
             frame_set_cnt: 14400,
-            duplicated_ratio: 0.01,
+            duplicated_ratio: 0.,
             unordered: true,
             parted_size: 4,
             shuffle: false,
@@ -48,7 +48,7 @@ pub fn codec_benchmark(c: &mut Criterion) {
         let opts = micro_bench::codec::Options {
             frame_per_set: 6,
             frame_set_cnt: 600,
-            duplicated_ratio: 0.01,
+            duplicated_ratio: 0.,
             unordered: true,
             parted_size: 1,
             shuffle: false,
@@ -78,7 +78,7 @@ pub fn codec_benchmark(c: &mut Criterion) {
         let opts = micro_bench::codec::Options {
             frame_per_set: 36,
             frame_set_cnt: 100,
-            duplicated_ratio: 0.01,
+            duplicated_ratio: 0.,
             unordered: true,
             parted_size: 1,
             shuffle: false,
@@ -108,7 +108,7 @@ pub fn codec_benchmark(c: &mut Criterion) {
         let opts = micro_bench::codec::Options {
             frame_per_set: 1,
             frame_set_cnt: 1440,
-            duplicated_ratio: 0.01,
+            duplicated_ratio: 0.,
             unordered: true,
             parted_size: 4,
             shuffle: false,
@@ -138,7 +138,7 @@ pub fn codec_benchmark(c: &mut Criterion) {
         let opts = micro_bench::codec::Options {
             frame_per_set: 6,
             frame_set_cnt: 1550,
-            duplicated_ratio: 0.01,
+            duplicated_ratio: 0.,
             unordered: true,
             parted_size: 1,
             shuffle: false,
@@ -168,7 +168,7 @@ pub fn codec_benchmark(c: &mut Criterion) {
         let opts = micro_bench::codec::Options {
             frame_per_set: 36,
             frame_set_cnt: 1378,
-            duplicated_ratio: 0.01,
+            duplicated_ratio: 0.,
             unordered: true,
             parted_size: 1,
             shuffle: false,

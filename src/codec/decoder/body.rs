@@ -43,7 +43,7 @@ where
         };
 
         let span = LocalSpan::enter_with_local_parent("codec.body_decoder")
-            .with_properties(|| [("frame_seq_num", frame_set.seq_num.to_string())]);
+            .with_properties(|| [("seq_num", frame_set.seq_num.to_string())]);
 
         match FrameBody::read(frame_set.set.body) {
             Ok(body) => {

@@ -93,10 +93,7 @@ where
             };
             this.span.get_or_insert_with(|| {
                 Span::enter_with_local_parent("codec.deduplication").with_properties(|| {
-                    [(
-                        "dup_window_size",
-                        this.window.received_status.len().to_string(),
-                    )]
+                    [("wnd_size", this.window.received_status.len().to_string())]
                 })
             });
             frame_set.set.retain(|frame| {
