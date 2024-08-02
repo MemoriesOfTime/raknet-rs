@@ -43,6 +43,7 @@
 #![feature(let_chains)]
 #![feature(context_ext)]
 #![feature(local_waker)]
+#![feature(option_get_or_insert_default)]
 
 /// Protocol codec
 mod codec;

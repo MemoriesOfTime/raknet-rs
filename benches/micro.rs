@@ -1,197 +1,94 @@
 //! Micro benches
 
-use std::time::Duration;
+use std::iter::repeat;
 
-use bytes::BytesMut;
+use bytes::Bytes;
 use criterion::async_executor::FuturesExecutor;
-use criterion::{criterion_group, criterion_main, BatchSize, Criterion, Throughput};
+use criterion::measurement::WallTime;
+use criterion::{
+    black_box, criterion_group, criterion_main, BatchSize, BenchmarkGroup, Criterion, Throughput,
+};
 use raknet_rs::micro_bench;
+use raknet_rs::micro_bench::codec::BenchOpts;
 
 pub fn codec_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("codec");
-    let seed = 114514;
 
-    group.warm_up_time(Duration::from_secs(10));
-
-    // large packets, every frame set only contains one frame
-    {
-        let opts = micro_bench::codec::Options {
-            frame_per_set: 1,
-            frame_set_cnt: 14400,
-            duplicated_ratio: 0.,
-            unordered: true,
-            parted_size: 4,
-            shuffle: false,
-            seed,
-            data: BytesMut::from_iter(include_bytes!("data/body-large.txt")),
+    fn decode(
+        group: &mut BenchmarkGroup<WallTime>,
+        datagram: &'static [u8],
+        cnt: usize,
+        throughput: impl Fn(&BenchOpts) -> Throughput,
+    ) {
+        let datagrams = repeat(Bytes::from_static(datagram)).take(cnt);
+        let opts = micro_bench::codec::BenchOpts {
+            datagrams: black_box(datagrams.collect()),
+            seed: 114514,
+            dup_ratio: 0.,
+            shuffle_ratio: 0.,
+            mtu: 1480,
         };
-
-        // total data size: 16369200 bytes, data count: 3600, mtu: 1136
-        println!(
-            "total data size: {} bytes, data count: {}, mtu: {}",
-            opts.input_data_size(),
-            opts.input_data_cnt(),
-            opts.input_mtu(),
+        group.throughput(throughput(&opts));
+        group.bench_function(
+            format!("decode_cnt-{cnt}_size-{}", datagram.len()),
+            |bencher| {
+                bencher.to_async(FuturesExecutor).iter_batched(
+                    || opts.clone(),
+                    |opts| opts.run_bench(),
+                    BatchSize::SmallInput,
+                );
+            },
         );
-        group.throughput(Throughput::Elements(opts.input_data_cnt() as u64));
-        group.bench_function("decode_large_packets_same_data_cnt", |bencher| {
-            bencher.to_async(FuturesExecutor).iter_batched(
-                || micro_bench::codec::MicroBench::new(opts.clone()),
-                |bench| bench.bench_decoded(),
-                BatchSize::SmallInput,
-            );
-        });
     }
 
-    // medium packets, every frame set contains 6 frame
-    {
-        let opts = micro_bench::codec::Options {
-            frame_per_set: 6,
-            frame_set_cnt: 600,
-            duplicated_ratio: 0.,
-            unordered: true,
-            parted_size: 1,
-            shuffle: false,
-            seed,
-            data: BytesMut::from_iter(include_bytes!("data/body-medium.txt")),
-        };
+    let el = |opts: &BenchOpts| Throughput::Elements(opts.elements());
+    let by = |opts: &BenchOpts| Throughput::Bytes(opts.bytes());
 
-        // total data size: 630000 bytes, data count: 3600, mtu: 1050
-        println!(
-            "total data size: {} bytes, data count: {}, mtu: {}",
-            opts.input_data_size(),
-            opts.input_data_cnt(),
-            opts.input_mtu(),
-        );
-        group.throughput(Throughput::Elements(opts.input_data_cnt() as u64));
-        group.bench_function("decode_medium_packets_same_data_cnt", |bencher| {
-            bencher.to_async(FuturesExecutor).iter_batched(
-                || micro_bench::codec::MicroBench::new(opts.clone()),
-                |bench| bench.bench_decoded(),
-                BatchSize::SmallInput,
-            );
-        });
-    }
+    let small_size = include_bytes!("data/small_size.txt");
+    let medium_size = include_bytes!("data/medium_size.txt");
+    let large_size = include_bytes!("data/large_size.txt");
 
-    // short packets, every frame set contains 36 frame
-    {
-        let opts = micro_bench::codec::Options {
-            frame_per_set: 36,
-            frame_set_cnt: 100,
-            duplicated_ratio: 0.,
-            unordered: true,
-            parted_size: 1,
-            shuffle: false,
-            seed,
-            data: BytesMut::from_iter(include_bytes!("data/body-short.txt")),
-        };
+    decode(&mut group, small_size, 1, el);
+    decode(&mut group, small_size, 5, el);
+    decode(&mut group, small_size, 10, el);
+    decode(&mut group, small_size, 50, el);
+    decode(&mut group, small_size, 100, el);
+    decode(&mut group, small_size, 1000, el);
 
-        // total data size: 118800 bytes, data count: 3600, mtu: 1188
-        println!(
-            "total data size: {} bytes, data count: {}, mtu: {}",
-            opts.input_data_size(),
-            opts.input_data_cnt(),
-            opts.input_mtu(),
-        );
-        group.throughput(Throughput::Elements(opts.input_data_cnt() as u64));
-        group.bench_function("decode_short_packets_same_data_cnt", |bencher| {
-            bencher.to_async(FuturesExecutor).iter_batched(
-                || micro_bench::codec::MicroBench::new(opts.clone()),
-                |bench| bench.bench_decoded(),
-                BatchSize::SmallInput,
-            );
-        });
-    }
+    decode(&mut group, small_size, 1, by);
+    decode(&mut group, small_size, 5, by);
+    decode(&mut group, small_size, 10, by);
+    decode(&mut group, small_size, 50, by);
+    decode(&mut group, small_size, 100, by);
+    decode(&mut group, small_size, 1000, by);
 
-    // large packets, every frame set only contains one frame
-    {
-        let opts = micro_bench::codec::Options {
-            frame_per_set: 1,
-            frame_set_cnt: 1440,
-            duplicated_ratio: 0.,
-            unordered: true,
-            parted_size: 4,
-            shuffle: false,
-            seed,
-            data: BytesMut::from_iter(include_bytes!("data/body-large.txt")),
-        };
+    decode(&mut group, medium_size, 1, el);
+    decode(&mut group, medium_size, 5, el);
+    decode(&mut group, medium_size, 10, el);
+    decode(&mut group, medium_size, 50, el);
+    decode(&mut group, medium_size, 100, el);
+    decode(&mut group, medium_size, 1000, el);
 
-        // total data size: 1,636,920 bytes, data count: 360, mtu: 1136
-        println!(
-            "total data size: {} bytes, data count: {}, mtu: {}",
-            opts.input_data_size(),
-            opts.input_data_cnt(),
-            opts.input_mtu(),
-        );
-        group.throughput(Throughput::Bytes(opts.input_data_size() as u64));
-        group.bench_function("decode_large_packets_same_data_size", |bencher| {
-            bencher.to_async(FuturesExecutor).iter_batched(
-                || micro_bench::codec::MicroBench::new(opts.clone()),
-                |bench| bench.bench_decoded(),
-                BatchSize::SmallInput,
-            );
-        });
-    }
+    decode(&mut group, medium_size, 1, by);
+    decode(&mut group, medium_size, 5, by);
+    decode(&mut group, medium_size, 10, by);
+    decode(&mut group, medium_size, 50, by);
+    decode(&mut group, medium_size, 100, by);
+    decode(&mut group, medium_size, 1000, by);
 
-    // medium packets, every frame set contains 6 frame
-    {
-        let opts = micro_bench::codec::Options {
-            frame_per_set: 6,
-            frame_set_cnt: 1550,
-            duplicated_ratio: 0.,
-            unordered: true,
-            parted_size: 1,
-            shuffle: false,
-            seed,
-            data: BytesMut::from_iter(include_bytes!("data/body-medium.txt")),
-        };
+    decode(&mut group, large_size, 1, el);
+    decode(&mut group, large_size, 5, el);
+    decode(&mut group, large_size, 10, el);
+    decode(&mut group, large_size, 50, el);
+    decode(&mut group, large_size, 100, el);
+    decode(&mut group, large_size, 1000, el);
 
-        // total data size: 1,636,800 bytes, data count: 9300, mtu: 1056
-        println!(
-            "total data size: {} bytes, data count: {}, mtu: {}",
-            opts.input_data_size(),
-            opts.input_data_cnt(),
-            opts.input_mtu(),
-        );
-        group.throughput(Throughput::Bytes(opts.input_data_size() as u64));
-        group.bench_function("decode_medium_packets_same_data_size", |bencher| {
-            bencher.to_async(FuturesExecutor).iter_batched(
-                || micro_bench::codec::MicroBench::new(opts.clone()),
-                |bench| bench.bench_decoded(),
-                BatchSize::SmallInput,
-            );
-        });
-    }
-
-    // short packets, every frame set contains 36 frame
-    {
-        let opts = micro_bench::codec::Options {
-            frame_per_set: 36,
-            frame_set_cnt: 1378,
-            duplicated_ratio: 0.,
-            unordered: true,
-            parted_size: 1,
-            shuffle: false,
-            seed,
-            data: BytesMut::from_iter(include_bytes!("data/body-short.txt")),
-        };
-
-        // total data size: 1,637,064 bytes, data count: 49608, mtu: 1188
-        println!(
-            "total data size: {} bytes, data count: {}, mtu: {}",
-            opts.input_data_size(),
-            opts.input_data_cnt(),
-            opts.input_mtu(),
-        );
-        group.throughput(Throughput::Bytes(opts.input_data_size() as u64));
-        group.bench_function("decode_short_packets_same_data_size", |bencher| {
-            bencher.to_async(FuturesExecutor).iter_batched(
-                || micro_bench::codec::MicroBench::new(opts.clone()),
-                |bench| bench.bench_decoded(),
-                BatchSize::SmallInput,
-            );
-        });
-    }
+    decode(&mut group, large_size, 1, by);
+    decode(&mut group, large_size, 5, by);
+    decode(&mut group, large_size, 10, by);
+    decode(&mut group, large_size, 50, by);
+    decode(&mut group, large_size, 100, by);
+    decode(&mut group, large_size, 1000, by);
 
     group.finish();
 }

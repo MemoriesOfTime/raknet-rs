@@ -117,181 +117,170 @@ where
 /// Micro bench helper
 #[cfg(feature = "micro-bench")]
 pub mod micro_bench {
-    use bytes::BytesMut;
+    use std::collections::VecDeque;
+    use std::io;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+
+    use bytes::{Bytes, BytesMut};
+    use futures::{Sink, StreamExt};
     use rand::rngs::StdRng;
     use rand::seq::SliceRandom;
     use rand::{Rng, SeedableRng};
 
-    use super::{Config, Decoded, FrameSet, FramesMut, Stream};
-    use crate::packet::connected::{Flags, Fragment, Frame, Ordered};
-    use crate::Reliability;
+    use super::{Config, Decoded, Fragmented, FrameSet, FramesMut, Stream};
+    use crate::packet::connected::Frame;
+    use crate::packet::FRAME_SET_HEADER_SIZE;
+    use crate::{Message, Reliability};
 
     #[derive(Debug, Clone)]
-    pub struct Options {
-        pub frame_set_cnt: usize,
-        pub frame_per_set: usize,
-        pub duplicated_ratio: f32,
-        pub unordered: bool,
-        pub parted_size: usize,
-        pub shuffle: bool,
+    pub struct BenchOpts {
+        pub datagrams: Vec<Bytes>,
         pub seed: u64,
-        pub data: BytesMut,
+        pub dup_ratio: f32,
+        pub shuffle_ratio: f32,
+        pub mtu: usize,
     }
 
-    impl Options {
-        fn gen_inputs(&self) -> Vec<FrameSet<FramesMut>> {
-            assert!(self.frame_per_set * self.frame_set_cnt % self.parted_size == 0);
-            assert!(self.data.len() > self.parted_size);
-            assert!(self.parted_size >= 1);
+    impl Sink<Frame> for &mut VecDeque<Frame<BytesMut>> {
+        type Error = io::Error;
+
+        fn poll_ready(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn start_send(self: Pin<&mut Self>, frame: Frame) -> Result<(), Self::Error> {
+            self.get_mut().push_back(Frame {
+                body: BytesMut::from(frame.body),
+                ..frame
+            });
+            Ok(())
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_close(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    impl BenchOpts {
+        fn gen_inputs(self) -> impl Stream<Item = FrameSet<FramesMut>> {
+            let mut frames: VecDeque<Frame<BytesMut>> = VecDeque::new();
             let mut rng = StdRng::seed_from_u64(self.seed);
-            let frames: FramesMut = std::iter::repeat(self.data.clone())
-                .take(self.frame_per_set * self.frame_set_cnt)
-                .enumerate()
-                .map(|(idx, mut body)| {
-                    let mut reliability = Reliability::Reliable;
-                    let mut raw = 0;
-                    let reliable_frame_index = Some(idx.into());
-                    let mut fragment = None;
-                    let mut ordered = None;
-                    if self.parted_size > 1 {
-                        raw |= 0b0001_0000;
-                        let parted_start =
-                            (idx % self.parted_size) * (body.len() / self.parted_size);
-                        let parted_end = if idx % self.parted_size == self.parted_size - 1 {
-                            body.len()
-                        } else {
-                            parted_start + (body.len() / self.parted_size)
-                        };
-                        let _ = body.split_to(parted_start);
-                        let _ = body.split_off(parted_end - parted_start);
-                        fragment = Some(Fragment {
-                            parted_size: self.parted_size as u32,
-                            parted_id: (idx / self.parted_size) as u16,
-                            parted_index: (idx % self.parted_size) as u32,
-                        });
-                    }
-                    if self.unordered {
-                        reliability = Reliability::ReliableOrdered;
-                        ordered = Some(Ordered {
-                            frame_index: (idx / self.parted_size).into(),
-                            channel: 0,
-                        });
-                    }
-                    Frame {
-                        flags: Flags::parse(((reliability as u8) << 5) | raw),
-                        reliable_frame_index,
-                        seq_frame_index: None,
-                        ordered,
-                        fragment,
-                        body,
-                    }
-                })
-                .flat_map(|frame| {
-                    if self.duplicated_ratio > 0.
-                        && rng.gen_ratio((self.duplicated_ratio * 100.0) as u32, 100)
-                    {
-                        return vec![frame.clone(), frame];
-                    }
-                    vec![frame]
-                })
-                .collect();
-            let mut sets = frames
-                .chunks(self.frame_per_set)
-                .enumerate()
-                .map(|(idx, chunk)| FrameSet {
-                    seq_num: idx.into(),
-                    set: chunk.to_vec(),
-                })
-                .collect::<Vec<_>>();
-            if self.shuffle {
-                sets.shuffle(&mut rng);
+            tokio::pin! {
+                let fragmented = (&mut frames).fragmented(self.mtu, 1);
             }
-            sets
-        }
-
-        pub fn input_data_cnt(&self) -> usize {
-            self.frame_per_set * self.frame_set_cnt / self.parted_size
-        }
-
-        pub fn input_data_size(&self) -> usize {
-            self.data.len() * self.input_data_cnt()
-        }
-
-        pub fn input_mtu(&self) -> usize {
-            self.frame_per_set * self.data.len() / self.parted_size
-        }
-    }
-
-    #[derive(Debug)]
-    pub struct MicroBench {
-        config: Config,
-        #[cfg(test)]
-        data: BytesMut,
-        frame_sets: Vec<FrameSet<FramesMut>>,
-    }
-
-    impl MicroBench {
-        pub fn new(option: Options) -> Self {
-            Self {
-                config: Config::default(),
-                #[cfg(test)]
-                data: option.data.clone(),
-                frame_sets: option.gen_inputs(),
+            for datagram in self.datagrams {
+                fragmented
+                    .as_mut()
+                    .start_send(Message::new(Reliability::ReliableOrdered, 0, datagram)) // reliable ordered
+                    .unwrap();
             }
-        }
+            let mut sets = Vec::new();
+            let mut remain = self.mtu - FRAME_SET_HEADER_SIZE;
+            let mut set: Option<FramesMut> = None;
+            while let Some(frame) = frames.front() {
+                if remain >= frame.size() {
+                    remain -= frame.size();
+                    set.get_or_insert_default()
+                        .push(frames.pop_front().unwrap());
+                    continue;
+                }
+                remain = self.mtu - FRAME_SET_HEADER_SIZE;
 
-        #[cfg(test)]
-        #[allow(clippy::semicolon_if_nothing_returned)]
-        async fn bench_decoded_checked(self) {
-            use bytes::Buf as _;
-
-            let config = self.config;
-            let data = self.data.clone();
-
-            let stream = self.into_stream().frame_decoded(config);
-            #[futures_async_stream::for_await]
-            for res in stream {
-                let body = match res.unwrap() {
-                    crate::packet::connected::FrameBody::User(body) => body,
-                    _ => unreachable!("unexpected decoded result"),
-                };
-                assert_eq!(body.chunk(), data.chunk());
+                if self.dup_ratio > 0. && rng.gen_ratio((self.dup_ratio * 100.0) as u32, 100) {
+                    sets.push(FrameSet {
+                        seq_num: sets.len().into(),
+                        set: set.clone().take().unwrap(),
+                    });
+                }
+                sets.push(FrameSet {
+                    seq_num: sets.len().into(),
+                    set: set.take().unwrap(),
+                });
             }
-        }
+            if let Some(set) = set {
+                sets.push(FrameSet {
+                    seq_num: sets.len().into(),
+                    set,
+                });
+            }
 
-        #[allow(clippy::semicolon_if_nothing_returned)]
-        pub async fn bench_decoded(self) {
-            let config = self.config;
-            let stream = self.into_stream().frame_decoded(config);
-            #[futures_async_stream::for_await]
-            for _r in stream {}
-        }
+            let len = sets.len();
+            if self.shuffle_ratio > 0. {
+                sets.partial_shuffle(&mut rng, (len as f32 * self.shuffle_ratio) as usize);
+            }
 
-        fn into_stream(mut self) -> impl Stream<Item = FrameSet<FramesMut>> {
             #[futures_async_stream::stream]
             async move {
-                while let Some(frame_set) = self.frame_sets.pop() {
+                let mut sets = VecDeque::from(sets);
+                while let Some(frame_set) = sets.pop_front() {
                     yield frame_set;
                 }
             }
+        }
+
+        /// Run/Test codec benchmarks
+        #[allow(unused_variables)] // conditional compilation
+        #[allow(unused_mut)]
+        #[allow(clippy::missing_panics_doc)]
+        pub async fn run_bench(self) {
+            let mut len = self.datagrams.len();
+            let mut datagrams = if cfg!(test) {
+                Some(VecDeque::from(self.datagrams.clone()))
+            } else {
+                None
+            };
+            tokio::pin! {
+                let decoding = self.gen_inputs().frame_decoded(Config::default());
+            }
+            while let Some(r) = decoding.next().await {
+                assert!(r.is_ok());
+                len -= 1;
+                #[cfg(test)]
+                {
+                    let body = match r.unwrap() {
+                        crate::packet::connected::FrameBody::User(body) => body,
+                        _ => unreachable!("unexpected decoded result"),
+                    };
+                    log::debug!("decoded: {:?}", body);
+                    assert_eq!(body, datagrams.as_mut().unwrap().pop_front().unwrap());
+                }
+            }
+            assert_eq!(len, 0);
+        }
+
+        pub fn bytes(&self) -> u64 {
+            self.datagrams.iter().map(|b| b.len() as u64).sum()
+        }
+
+        pub fn elements(&self) -> u64 {
+            self.datagrams.len() as u64
         }
     }
 
     #[cfg(test)]
     #[tokio::test]
     async fn test_bench() {
-        let opts = Options {
-            frame_per_set: 8,
-            frame_set_cnt: 100,
-            duplicated_ratio: 0.1,
-            unordered: true,
-            parted_size: 4,
-            shuffle: true,
+        use crate::utils::tests::test_trace_log_setup;
+
+        let _guard = test_trace_log_setup();
+        let opts = BenchOpts {
+            datagrams: vec![
+                Bytes::from_static(b"hello"),
+                Bytes::from_static(b"world"),
+                Bytes::from_static(b"!"),
+            ],
             seed: 114514,
-            data: BytesMut::from_iter(b"1145141919810"),
+            dup_ratio: 0.6,
+            shuffle_ratio: 0.6,
+            mtu: 30,
         };
-        assert_eq!(opts.input_data_size(), 8 * 100 / 4 * "1145141919810".len());
-        let bench = MicroBench::new(opts);
-        bench.bench_decoded_checked().await;
+        assert_eq!(opts.bytes(), 11);
+        assert_eq!(opts.elements(), 3);
+        opts.run_bench().await;
     }
 }

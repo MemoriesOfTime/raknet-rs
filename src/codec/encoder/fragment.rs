@@ -77,10 +77,9 @@ where
                 Reliability::UnreliableWithAckReceipt => Reliability::ReliableWithAckReceipt,
                 _ => reliability,
             };
+            // calculate again as we may have adjusted reliability
+            max_len = *this.mtu - FRAME_SET_HEADER_SIZE - reliability.size();
         }
-
-        // calculate again as we may have adjusted reliability
-        max_len = *this.mtu - FRAME_SET_HEADER_SIZE - reliability.size();
 
         // get reliable_frame_index and ordered part for each frame
         let mut indices_for_frame = || {
