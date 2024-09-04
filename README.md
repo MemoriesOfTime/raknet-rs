@@ -35,13 +35,14 @@ See [examples](examples/) or [integration testing](src/tests.rs) for basic usage
 
 ### Server
 
-Most operations are performed on `Stream` and `Sink`. There will be some optional options in [opts](src/opts.rs).
+Most operations are performed on `Stream` and `Sink`. There will be some options in [opts](src/opts.rs).
 
 Keep polling `incoming` because it also serves as the router to every connections.
 Apply `Sink::poll_flush` to IO will trigger to flush all pending packets, `ACK`/`NACK`, and stale packets.
 Apply `Sink::poll_close` to IO will ensure that all data is received by the peer before returning (i.e It may keep resending infinitely.).
 
-> Notice: All calculations are lazy. You need to decide how long to flush once, and how long to wait when closing before considering the peer is disconnected.
+> [!NOTE]
+> All calculations are lazy. You need to decide how long to flush once, and how long to wait when closing before considering the peer is disconnected.
 
 ```rust
 use bytes::Bytes;
@@ -62,6 +63,7 @@ let data: Bytes = reader.next().await.unwrap();
 
 ### Client
 
+> [!WARNING]
 > The current version of the client only has the most basic handshake implementation, and it is not recommended to use it directly.
 
 ```rust

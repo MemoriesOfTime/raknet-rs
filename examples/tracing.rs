@@ -1,3 +1,5 @@
+#![allow(clippy::print_stdout)]
+
 use std::collections::HashMap;
 use std::error::Error;
 use std::net::SocketAddr;
@@ -44,7 +46,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 loop {
                     if let Some(data) = reader.next().await {
                         let trace_id = reader.last_trace_id().unwrap_or_else(|| {
-                            eprintln!("Please run with `--features fastrace/enable` and try again");
+                            println!("Please run with `--features fastrace/enable` and try again");
                             exit(0)
                         });
                         let root_span = Span::root(
@@ -151,7 +153,7 @@ fn display(spans: Vec<SpanRecord>) {
         } else {
             "├".to_owned() + &"─".repeat(depth) + " "
         };
-        eprintln!(
+        println!(
             "{}{}({}{{{}}}) [{}us]",
             prefix,
             span.name,
@@ -175,11 +177,11 @@ fn display(spans: Vec<SpanRecord>) {
         if list.is_empty() {
             continue;
         }
-        eprintln!("{trace_id:?}",);
+        println!("{}", trace_id.0);
         let l = &list[&SpanId::default()];
         for (i, root) in l.iter().enumerate() {
             dfs(&list, &spans_map, *root, 0, i == l.len() - 1);
         }
-        eprintln!();
+        println!();
     }
 }

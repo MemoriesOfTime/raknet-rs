@@ -1,3 +1,5 @@
+#![allow(clippy::print_stdout)]
+
 use std::error::Error;
 use std::net::SocketAddr;
 

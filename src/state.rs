@@ -1,6 +1,5 @@
 //! State management for the connection.
 //! Perform the 4-ways handshake for the connection close.
-//! Reflect the operation in the APIs of Sink and Stream when the connection stops.
 
 use std::io;
 use std::net::SocketAddr;
@@ -99,11 +98,6 @@ pub(crate) trait IncomingStateManage: Sized {
     ///
     /// It will yield None when it receives the `DisconnectNotification`. And will continue to
     /// return None in the following.
-    ///
-    /// You have to repeatedly `poll_next` after receiving `DisconnectNotification` from
-    /// the peer. This will ensure that the ack you sent to acknowledge the `DisconnectNotification`
-    /// can be received by the the peer (i.e. ensuring that the the peer's `poll_close` call
-    /// returns successfully).
     fn manage_incoming_state(self) -> impl Stream<Item = FrameBody>;
 }
 

@@ -33,19 +33,21 @@ where
 }
 
 /// Flush strategy can be used as ext data of [`std::task::Context`] to guide how
-/// [`Sink::poll_flush`] should perform flush. And the results after flush will be stored here.
-/// The default strategy will refresh all buffers.
+/// [`Sink::poll_flush`] perform flush. And the results after flush will be stored here.
+/// The default strategy will flush all buffers.
 ///
-/// Customizing your own strategy can achieve many functions.
+/// Customizing your own strategy can achieve many features:
+///
 /// 1. [**Delayed ack**](https://en.wikipedia.org/wiki/TCP_delayed_acknowledgment) based on timing,
 /// thereby reducing the number of ack packets and improving bandwidth utilization. At the same
 /// time, sending based on timing can avoid deadlocks or regressions caused by delaying based on the
 /// number of packets.
+///
 /// 2. More aggressive nack/pack flush strategy which would be more beneficial for retransmitting
 /// packets.
 ///
 /// After the flush is completed, the strategy will store the number of frames that have been
-/// flushed. You can use this information to determine when to take the next flush.
+/// flushed. You can use this number to determine when to take the next flush.
 ///
 /// Note that it can only be used in [`Sink::poll_flush`].
 #[derive(Debug, Default, Clone, Copy)]

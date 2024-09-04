@@ -34,7 +34,7 @@ pub fn codec_benchmark(c: &mut Criterion) {
             |bencher| {
                 bencher.to_async(FuturesExecutor).iter_batched(
                     || opts.clone(),
-                    |opts| opts.run_bench(),
+                    |o| o.run_bench(),
                     BatchSize::SmallInput,
                 );
             },

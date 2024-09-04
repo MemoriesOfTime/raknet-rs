@@ -47,3 +47,44 @@ required-features = ["micro-bench"]
 [profile.bench]
 opt-level = 3
 lto = true
+## WORKSPACE
+
+[lints]
+workspace = true
+
+[workspace.lints.rust]
+keyword_idents = "warn"
+missing_copy_implementations = "warn"
+missing_debug_implementations = "warn"
+non_ascii_idents = "warn"
+noop_method_call = "warn"
+unused_extern_crates = "warn"
+unused_import_braces = "warn"
+
+[workspace.lints.clippy]
+cognitive_complexity = "warn"
+dbg_macro = "warn"
+debug_assert_with_mut_call = "warn"
+doc_link_with_quotes = "warn"
+doc_markdown = "warn"
+empty_line_after_outer_attr = "warn"
+empty_structs_with_brackets = "warn"
+float_cmp = "warn"
+float_cmp_const = "warn"
+float_equality_without_abs = "warn"
+missing_errors_doc = "warn"
+missing_panics_doc = "warn"
+option_if_let_else = "warn"
+print_stderr = "warn"
+print_stdout = "warn"
+semicolon_if_nothing_returned = "warn"
+unseparated_literal_suffix = "warn"
+shadow_unrelated = "warn"
+similar_names = "warn"
+suspicious_operation_groupings = "warn"
+unused_self = "warn"
+use_debug = "warn"
+used_underscore_binding = "warn"
+useless_let_if_seq = "warn"
+wildcard_dependencies = "warn"
+wildcard_imports = "warn"
