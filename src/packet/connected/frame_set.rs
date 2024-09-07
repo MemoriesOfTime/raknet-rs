@@ -390,7 +390,8 @@ impl FrameBody {
             }),
             PackType::DisconnectNotification => Ok(Self::DisconnectNotification),
             PackType::DetectLostConnections => Ok(Self::DetectLostConnections),
-            _ => Ok(Self::User(buf)),
+            _ => Ok(Self::User(buf)), /* we rely on the user to handle this even it is not a user
+                                       * packet */
         }
     }
 

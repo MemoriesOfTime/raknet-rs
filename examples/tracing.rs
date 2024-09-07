@@ -177,7 +177,7 @@ fn display(spans: Vec<SpanRecord>) {
         if list.is_empty() {
             continue;
         }
-        println!("{}", trace_id.0);
+        println!("trace_id: {}", trace_id.0);
         let l = &list[&SpanId::default()];
         for (i, root) in l.iter().enumerate() {
             dfs(&list, &spans_map, *root, 0, i == l.len() - 1);

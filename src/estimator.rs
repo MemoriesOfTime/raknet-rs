@@ -42,6 +42,9 @@ impl RFC6298Impl {
 
     /// The current RTO estimation.
     pub(crate) fn rto(&self) -> Duration {
+        // TODO:
+        // RFC6298 2.4 suggests a minimum of 1 second, which may be
+        // a conservative choice for some applications.
         cmp::max(
             self.get() + cmp::max(TIMER_GRANULARITY, 4 * self.var),
             Duration::from_secs(1),

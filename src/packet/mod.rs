@@ -19,9 +19,9 @@ macro_rules! read_buf {
 
 pub(in crate::packet) use read_buf;
 
-const VALID_FLAG: u8 = 0b1000_0000;
-const ACK_FLAG: u8 = 0b1100_0000;
-const NACK_FLAG: u8 = 0b1010_0000;
+const VALID_FLAG: u8 = 0b1000_0000; // A valid user frame
+const ACK_FLAG: u8 = 0b1100_0000; // A valid user frame which contains an ACK frame
+const NACK_FLAG: u8 = 0b1010_0000; // A valid user frame which contains a NACK frame
 
 const PARTED_FLAG: u8 = 0b0001_0000;
 const CONTINUOUS_SEND_FLAG: u8 = 0b0000_1000;
@@ -38,7 +38,7 @@ pub(crate) const FRAGMENT_PART_SIZE: usize = 10;
 /// others are encapsulated in a `FrameSet` data packet and appear as the first byte of the body
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
-#[allow(dead_code)] // may used in future
+#[allow(dead_code)] // We do not want follow the whole RakNet design
 pub(crate) enum PackType {
     ConnectedPing = 0x00,
     UnconnectedPing1 = 0x01,
@@ -50,6 +50,17 @@ pub(crate) enum PackType {
     OpenConnectionRequest2 = 0x07,
     OpenConnectionReply2 = 0x08,
     ConnectionRequest = 0x09,
+
+    // Some packet related to security, we do not support them now
+    RemoteSystemRequiresPublicKey = 0x0A,
+    OurSystemRequiresSecurity = 0x0B,
+    PublicKeyMismatch = 0x0C,
+    OutOfBandInternal = 0x0D,
+    // Related to `_WITH_ACK_RECEIPT` packets
+    SndReceiptAcked = 0x0E,
+    SndReceiptLoss = 0x0F,
+
+    // User packet types
     ConnectionRequestAccepted = 0x10,
     ConnectionRequestFailed = 0x11,
     AlreadyConnected = 0x12,
@@ -58,6 +69,7 @@ pub(crate) enum PackType {
     DisconnectNotification = 0x15,
     ConnectionLost = 0x16,
     ConnectionBanned = 0x17,
+    InvalidPassword = 0x18,
     IncompatibleProtocolVersion = 0x19,
     IpRecentlyConnected = 0x1a,
     Timestamp = 0x1b,
@@ -85,6 +97,12 @@ impl PackType {
             0x08 => Ok(PackType::OpenConnectionReply2),
             0x09 => Ok(PackType::ConnectionRequest),
             0x10 => Ok(PackType::ConnectionRequestAccepted),
+            0x0A => Ok(PackType::RemoteSystemRequiresPublicKey),
+            0x0B => Ok(PackType::OurSystemRequiresSecurity),
+            0x0C => Ok(PackType::PublicKeyMismatch),
+            0x0D => Ok(PackType::OutOfBandInternal),
+            0x0E => Ok(PackType::SndReceiptAcked),
+            0x0F => Ok(PackType::SndReceiptLoss),
             0x11 => Ok(PackType::ConnectionRequestFailed),
             0x12 => Ok(PackType::AlreadyConnected),
             0x13 => Ok(PackType::NewIncomingConnection),
@@ -92,6 +110,7 @@ impl PackType {
             0x15 => Ok(PackType::DisconnectNotification),
             0x16 => Ok(PackType::ConnectionLost),
             0x17 => Ok(PackType::ConnectionBanned),
+            0x18 => Ok(PackType::InvalidPassword),
             0x19 => Ok(PackType::IncompatibleProtocolVersion),
             0x1a => Ok(PackType::IpRecentlyConnected),
             0x1b => Ok(PackType::Timestamp),

@@ -19,6 +19,7 @@ pub(crate) type SharedLink = Arc<TransferLink>;
 
 /// Transfer data and task between stream and sink.
 pub(crate) struct TransferLink {
+    // incoming ack with receive timestamp
     incoming_ack: ConcurrentQueue<(AckOrNack, Instant)>,
     incoming_nack: ConcurrentQueue<AckOrNack>,
     forward_waking: AtomicBool,
@@ -98,17 +99,19 @@ impl TransferLink {
                 dropped.total_cnt()
             );
         }
-        // wake up after sends ack
+        // wake up after receiving an ack
         if self.should_waking() {
             let c_id = ConnId::new(self.role.guid(), self.peer.guid);
+            let mut cnt = 0;
             for waker in Reactor::get().cancel_all_timers(c_id) {
                 // safe to panic
                 waker.wake();
-                debug!(
-                    "[{}] wake up a certain waker after receives ack on connection: {c_id:?}",
-                    self.role
-                );
+                cnt += 1;
             }
+            debug!(
+                "[{}] wake up {cnt} wakers after receives ack on connection: {c_id:?}",
+                self.role
+            );
         }
     }
 
@@ -173,14 +176,14 @@ impl TransferLink {
     }
 }
 
-/// Router for incoming packets
-pub(crate) struct Router {
+/// A route for incoming packets
+pub(crate) struct Route {
     router_tx: Sender<FrameSet<FramesMut>>,
     link: SharedLink,
     seq_read: u24,
 }
 
-impl Router {
+impl Route {
     pub(crate) fn new(link: SharedLink) -> (Self, impl Stream<Item = FrameSet<FramesMut>>) {
         let (router_tx, router_rx) = async_channel::unbounded();
         (
@@ -200,7 +203,8 @@ impl Router {
         }
         match pack {
             connected::Packet::FrameSet(frames) => {
-                // TODO: use lock free concurrent queue to avoid lock
+                // TODO: use lock free concurrent queue to buffer the outgoing ack/nack to avoid
+                // locking the mutex
 
                 self.link.outgoing_ack.lock().push(Reverse(frames.seq_num));
 

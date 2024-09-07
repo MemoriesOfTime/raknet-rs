@@ -9,7 +9,7 @@ use log::info;
 use tokio::net::UdpSocket;
 
 use crate::client::{self, ConnectTo};
-use crate::opts::{FlushStrategy, TraceInfo};
+use crate::opts::FlushStrategy;
 use crate::server::{self, MakeIncoming};
 use crate::utils::tests::test_trace_log_setup;
 use crate::{Message, Reliability};
@@ -60,7 +60,6 @@ async fn test_tokio_udp_works() {
                     tokio::select! {
                         Some(data) = reader.next() => {
                             sender.feed(Message::new(Reliability::Reliable, 0, data)).await.unwrap();
-                            info!("last trace id: {:?}", reader.last_trace_id());
                         }
                         _ = ticker.tick() => {
                             sender.flush().await.unwrap();

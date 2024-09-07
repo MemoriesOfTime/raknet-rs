@@ -37,12 +37,16 @@ See [examples](examples/) or [integration testing](src/tests.rs) for basic usage
 
 Most operations are performed on `Stream` and `Sink`. There will be some options in [opts](src/opts.rs).
 
+The implementation details are obscured, and you can only see a very high level of abstraction, including the `Error` type, which is just `std::io::Error`.
+
 Keep polling `incoming` because it also serves as the router to every connections.
-Apply `Sink::poll_flush` to IO will trigger to flush all pending packets, `ACK`/`NACK`, and stale packets.
-Apply `Sink::poll_close` to IO will ensure that all data is received by the peer before returning (i.e It may keep resending infinitely.).
+
+Apply `Sink::poll_flush` to IO will trigger to flush all pending packets, `ACK`/`NACK`, and stale packets. So you have to call `poll_flush` periodically. You can configure the [flush strategy](src/opts.rs) you want.
+
+Apply `Sink::poll_close` to IO will ensure that all data is received by the peer before returning. It may keep resending infinitely unless you cancel the task. So you'd better set a timeout for each `poll_close`.
 
 > [!NOTE]
-> All calculations are lazy. You need to decide how long to flush once, and how long to wait when closing before considering the peer is disconnected.
+> All calculations are lazy. The state will not update if you do not poll it.
 
 ```rust
 use bytes::Bytes;

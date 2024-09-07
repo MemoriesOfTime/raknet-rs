@@ -13,7 +13,7 @@ use crate::client::handler::online::HandleOnline;
 use crate::codec::frame::Framed;
 use crate::codec::{Decoded, Encoded};
 use crate::guard::HandleOutgoing;
-use crate::link::{Router, TransferLink};
+use crate::link::{Route, TransferLink};
 use crate::opts::Ping;
 use crate::state::{IncomingStateManage, OutgoingStateManage};
 use crate::utils::Logged;
@@ -57,10 +57,12 @@ impl ConnectTo for TokioUdpSocket {
             .frame_encoded(peer.mtu, config.codec_config(), Arc::clone(&link))
             .manage_outgoing_state(None);
 
-        let (mut router, route) = Router::new(Arc::clone(&link));
+        let (mut router, route) = Route::new(Arc::clone(&link));
 
         tokio::spawn(async move {
             while let Some(pack) = incoming.next().await {
+                // deliver the packet actively so that we do not miss ACK/NACK packets to advance
+                // the outgoing state
                 router.deliver(pack);
             }
         });

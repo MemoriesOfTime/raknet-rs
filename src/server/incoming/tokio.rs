@@ -18,7 +18,7 @@ use super::{Config, MakeIncoming};
 use crate::codec::frame::Framed;
 use crate::codec::{Decoded, Encoded};
 use crate::guard::HandleOutgoing;
-use crate::link::{Router, TransferLink};
+use crate::link::{Route, TransferLink};
 use crate::opts::TraceInfo;
 use crate::server::handler::offline::OfflineHandler;
 use crate::server::handler::online::HandleOnline;
@@ -32,7 +32,7 @@ pin_project! {
         offline: OfflineHandler<Framed<Arc<TokioUdpSocket>>>,
         config: Config,
         socket: Arc<TokioUdpSocket>,
-        routers: HashMap<SocketAddr, Router>,
+        router: HashMap<SocketAddr, Route>,
         close_events: Arc<ConcurrentQueue<SocketAddr>>,
     }
 }
@@ -55,7 +55,7 @@ impl MakeIncoming for TokioUdpSocket {
             ),
             socket,
             config,
-            routers: HashMap::new(),
+            router: HashMap::new(),
             close_events: Arc::new(ConcurrentQueue::unbounded()),
         }
     }
@@ -72,9 +72,10 @@ impl Stream for Incoming {
 
         let role = this.config.server_role();
         for ev in this.close_events.try_iter() {
-            this.routers
+            this.router
                 .remove(&ev)
                 .expect("closed a non-exist connection");
+            // TODO: could we keep the connection alive for a while? 0-RTT handshake?
             this.offline.as_mut().disconnect(&ev);
             debug!("[{role}] connection closed: {ev}");
         }
@@ -83,7 +84,7 @@ impl Stream for Incoming {
             let Some((pack, peer)) = ready!(this.offline.as_mut().poll_next(cx)) else {
                 return Poll::Ready(None);
             };
-            if let Some(entry) = this.routers.get_mut(&peer.addr) {
+            if let Some(entry) = this.router.get_mut(&peer.addr) {
                 if !entry.deliver(pack) {
                     error!("[{role}] connection was dropped before closed");
                 }
@@ -91,9 +92,9 @@ impl Stream for Incoming {
             }
 
             let link = TransferLink::new_arc(role, peer);
-            let (mut entry, route) = Router::new(Arc::clone(&link));
+            let (mut entry, route) = Route::new(Arc::clone(&link));
             entry.deliver(pack);
-            this.routers.insert(peer.addr, entry);
+            this.router.insert(peer.addr, entry);
 
             let dst = Framed::new(Arc::clone(this.socket), this.config.max_mtu as usize)
                 .handle_outgoing(Arc::clone(&link), this.config.send_buf_cap, peer, role)

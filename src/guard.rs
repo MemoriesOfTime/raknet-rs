@@ -362,6 +362,10 @@ impl ResendMap {
 
     /// `process_stales` collect all stale frames into buffer and remove the expired entries
     fn process_stales(&mut self, buffer: &mut VecDeque<Frame>) {
+        if self.map.is_empty() {
+            return;
+        }
+
         let now = Instant::now();
         if now < self.last_record_expired_at {
             trace!(
@@ -384,6 +388,7 @@ impl ResendMap {
             }
         });
         debug_assert!(min_expired_at > now);
+        // update the last record expired at
         self.last_record_expired_at = min_expired_at;
 
         let len = self.map.len();
