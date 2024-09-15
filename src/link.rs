@@ -1,6 +1,6 @@
 use std::cmp::Reverse;
 use std::collections::{BTreeSet, BinaryHeap};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{self, AtomicBool};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -72,18 +72,15 @@ impl TransferLink {
     }
 
     pub(crate) fn turn_on_waking(&self) {
-        self.forward_waking
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.forward_waking.store(true, atomic::Ordering::Relaxed);
     }
 
     fn should_waking(&self) -> bool {
-        self.forward_waking
-            .load(std::sync::atomic::Ordering::Relaxed)
+        self.forward_waking.load(atomic::Ordering::Relaxed)
     }
 
     pub(crate) fn turn_off_waking(&self) {
-        self.forward_waking
-            .store(false, std::sync::atomic::Ordering::Relaxed);
+        self.forward_waking.store(false, atomic::Ordering::Relaxed);
     }
 
     pub(crate) fn incoming_ack(&self, records: AckOrNack) {
@@ -180,6 +177,7 @@ impl TransferLink {
 pub(crate) struct Route {
     router_tx: Sender<FrameSet<FramesMut>>,
     link: SharedLink,
+    // the next expected sequence number
     seq_read: u24,
 }
 
@@ -208,14 +206,16 @@ impl Route {
 
                 self.link.outgoing_ack.lock().push(Reverse(frames.seq_num));
 
-                let mut nack = self.link.outgoing_nack.lock();
-                let seq_num = frames.seq_num;
-                nack.remove(&Reverse(seq_num));
-                let pre_read = self.seq_read;
-                if pre_read <= seq_num {
-                    self.seq_read = seq_num + 1;
-                    for n in pre_read.to_u32()..seq_num.to_u32() {
-                        nack.insert(Reverse(n.into()));
+                {
+                    let mut nack = self.link.outgoing_nack.lock();
+                    let seq_num = frames.seq_num;
+                    nack.remove(&Reverse(seq_num));
+                    let pre_read = self.seq_read;
+                    if pre_read <= seq_num {
+                        self.seq_read = seq_num + 1;
+                        for n in pre_read.to_u32()..seq_num.to_u32() {
+                            nack.insert(Reverse(n.into()));
+                        }
                     }
                 }
 

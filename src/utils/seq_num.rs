@@ -1,7 +1,6 @@
 use bytes::{Buf, BufMut};
 
 /// Unsigned 24bits integer (actually occupied 32 bits) with litter endian and wrapping checking
-/// TODO: Can the sequence number wrap around?
 #[allow(non_camel_case_types)]
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Default)]
 pub(crate) struct u24(u32);

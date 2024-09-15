@@ -41,7 +41,7 @@ impl Reactor {
         REACTOR.get_or_init(|| {
             // Spawn the daemon thread to motivate the reactor.
             thread::Builder::new()
-                .name("timer-reactor".to_string())
+                .name("raknet-timer-reactor".to_string())
                 .spawn(main_loop)
                 .expect("cannot spawn timer-reactor thread");
 

@@ -281,11 +281,11 @@ struct ResendMap {
     role: Role,
     peer: Peer,
     last_record_expired_at: Instant,
-    estimator: Box<dyn Estimator + Send>,
+    estimator: Box<dyn Estimator + Send + Sync + 'static>,
 }
 
 impl ResendMap {
-    fn new(role: Role, peer: Peer, estimator: Box<dyn Estimator + Send>) -> Self {
+    fn new(role: Role, peer: Peer, estimator: Box<dyn Estimator + Send + Sync + 'static>) -> Self {
         Self {
             map: HashMap::new(),
             role,

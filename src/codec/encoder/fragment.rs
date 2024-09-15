@@ -140,10 +140,11 @@ where
                 frame.body.len() <= max_len,
                 "split failed, the frame body is too large"
             );
-            // FIXME: poll_ready is not ensured before send. But it is ok because the next
-            // layer has buffer(ie. next_frame.start_send will always return Ok, and never mess up
-            // data)
-            this.frame.as_mut().start_send(frame)?;
+            // We rely on the underlying sink to handle backpressure
+            this.frame
+                .as_mut()
+                .start_send(frame)
+                .expect("send fragmented frame failed");
         }
 
         if reliability.is_sequenced_or_ordered() {
