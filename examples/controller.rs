@@ -3,21 +3,27 @@
 #![allow(clippy::print_stdout)]
 
 use std::error::Error;
+use std::net::SocketAddr;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::ContextBuilder;
 use std::{cmp, io};
 
+use bytes::Bytes;
+use concurrent_queue::ConcurrentQueue;
 use futures::future::poll_fn;
 use futures::{Sink, SinkExt, StreamExt};
+use raknet_rs::client::{self, ConnectTo};
 use raknet_rs::opts::FlushStrategy;
 use raknet_rs::server::MakeIncoming;
-use raknet_rs::{server, Message};
+use raknet_rs::{server, Message, Reliability};
 use tokio::net::UdpSocket;
 
 /// Self-balancing flush controller
 struct FlushController {
     write: Pin<Box<dyn Sink<Message, Error = io::Error> + Send + Sync + 'static>>,
     next_flush: Option<tokio::time::Instant>,
+    buffer: Arc<ConcurrentQueue<Message>>,
     delay: u64, // us
 }
 
@@ -26,12 +32,13 @@ impl FlushController {
         Self {
             write,
             next_flush: None,
+            buffer: Arc::new(ConcurrentQueue::unbounded()),
             delay: 5_000, // 5ms
         }
     }
 
-    async fn _flush0(&mut self) -> io::Result<()> {
-        self.write.flush().await
+    fn shared_sender(&self) -> Arc<ConcurrentQueue<Message>> {
+        self.buffer.clone()
     }
 
     async fn wait(&self) {
@@ -41,6 +48,12 @@ impl FlushController {
     }
 
     async fn flush(&mut self) -> io::Result<()> {
+        // Drain buffer
+        while let Ok(msg) = self.buffer.pop() {
+            self.write.feed(msg).await?;
+        }
+
+        // Flush
         let mut strategy = FlushStrategy::new(true, true, true);
         poll_fn(|cx| {
             let mut cx = ContextBuilder::from(cx).ext(&mut strategy).build();
@@ -48,7 +61,7 @@ impl FlushController {
         })
         .await?;
 
-        // Adjust delay
+        // A naive exponential backoff algorithm
         if strategy.flushed_ack() + strategy.flushed_nack() + strategy.flushed_pack() > 0 {
             self.delay = cmp::max(self.delay / 2, 5_000);
         } else {
@@ -82,10 +95,26 @@ async fn main() -> Result<(), Box<dyn Error>> {
             tokio::spawn(async move {
                 tokio::pin!(src);
                 let mut controller = FlushController::new(Box::pin(dst));
+                {
+                    let sender1 = controller.shared_sender();
+                    sender1
+                        .push(Message::new(
+                            Reliability::Reliable,
+                            0,
+                            Bytes::from_static(b"Welcome to the server"),
+                        ))
+                        .unwrap();
+                }
+                let sender2 = controller.shared_sender();
                 loop {
                     tokio::select! {
-                        Some(_data) = src.next() => {
-                            // handle data
+                        Some(data) = src.next() => {
+                            // echo back
+                            sender2.push(Message::new(
+                                Reliability::Reliable,
+                                0,
+                                data,
+                            )).unwrap();
                         }
                         _ = controller.wait() => {
                             controller.flush().await.unwrap();
@@ -95,5 +124,41 @@ async fn main() -> Result<(), Box<dyn Error>> {
             });
         }
     });
+    client(local_addr).await?;
+    Ok(())
+}
+
+async fn client(addr: SocketAddr) -> Result<(), Box<dyn Error>> {
+    let socket = UdpSocket::bind("0.0.0.0:0").await?;
+    let (src, dst) = socket
+        .connect_to(
+            addr,
+            client::Config::new()
+                .send_buf_cap(1024)
+                .mtu(1000)
+                .client_guid(1919810)
+                .protocol_version(11),
+        )
+        .await?;
+    tokio::pin!(src);
+    tokio::pin!(dst);
+    dst.send(Message::new(
+        Reliability::ReliableOrdered,
+        0,
+        Bytes::from_static(b"User pack1"),
+    ))
+    .await?;
+    dst.send(Message::new(
+        Reliability::ReliableOrdered,
+        0,
+        Bytes::from_static(b"User pack2"),
+    ))
+    .await?;
+    let pack1 = src.next().await.unwrap();
+    let pack2 = src.next().await.unwrap();
+    let pack3 = src.next().await.unwrap();
+    assert_eq!(pack1, Bytes::from_static(b"Welcome to the server"));
+    assert_eq!(pack2, Bytes::from_static(b"User pack1"));
+    assert_eq!(pack3, Bytes::from_static(b"User pack2"));
     Ok(())
 }
