@@ -4,38 +4,28 @@ use std::task::{ready, Context, Poll};
 
 use bytes::Bytes;
 use futures::Stream;
-use log::debug;
+use log::{debug, trace};
 use pin_project_lite::pin_project;
 
 use crate::link::SharedLink;
 use crate::packet::connected::FrameBody;
 use crate::packet::unconnected;
 use crate::utils::timestamp;
-use crate::Role;
+use crate::{Peer, Role};
 
 pub(crate) trait HandleOnline: Sized {
-    fn handle_online(
-        self,
-        role: Role,
-        client_addr: SocketAddr,
-        link: SharedLink,
-    ) -> OnlineHandler<Self>;
+    fn handle_online(self, role: Role, peer: Peer, link: SharedLink) -> OnlineHandler<Self>;
 }
 
 impl<F> HandleOnline for F
 where
     F: Stream<Item = FrameBody>,
 {
-    fn handle_online(
-        self,
-        role: Role,
-        client_addr: SocketAddr,
-        link: SharedLink,
-    ) -> OnlineHandler<Self> {
+    fn handle_online(self, role: Role, peer: Peer, link: SharedLink) -> OnlineHandler<Self> {
         OnlineHandler {
             frame: self,
             role,
-            client_addr,
+            peer,
             state: HandshakeState::WaitConnRequest,
             link,
         }
@@ -47,7 +37,7 @@ pin_project! {
         #[pin]
         frame: F,
         role: Role,
-        client_addr: SocketAddr,
+        peer: Peer,
         state: HandshakeState,
         link: SharedLink,
     }
@@ -88,7 +78,7 @@ where
                             );
                             continue;
                         }
-                        let system_addr = if this.client_addr.is_ipv6() {
+                        let system_addr = if this.peer.addr.is_ipv6() {
                             SocketAddr::new(
                                 std::net::IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0)),
                                 0,
@@ -98,7 +88,7 @@ where
                         };
                         this.link
                             .send_frame_body(FrameBody::ConnectionRequestAccepted {
-                                client_address: *this.client_addr,
+                                client_address: this.peer.addr,
                                 system_index: 0,
                                 system_addresses: [system_addr; 20],
                                 request_timestamp,
@@ -136,6 +126,11 @@ where
                     };
                     match body {
                         FrameBody::ConnectedPing { client_timestamp } => {
+                            trace!(
+                                "[{}] receive ConnectedPing from {}, send ConnectedPong back",
+                                this.role,
+                                this.peer
+                            );
                             this.link.send_frame_body(FrameBody::ConnectedPong {
                                 client_timestamp,
                                 server_timestamp: timestamp(),

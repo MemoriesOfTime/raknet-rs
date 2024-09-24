@@ -71,10 +71,10 @@ pub(crate) enum PackType {
     ConnectionBanned = 0x17,
     InvalidPassword = 0x18,
     IncompatibleProtocolVersion = 0x19,
-    IpRecentlyConnected = 0x1a,
-    Timestamp = 0x1b,
-    UnconnectedPong = 0x1c,
-    AdvertiseSystem = 0x1d,
+    IpRecentlyConnected = 0x1A,
+    Timestamp = 0x1B,
+    UnconnectedPong = 0x1C,
+    AdvertiseSystem = 0x1D,
 
     /// The types of these three packets form a range, and only the one with the flag will be used
     /// here.
@@ -139,20 +139,6 @@ impl PackType {
     }
 }
 
-impl TryFrom<u8> for PackType {
-    type Error = CodecError;
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        Self::from_u8(value)
-    }
-}
-
-impl From<PackType> for u8 {
-    fn from(value: PackType) -> Self {
-        value as u8
-    }
-}
-
 /// Raknet packet
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum Packet<S> {
@@ -182,7 +168,7 @@ impl Packet<FramesMut> {
     }
 
     pub(crate) fn read(buf: &mut BytesMut) -> Result<Self, CodecError> {
-        let pack_type: PackType = read_buf!(buf, 1, buf.get_u8().try_into()?);
+        let pack_type: PackType = read_buf!(buf, 1, PackType::from_u8(buf.get_u8())?);
         if pack_type.is_frame_set() {
             return Ok(Self::Connected(connected::Packet::read_frame_set(buf)?));
         }
@@ -235,7 +221,7 @@ impl Packet<FramesMut> {
                 unconnected::Packet::read_open_connection_request2(buf)
             }
             PackType::OpenConnectionReply2 => unconnected::Packet::read_open_connection_reply2(buf),
-            _ => Err(CodecError::InvalidPacketType(pack_type.into())),
+            _ => Err(CodecError::InvalidPacketType(pack_type as u8)),
         }
         .map(Self::Unconnected)
     }

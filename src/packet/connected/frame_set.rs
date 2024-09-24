@@ -65,7 +65,8 @@ impl<B: Buf> std::fmt::Debug for Frame<B> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // better for debug printing
         fn to_hex_string(bytes: &[u8]) -> String {
-            let mut s = String::with_capacity(bytes.len() * 2);
+            let mut s = String::with_capacity(bytes.len() * 2 + 2);
+            s.push_str("0x");
             for &byte in bytes {
                 s.push_str(&format!("{:02x}", byte));
             }
@@ -344,6 +345,7 @@ impl FrameBody {
 
         // checked in FrameSet, length is always greater than 0
         let Ok(id) = PackType::from_u8(buf.chunk()[0]) else {
+            // if we cannot recognize the packet type, it should be a user packet
             return Ok(Self::User(buf));
         };
 
@@ -390,6 +392,7 @@ impl FrameBody {
             }),
             PackType::DisconnectNotification => Ok(Self::DisconnectNotification),
             PackType::DetectLostConnections => Ok(Self::DetectLostConnections),
+            // TODO: more raknet features
             _ => Ok(Self::User(buf)), /* we rely on the user to handle this even it is not a user
                                        * packet */
         }

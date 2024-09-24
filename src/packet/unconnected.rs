@@ -162,7 +162,7 @@ impl Packet {
 
     pub(crate) fn write(self, buf: &mut BytesMut) {
         // Fixed id (type)
-        buf.put_u8(self.pack_type().into());
+        buf.put_u8(self.pack_type() as u8);
         match self {
             Packet::UnconnectedPing {
                 send_timestamp,

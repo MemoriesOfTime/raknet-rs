@@ -158,8 +158,7 @@ where
                     }
                     debug!(
                         "[{}] ignore packet {:?} from unconnected client {addr}",
-                        this.role,
-                        pack.pack_type()
+                        this.role, pack
                     );
                     *this.state = OfflineState::SendingPrepare(Some((
                         Self::make_connection_request_failed(this.config),

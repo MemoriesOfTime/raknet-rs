@@ -111,7 +111,7 @@ impl Stream for Incoming {
                     move |err| error!("[{role}] decode error: {err} from {peer}"),
                 )
                 .manage_incoming_state()
-                .handle_online(role, peer.addr, Arc::clone(&link))
+                .handle_online(role, peer, Arc::clone(&link))
                 .enter_on_item(move || {
                     Span::root("online", SpanContext::random()).with_properties(|| {
                         [

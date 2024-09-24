@@ -73,7 +73,7 @@ impl FlushStrategy {
     /// It will panic if ack flush is not enabled.
     pub fn flushed_ack(&self) -> usize {
         assert!(
-            self.ack_tag >= 0,
+            self.ack_tag != -1,
             "you should enable flush ack before checking result of flushed ack"
         );
         self.ack_tag as usize
@@ -85,7 +85,7 @@ impl FlushStrategy {
     /// It will panic if nack flush is not enabled.
     pub fn flushed_nack(&self) -> usize {
         assert!(
-            self.nack_tag >= 0,
+            self.nack_tag != -1,
             "you should enable flush nack before checking result of flushed nack"
         );
         self.nack_tag as usize
@@ -97,7 +97,7 @@ impl FlushStrategy {
     /// It will panic if pack flush is not enabled.
     pub fn flushed_pack(&self) -> usize {
         assert!(
-            self.pack_tag >= 0,
+            self.pack_tag != -1,
             "you should enable flush pack before checking result of flushed pack"
         );
         self.pack_tag as usize
@@ -133,20 +133,20 @@ impl FlushStrategy {
         if self.ack_tag == -1 {
             return;
         }
-        self.ack_tag = cnt as isize;
+        self.ack_tag += cnt as isize;
     }
 
     pub(crate) fn mark_flushed_nack(&mut self, cnt: usize) {
         if self.nack_tag == -1 {
             return;
         }
-        self.nack_tag = cnt as isize;
+        self.nack_tag += cnt as isize;
     }
 
     pub(crate) fn mark_flushed_pack(&mut self, cnt: usize) {
         if self.pack_tag == -1 {
             return;
         }
-        self.pack_tag = cnt as isize;
+        self.pack_tag += cnt as isize;
     }
 }

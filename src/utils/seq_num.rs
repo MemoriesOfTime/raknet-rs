@@ -1,9 +1,47 @@
+use std::{fmt, ops};
+
 use bytes::{Buf, BufMut};
 
 /// Unsigned 24bits integer (actually occupied 32 bits) with litter endian and wrapping checking
 #[allow(non_camel_case_types)]
-#[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Default)]
+#[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Default)]
 pub(crate) struct u24(u32);
+
+impl fmt::Debug for u24 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl fmt::Display for u24 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl fmt::Binary for u24 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:b}", self.0)
+    }
+}
+
+impl fmt::Octal for u24 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:o}", self.0)
+    }
+}
+
+impl fmt::LowerHex for u24 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:x}", self.0)
+    }
+}
+
+impl fmt::UpperHex for u24 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:X}", self.0)
+    }
+}
 
 impl u24 {
     pub(crate) fn to_u32(self) -> u32 {
@@ -70,12 +108,6 @@ impl<B: BufMut> BufMutExt for B {
     }
 }
 
-impl core::fmt::Display for u24 {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
 ///// Checked operations for u24
 
 fn checked_add(a: u32, b: u32) -> u24 {
@@ -84,7 +116,7 @@ fn checked_add(a: u32, b: u32) -> u24 {
     u24(value)
 }
 
-impl core::ops::Add<&u24> for &u24 {
+impl ops::Add<&u24> for &u24 {
     type Output = u24;
 
     fn add(self, rhs: &u24) -> Self::Output {
@@ -92,7 +124,7 @@ impl core::ops::Add<&u24> for &u24 {
     }
 }
 
-impl core::ops::Add<&u24> for u24 {
+impl ops::Add<&u24> for u24 {
     type Output = u24;
 
     fn add(self, rhs: &u24) -> Self::Output {
@@ -100,7 +132,7 @@ impl core::ops::Add<&u24> for u24 {
     }
 }
 
-impl core::ops::Add<u24> for &u24 {
+impl ops::Add<u24> for &u24 {
     type Output = u24;
 
     fn add(self, rhs: u24) -> Self::Output {
@@ -108,7 +140,7 @@ impl core::ops::Add<u24> for &u24 {
     }
 }
 
-impl core::ops::Add<u24> for u24 {
+impl ops::Add<u24> for u24 {
     type Output = u24;
 
     fn add(self, rhs: u24) -> Self::Output {
@@ -121,7 +153,7 @@ impl core::ops::Add<u24> for u24 {
 macro_rules! impl_add_for_u24 {
     ($($t:ty),*) => {
         $(
-            impl core::ops::Add<$t> for u24 {
+            impl ops::Add<$t> for u24 {
                 type Output = u24;
 
                 fn add(self, rhs: $t) -> Self::Output {
@@ -129,7 +161,7 @@ macro_rules! impl_add_for_u24 {
                 }
             }
 
-            impl core::ops::Add<$t> for &u24 {
+            impl ops::Add<$t> for &u24 {
                 type Output = u24;
 
                 fn add(self, rhs: $t) -> Self::Output {
@@ -142,14 +174,14 @@ macro_rules! impl_add_for_u24 {
 
 for_all_primitives! { impl_add_for_u24 }
 
-impl core::ops::AddAssign<&u24> for u24 {
+impl ops::AddAssign<&u24> for u24 {
     fn add_assign(&mut self, rhs: &u24) {
         self.0 += rhs.0;
         assert!((self.0 >> 24) == 0, "{self} exceed the maximum of u24");
     }
 }
 
-impl core::ops::AddAssign<u24> for u24 {
+impl ops::AddAssign<u24> for u24 {
     fn add_assign(&mut self, rhs: u24) {
         self.0 += rhs.0;
         assert!((self.0 >> 24) == 0, "{self} exceed the maximum of u24");
@@ -161,7 +193,7 @@ impl core::ops::AddAssign<u24> for u24 {
 macro_rules! impl_add_assign_for_u24 {
     ($($t:ty),*) => {
         $(
-            impl core::ops::AddAssign<$t> for u24 {
+            impl ops::AddAssign<$t> for u24 {
                 fn add_assign(&mut self, rhs: $t) {
                     self.0 += rhs as u32;
                     assert!((self.0 >> 24) == 0, "{self} exceed the maximum of u24");
@@ -173,7 +205,7 @@ macro_rules! impl_add_assign_for_u24 {
 
 for_all_primitives! { impl_add_assign_for_u24 }
 
-impl core::ops::Sub<&u24> for &u24 {
+impl ops::Sub<&u24> for &u24 {
     type Output = u24;
 
     fn sub(self, rhs: &u24) -> Self::Output {
@@ -181,7 +213,7 @@ impl core::ops::Sub<&u24> for &u24 {
     }
 }
 
-impl core::ops::Sub<u24> for &u24 {
+impl ops::Sub<u24> for &u24 {
     type Output = u24;
 
     fn sub(self, rhs: u24) -> Self::Output {
@@ -189,7 +221,7 @@ impl core::ops::Sub<u24> for &u24 {
     }
 }
 
-impl core::ops::Sub<&u24> for u24 {
+impl ops::Sub<&u24> for u24 {
     type Output = u24;
 
     fn sub(self, rhs: &u24) -> Self::Output {
@@ -197,7 +229,7 @@ impl core::ops::Sub<&u24> for u24 {
     }
 }
 
-impl core::ops::Sub<u24> for u24 {
+impl ops::Sub<u24> for u24 {
     type Output = u24;
 
     fn sub(self, rhs: u24) -> Self::Output {
@@ -210,7 +242,7 @@ impl core::ops::Sub<u24> for u24 {
 macro_rules! impl_sub_for_u24 {
     ($($t:ty),*) => {
         $(
-            impl core::ops::Sub<$t> for &u24 {
+            impl ops::Sub<$t> for &u24 {
                 type Output = u24;
 
                 fn sub(self, rhs: $t) -> Self::Output {
@@ -218,7 +250,7 @@ macro_rules! impl_sub_for_u24 {
                 }
             }
 
-            impl core::ops::Sub<$t> for u24 {
+            impl ops::Sub<$t> for u24 {
                 type Output = u24;
 
                 fn sub(self, rhs: $t) -> Self::Output {
@@ -231,13 +263,13 @@ macro_rules! impl_sub_for_u24 {
 
 for_all_primitives! { impl_sub_for_u24 }
 
-impl core::ops::SubAssign<&u24> for u24 {
+impl ops::SubAssign<&u24> for u24 {
     fn sub_assign(&mut self, rhs: &u24) {
         self.0 -= rhs.0;
     }
 }
 
-impl core::ops::SubAssign<u24> for u24 {
+impl ops::SubAssign<u24> for u24 {
     fn sub_assign(&mut self, rhs: u24) {
         self.0 -= rhs.0;
     }
@@ -246,7 +278,7 @@ impl core::ops::SubAssign<u24> for u24 {
 macro_rules! impl_sub_assign_for_u24 {
     ($($t:ty),*) => {
         $(
-            impl core::ops::SubAssign<$t> for u24 {
+            impl ops::SubAssign<$t> for u24 {
                 fn sub_assign(&mut self, rhs: $t) {
                     self.0 -= rhs as u32;
                 }
