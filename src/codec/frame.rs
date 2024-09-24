@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
-use bytes::{Buf, BytesMut};
+use bytes::BytesMut;
 use fastrace::{Event, Span};
 use futures::{Sink, Stream};
 use log::error;
@@ -142,9 +142,7 @@ impl<T: AsyncSocket> Stream for Framed<T> {
 }
 
 /// The `Sink` implementation for cheap buffer cloning (i.e. `bytes::Bytes`).
-impl<'a, B: Buf + Clone, T: AsyncSocket> Sink<(Packet<FramesRef<'a, B>>, SocketAddr)>
-    for Framed<T>
-{
+impl<'a, T: AsyncSocket> Sink<(Packet<FramesRef<'a>>, SocketAddr)> for Framed<T> {
     type Error = io::Error;
 
     fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -153,7 +151,7 @@ impl<'a, B: Buf + Clone, T: AsyncSocket> Sink<(Packet<FramesRef<'a, B>>, SocketA
 
     fn start_send(
         self: Pin<&mut Self>,
-        item: (Packet<FramesRef<'a, B>>, SocketAddr),
+        item: (Packet<FramesRef<'a>>, SocketAddr),
     ) -> Result<(), Self::Error> {
         let (frame, out_addr) = item;
 

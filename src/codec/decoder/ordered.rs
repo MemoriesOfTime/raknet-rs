@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
-use bytes::Buf;
 use fastrace::{Event, Span};
 use futures::Stream;
 use log::warn;
@@ -14,12 +13,12 @@ use crate::utils::u24;
 
 const INITIAL_ORDERING_MAP_CAP: usize = 64;
 
-struct Ordering<B> {
-    map: HashMap<u24, FrameSet<Frame<B>>>,
+struct Ordering {
+    map: HashMap<u24, FrameSet<Frame>>,
     read: u24,
 }
 
-impl<B> Default for Ordering<B> {
+impl Default for Ordering {
     fn default() -> Self {
         Self {
             map: HashMap::with_capacity(INITIAL_ORDERING_MAP_CAP),
@@ -30,25 +29,25 @@ impl<B> Default for Ordering<B> {
 
 pin_project! {
     // Ordering layer, ordered the packets based on ordering_frame_index.
-    pub(crate) struct Order<F, B> {
+    pub(crate) struct Order<F> {
         #[pin]
         frame: F,
         // Max ordered channel that will be used in detailed protocol
         max_channels: usize,
-        ordering: Vec<Ordering<B>>,
+        ordering: Vec<Ordering>,
         span: Option<Span>,
     }
 }
 
-pub(crate) trait Ordered<B: Buf>: Sized {
-    fn ordered(self, max_channels: usize) -> Order<Self, B>;
+pub(crate) trait Ordered: Sized {
+    fn ordered(self, max_channels: usize) -> Order<Self>;
 }
 
-impl<F, B: Buf> Ordered<B> for F
+impl<F> Ordered for F
 where
-    F: Stream<Item = Result<FrameSet<Frame<B>>, CodecError>>,
+    F: Stream<Item = Result<FrameSet<Frame>, CodecError>>,
 {
-    fn ordered(self, max_channels: usize) -> Order<Self, B> {
+    fn ordered(self, max_channels: usize) -> Order<Self> {
         assert!(
             max_channels < usize::from(u8::MAX),
             "max channels should not be larger than u8::MAX"
@@ -66,11 +65,11 @@ where
     }
 }
 
-impl<F, B> Stream for Order<F, B>
+impl<F> Stream for Order<F>
 where
-    F: Stream<Item = Result<FrameSet<Frame<B>>, CodecError>>,
+    F: Stream<Item = Result<FrameSet<Frame>, CodecError>>,
 {
-    type Item = Result<FrameSet<Frame<B>>, CodecError>;
+    type Item = Result<FrameSet<Frame>, CodecError>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();

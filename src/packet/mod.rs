@@ -146,7 +146,7 @@ pub(crate) enum Packet<S> {
     Connected(connected::Packet<S>),
 }
 
-impl<'a, B: Buf + Clone> Packet<FramesRef<'a, B>> {
+impl<'a> Packet<FramesRef<'a>> {
     pub(crate) fn write(self, buf: &mut BytesMut) {
         match self {
             Packet::Unconnected(packet) => {

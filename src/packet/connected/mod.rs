@@ -1,4 +1,4 @@
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::{BufMut, BytesMut};
 
 use crate::errors::CodecError;
 use crate::packet::PackType;
@@ -38,7 +38,7 @@ impl<S> Packet<S> {
 }
 
 /// For cheap buffers cloning (i.e. `bytes::Bytes`)
-impl<'a, B: Buf + Clone> Packet<FramesRef<'a, B>> {
+impl<'a> Packet<FramesRef<'a>> {
     pub(crate) fn write(self, buf: &mut BytesMut) {
         match self {
             Packet::FrameSet(frame) => {

@@ -10,12 +10,12 @@ use crate::packet::{
 use crate::utils::{u24, BufExt, BufMutExt};
 use crate::Reliability;
 
-pub(crate) type Frames<B = Bytes> = Vec<Frame<B>>;
+pub(crate) type Frames = Vec<Frame>;
 
 // Cheap slice of a frames vector to reduce heap allocation
-pub(crate) type FramesRef<'a, B = Bytes> = &'a [Frame<B>];
+pub(crate) type FramesRef<'a> = &'a [Frame];
 
-pub(crate) type FramesMut = Frames<BytesMut>;
+pub(crate) type FramesMut = Vec<Frame<BytesMut>>;
 
 pub(crate) type FrameMut = Frame<BytesMut>;
 
@@ -42,7 +42,7 @@ impl FrameSet<FramesMut> {
     }
 }
 
-impl<'a, B: Buf + Clone> FrameSet<FramesRef<'a, B>> {
+impl<'a> FrameSet<FramesRef<'a>> {
     pub(super) fn write(self, buf: &mut BytesMut) {
         buf.put_u24_le(self.seq_num);
         for frame in self.set {
@@ -144,19 +144,8 @@ impl FrameMut {
     }
 }
 
-impl<B: Buf> Frame<B> {
-    /// Get the total size of this frame
-    pub(crate) fn size(&self) -> usize {
-        let mut size = self.flags.reliability.size();
-        if self.fragment.is_some() {
-            size += FRAGMENT_PART_SIZE;
-        }
-        size += self.body.remaining();
-        size
-    }
-}
-
-impl<B: Buf + Clone> Frame<B> {
+impl Frame {
+    // Write without taking ownership
     fn write_ref(&self, buf: &mut BytesMut) {
         self.flags.write(buf);
         // length in bits
@@ -179,6 +168,18 @@ impl<B: Buf + Clone> Frame<B> {
             fragment.write(buf);
         }
         buf.put(self.body.clone()); // Cheap cloning
+    }
+}
+
+impl<B: Buf> Frame<B> {
+    /// Get the total size of this frame
+    pub(crate) fn size(&self) -> usize {
+        let mut size = self.flags.reliability.size();
+        if self.fragment.is_some() {
+            size += FRAGMENT_PART_SIZE;
+        }
+        size += self.body.remaining();
+        size
     }
 }
 

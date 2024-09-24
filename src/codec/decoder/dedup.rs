@@ -6,7 +6,7 @@ use futures::Stream;
 use pin_project_lite::pin_project;
 
 use crate::errors::CodecError;
-use crate::packet::connected::{FrameSet, Frames};
+use crate::packet::connected::{FrameSet, FramesMut};
 use crate::utils::{u24, BitVecQueue};
 
 /// The deduplication window. For each connect, the maximum size is
@@ -66,9 +66,9 @@ pub(crate) trait Deduplicated: Sized {
     fn deduplicated(self) -> Dedup<Self>;
 }
 
-impl<F, B> Deduplicated for F
+impl<F> Deduplicated for F
 where
-    F: Stream<Item = Result<FrameSet<Frames<B>>, CodecError>>,
+    F: Stream<Item = Result<FrameSet<FramesMut>, CodecError>>,
 {
     fn deduplicated(self) -> Dedup<Self> {
         Dedup {
@@ -79,11 +79,11 @@ where
     }
 }
 
-impl<F, B> Stream for Dedup<F>
+impl<F> Stream for Dedup<F>
 where
-    F: Stream<Item = Result<FrameSet<Frames<B>>, CodecError>>,
+    F: Stream<Item = Result<FrameSet<FramesMut>, CodecError>>,
 {
-    type Item = Result<FrameSet<Frames<B>>, CodecError>;
+    type Item = Result<FrameSet<FramesMut>, CodecError>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
@@ -115,7 +115,7 @@ where
 mod test {
     use std::ops::Sub;
 
-    use bytes::Bytes;
+    use bytes::BytesMut;
     use futures::StreamExt;
     use futures_async_stream::stream;
     use indexmap::IndexSet;
@@ -172,7 +172,7 @@ mod test {
         assert_eq!(window.received_status.len(), 0);
     }
 
-    fn frame_set(idx: impl IntoIterator<Item = u32>) -> FrameSet<Frames> {
+    fn frame_set(idx: impl IntoIterator<Item = u32>) -> FrameSet<FramesMut> {
         FrameSet {
             seq_num: 0.into(),
             set: idx
@@ -183,7 +183,7 @@ mod test {
                     seq_frame_index: None,
                     ordered: None,
                     fragment: None,
-                    body: Bytes::new(),
+                    body: BytesMut::new(),
                 })
                 .collect(),
         }

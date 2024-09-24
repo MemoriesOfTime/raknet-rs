@@ -274,7 +274,7 @@ where
 mod test {
     use std::collections::VecDeque;
 
-    use connected::{FrameSet, Frames};
+    use connected::FrameSet;
     use futures::StreamExt;
 
     use super::*;
@@ -360,7 +360,7 @@ mod test {
             .chain(std::iter::once(Packet::Connected(
                 connected::Packet::FrameSet(FrameSet {
                     seq_num: 0.into(),
-                    set: Frames::new(),
+                    set: FramesMut::new(),
                 }),
             )))
             .collect(),
@@ -420,7 +420,7 @@ mod test {
             addr: "0.0.0.2:1".parse().unwrap(),
             source: vec![Packet::Connected(connected::Packet::FrameSet(FrameSet {
                 seq_num: 0.into(),
-                set: Frames::new(),
+                set: FramesMut::new(),
             }))]
             .into_iter()
             .collect(),
