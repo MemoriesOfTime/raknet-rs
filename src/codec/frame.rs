@@ -12,6 +12,28 @@ use super::AsyncSocket;
 use crate::packet::connected::{FramesMut, FramesRef};
 use crate::packet::{unconnected, Packet};
 
+/// `Framed` is a base structure for socket communication.
+/// In this project, it wraps an asynchronous UDP socket and implements the
+/// [`Stream`](futures::stream::Stream) and [`Sink`](futures::sink::Sink) traits.
+/// This allows for reading and writing RakNet frames over the socket.
+/// It supports receiving both unconnected and connected packets, but can only send unconnected
+/// packets. This design separates the offline and online packet handlers.
+///
+/// Properties:
+///
+/// * `socket`: The underlying socket that is being wrapped.
+/// * `max_mtu`: [maximum transmission unit](https://en.wikipedia.org/wiki/Maximum_transmission_unit),
+/// used to pre-allocate the capacity for both the `rd` and `wr` byte buffers
+/// * `rd`: a buffer for storing incoming data read from the socket.
+/// * `wr`: a buffer for writing bytes
+/// * `out_addr`: The socket address to which the data will be sent
+/// * `flushed`: a boolean flag that indicates whether the data has been sent to the peer, and the
+///   `wr` buffer has been cleared
+/// * `is_readable`: a boolean flag indicates whether data has been read from the peer and written
+///   into the `rd` buffer. When `true`, it signifies that the data is ready for frame packet
+///   decoding and will be passed to the upper layer for further processing.
+/// * `current_addr`: the address of the current peer
+/// * `decode_span`, `read_span`: two spans for tracking encoding and decoding.
 pub(crate) struct Framed<T> {
     socket: T,
     max_mtu: usize,

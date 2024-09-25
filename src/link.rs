@@ -17,7 +17,26 @@ use crate::{Peer, Role};
 /// Shared link between stream and sink
 pub(crate) type SharedLink = Arc<TransferLink>;
 
-/// Transfer data and task between stream and sink.
+/// The `TransferLink` is an visitor structure that temporarily holds various types of transfer
+/// link data, such as received `AckOrNack`, sequences of pending response sequence numbers, and
+/// packets ready to send like `unconnected::Packet` and `FrameBody`.
+/// It provides methods for compressing sequence numbers into `AckOrNack` as well as access to other
+/// data within the link.
+///
+/// Properties:
+///
+/// * `incoming_ack`: the received ACK packet.
+/// * `incoming_nack`:  the received NACK packet.
+/// * `forward_waking`: the flag is set to `true` when the `OutgoingGuard` is closed,
+/// and there are still reliable packets awaiting ACK (needing resend).
+/// In this state, the close operation will sleep until an ACK is received to wake it,
+/// after which the flag will be reset to `false`.
+/// * `outgoing_ack`: Pending ACK packets to be sent.
+/// * `outgoing_nack`: Pending NACK packets to be sent.
+/// * `unconnected`: data related to unconnected packets awaiting processing.
+/// * `frame_body`: data for the frame body that is yet to be handled.
+/// * `role`: [`Role`]
+/// * `peer`: [`Peer`]
 pub(crate) struct TransferLink {
     // incoming ack with receive timestamp
     incoming_ack: ConcurrentQueue<(AckOrNack, Instant)>,
@@ -173,7 +192,16 @@ impl TransferLink {
     }
 }
 
-/// A route for incoming packets
+/// `Route` is an intermediary structure that wraps a `TransferLink`, providing the functionality to
+/// `deliver` different types of data frames.
+///
+/// Properties:
+///
+/// * `router_tx`: `Route` create an asynchronous channel, splitting it into a sender and a
+///   receiver, with the receiver being returned in the `new` method. This is the sender part of the
+///   asynchronous channel.
+/// * `link`: be wrapped [`TransferLink`]
+/// * `seq_read`:the next expected sequence number for incoming frames on this route
 pub(crate) struct Route {
     router_tx: Sender<FrameSet<FramesMut>>,
     link: SharedLink,

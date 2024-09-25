@@ -30,7 +30,12 @@ impl std::fmt::Debug for AckOrNack {
 }
 
 impl AckOrNack {
-    /// Extend a packet from a sorted sequence numbers iterator based on mtu.
+    /// This function implements **Sequence Number Compression** on an `Iterator<u24>`. Consecutive
+    /// sequence numbers are grouped into `Record::Range`, while non-consecutive sequence
+    /// numbers are stored as `Record::Single`. This approach reduces the data payload size.
+    ///
+    /// - A `Record::Range` consumes 7 bytes.
+    /// - A `Record::Single` consumes 4 bytes.
     pub(crate) fn extend_from<I: Iterator<Item = u24>>(
         mut sorted_seq_nums: I,
         mut mtu: u16,

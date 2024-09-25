@@ -27,6 +27,13 @@ pub(crate) struct Config {
     pub(crate) max_pending: usize,
 }
 
+/// Implements a simple `OfflineHandler` state machine to process sink requests.
+/// - When in the `Listening` state, no additional processing is done.
+/// - When in the `SendingPrepare` state, the enum holds the packet to be sent and the target address.
+///   It will call the underlying `Framed::poll_ready` and `Framed::start_send` to prepare and send the data.
+///   After that, the state is set to `SendingFlush`.
+/// - When in the `SendingFlush` state, it calls the underlying `Framed::poll_flush` to flush the data 
+///   and then resets the state back to `Listening`.
 enum OfflineState {
     Listening,
     SendingPrepare(Option<(unconnected::Packet, SocketAddr)>),
@@ -34,7 +41,29 @@ enum OfflineState {
 }
 
 pin_project! {
-    /// OfflineHandler takes the codec frame and perform offline handshake.
+    /// `OfflineHandler` is a server handler that implements the RakNet offline handshake protocol.
+    /// It acts as an upper layer processor for [`Framed`](crate::codec::frame::Framed).
+    /// `OfflineHandler` implements the [`Stream`](futures::stream::Stream) interface and handles the responses
+    /// for data packets such as `UnconnectedPing`, `OpenConnectionRequest1`, and
+    /// `OpenConnectionRequest2`. For the specific protocol sequence, please refer to
+    /// [RakNet Protocol Documentation](https://github.com/vp817/RakNetProtocolDoc?tab=readme-ov-file#server).
+    ///
+    /// Properties:
+    ///
+    /// * `frame`: [`Framed`](crate::codec::frame::Framed) is responsible for decoding raw data
+    /// from the UDP socket into RakNet frames.
+    /// * `config`: stores various transmission configurations, specifically refer in [`Config`].
+    /// * `pending`: A half-connected queue implemented using [`lru::LruCache`].
+    /// At this point, the connection is in the OpenConnectionRequest1 stage,
+    /// and it will be popped out during the OpenConnectionRequest2
+    /// or when the connection is disconnected.
+    /// * `connected`: A `HashMap<SocketAddr, Peer>` that caches connections 
+    /// in the OpenConnectionRequest2 stage and is cleaned up on disconnection. 
+    /// The `connected` map is used to check if a `Peer` has completed the connection 
+    /// from the socket.
+    /// * `state`: [`OfflineState`]
+    /// * `role`: [`Role`]
+    /// * `read_span`: A trace span.
     pub(crate) struct OfflineHandler<F> {
         #[pin]
         frame: F,
