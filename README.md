@@ -25,6 +25,7 @@ Yet another project rewritten in Rust.
 - Documentation
 - Simulation testing
 - Bulk benchmark
+- AF_XDP socket & XDP redirect from UDP
 - Optimize performance for single thread runtime (IO without Send)
 - Robust client implementation
 - Use stable rust toolchain (~~I like nightly~~)
