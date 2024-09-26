@@ -22,31 +22,25 @@ pub(crate) type SharedLink = Arc<TransferLink>;
 /// packets ready to send like `unconnected::Packet` and `FrameBody`.
 /// It provides methods for compressing sequence numbers into `AckOrNack` as well as access to other
 /// data within the link.
-///
-/// Properties:
-///
-/// * `incoming_ack`: the received ACK packet.
-/// * `incoming_nack`:  the received NACK packet.
-/// * `forward_waking`: the flag is set to `true` when the `OutgoingGuard` is closed,
-/// and there are still reliable packets awaiting ACK (needing resend).
-/// In this state, the close operation will sleep until an ACK is received to wake it,
-/// after which the flag will be reset to `false`.
-/// * `outgoing_ack`: Pending ACK packets to be sent.
-/// * `outgoing_nack`: Pending NACK packets to be sent.
-/// * `unconnected`: data related to unconnected packets awaiting processing.
-/// * `frame_body`: data for the frame body that is yet to be handled.
-/// * `role`: [`Role`]
-/// * `peer`: [`Peer`]
 pub(crate) struct TransferLink {
-    // incoming ack with receive timestamp
+    /// incoming ack with receive timestamp
     incoming_ack: ConcurrentQueue<(AckOrNack, Instant)>,
+    /// incoming Nack packet.
     incoming_nack: ConcurrentQueue<AckOrNack>,
+    /// the flag is set to `true` when the `OutgoingGuard` is closed,
+    /// and there are still reliable packets awaiting ACK (needing resend).
+    /// In this state, the close operation will sleep until an ACK is received to wake it,
+    /// after which the flag will be reset to `false`.
     forward_waking: AtomicBool,
 
+    /// pending ACK packets to be sent.
     outgoing_ack: parking_lot::Mutex<BinaryHeap<Reverse<u24>>>,
+    /// pending NACK packets to be sent.
     outgoing_nack: parking_lot::Mutex<BTreeSet<Reverse<u24>>>,
 
+    /// data related to unconnected packets awaiting processing.
     unconnected: ConcurrentQueue<unconnected::Packet>,
+    /// data for the frame body that is yet to be handled.
     frame_body: ConcurrentQueue<FrameBody>,
 
     role: Role,
