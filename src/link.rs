@@ -188,18 +188,13 @@ impl TransferLink {
 
 /// `Route` is an intermediary structure that wraps a `TransferLink`, providing the functionality to
 /// `deliver` different types of data frames.
-///
-/// Properties:
-///
-/// * `router_tx`: `Route` create an asynchronous channel, splitting it into a sender and a
-///   receiver, with the receiver being returned in the `new` method. This is the sender part of the
-///   asynchronous channel.
-/// * `link`: be wrapped [`TransferLink`]
-/// * `seq_read`:the next expected sequence number for incoming frames on this route
 pub(crate) struct Route {
+    /// `Route` create an asynchronous channel, splitting it into a sender and a
+    ///   receiver, with the receiver being returned in the `new` method. This is the sender part
+    /// of the   asynchronous channel.
     router_tx: Sender<FrameSet<FramesMut>>,
     link: SharedLink,
-    // the next expected sequence number
+    // the next expected sequence number for incoming frames on this route
     seq_read: u24,
 }
 
