@@ -30,11 +30,11 @@ pub(crate) struct Framed<T> {
     /// the socket address to which the data will be sent
     out_addr: SocketAddr,
     /// indicates whether the data has been sent to the peer, and the
-    ///   `wr` buffer has been cleared
+    /// `wr` buffer has been cleared
     flushed: bool,
     /// indicates whether data has been read from the peer and written
-    ///   into the `rd` buffer. When `true`, it signifies that the data is ready for frame packet
-    ///   decoding and will be passed to the upper layer for further processing.
+    /// into the `rd` buffer. When `true`, it signifies that the data is ready for frame packet
+    /// decoding and will be passed to the upper layer for further processing.
     is_readable: bool,
     /// the address of the current peer
     current_addr: Option<SocketAddr>,
