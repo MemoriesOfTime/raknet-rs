@@ -17,17 +17,30 @@ use crate::{Peer, Role};
 /// Shared link between stream and sink
 pub(crate) type SharedLink = Arc<TransferLink>;
 
-/// Transfer data and task between stream and sink.
+/// The `TransferLink` is an visitor structure that temporarily holds various types of transfer
+/// link data, such as received `AckOrNack`, sequences of pending response sequence numbers, and
+/// packets ready to send like `unconnected::Packet` and `FrameBody`.
+/// It provides methods for compressing sequence numbers into `AckOrNack` as well as access to other
+/// data within the link.
 pub(crate) struct TransferLink {
-    // incoming ack with receive timestamp
+    /// incoming ack with receive timestamp
     incoming_ack: ConcurrentQueue<(AckOrNack, Instant)>,
+    /// incoming Nack packet.
     incoming_nack: ConcurrentQueue<AckOrNack>,
+    /// the flag is set to `true` when the `OutgoingGuard` is closed,
+    /// and there are still reliable packets awaiting ACK (needing resend).
+    /// In this state, the close operation will sleep until an ACK is received to wake it,
+    /// after which the flag will be reset to `false`.
     forward_waking: AtomicBool,
 
+    /// pending ACK packets to be sent.
     outgoing_ack: parking_lot::Mutex<BinaryHeap<Reverse<u24>>>,
+    /// pending NACK packets to be sent.
     outgoing_nack: parking_lot::Mutex<BTreeSet<Reverse<u24>>>,
 
+    /// data related to unconnected packets awaiting processing.
     unconnected: ConcurrentQueue<unconnected::Packet>,
+    /// data for the frame body that is yet to be handled.
     frame_body: ConcurrentQueue<FrameBody>,
 
     role: Role,
@@ -173,11 +186,15 @@ impl TransferLink {
     }
 }
 
-/// A route for incoming packets
+/// `Route` is an intermediary structure that wraps a `TransferLink`, providing the functionality to
+/// `deliver` different types of data frames.
 pub(crate) struct Route {
+    /// `Route` create an asynchronous channel, splitting it into a sender and a
+    ///   receiver, with the receiver being returned in the `new` method. This is the sender part
+    /// of the   asynchronous channel.
     router_tx: Sender<FrameSet<FramesMut>>,
     link: SharedLink,
-    // the next expected sequence number
+    // the next expected sequence number for incoming frames on this route
     seq_read: u24,
 }
 

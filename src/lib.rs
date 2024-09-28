@@ -58,6 +58,9 @@ use std::net::SocketAddr;
 
 use bytes::Bytes;
 
+/// The `Role` enum is used to identify the `Client` and `Server`, and it stores their GUID.
+/// The GUID is a globally unique identifier that is not affected by changes to IP address or port.
+/// It is application-defined and ensures unique identification.
 #[derive(Debug, Clone, Copy)]
 enum Role {
     Client { guid: u64 },
