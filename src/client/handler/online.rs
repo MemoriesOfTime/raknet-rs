@@ -76,27 +76,31 @@ where
                     let Some(body) = ready!(this.frame.as_mut().poll_next(cx)) else {
                         return Poll::Ready(None);
                     };
-                    if let FrameBody::ConnectionRequestAccepted {
-                        system_addresses,
-                        accepted_timestamp,
-                        ..
-                    } = body
-                    {
-                        this.link.send_frame_body(FrameBody::NewIncomingConnection {
-                            server_address: *this.addr,
+                    match body {
+                        FrameBody::ConnectionRequestAccepted {
                             system_addresses,
-                            request_timestamp: timestamp(),
                             accepted_timestamp,
-                        });
-                        *this.state = State::Connected;
-                        debug!(
-                            "[{}] connected to server {addr:?}",
-                            this.role,
-                            addr = this.addr
-                        );
-                        continue;
+                            ..
+                        } => {
+                            this.link.send_frame_body(FrameBody::NewIncomingConnection {
+                                server_address: *this.addr,
+                                system_addresses,
+                                request_timestamp: timestamp(),
+                                accepted_timestamp,
+                            });
+                            *this.state = State::Connected;
+                            debug!(
+                                "[{}] connected to server {addr:?}",
+                                this.role,
+                                addr = this.addr
+                            );
+                            continue;
+                        }
+                        FrameBody::User(data) => return Poll::Ready(Some(data)), /* FIXME: we should ignore this packet */
+                        _ => {
+                            debug!("[{}] ignore packet {body:?} on WaitConnRes", this.role);
+                        }
                     }
-                    debug!("[{}] ignore packet {body:?} on WaitConnRes", this.role);
                 }
                 State::Connected => {
                     let Some(body) = ready!(this.frame.as_mut().poll_next(cx)) else {

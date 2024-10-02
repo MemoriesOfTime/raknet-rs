@@ -369,7 +369,7 @@ impl ResendMap {
         let now = Instant::now();
         if now < self.last_record_expired_at {
             trace!(
-                "[{}] skip scanning the resend map, last record expired at {:?}",
+                "[{}] skip scanning the resend map, last record expired within {:?}",
                 self.role,
                 self.last_record_expired_at - now
             );
@@ -397,7 +397,7 @@ impl ResendMap {
             self.estimator.clear();
         }
         trace!(
-            "[{}]: resend {} stales, {} entries remains",
+            "[{}] resend {} stales, {} entries remains",
             self.role,
             len_before - len,
             len,
@@ -423,7 +423,7 @@ impl ResendMap {
         }
         let c_id = ConnId::new(self.role.guid(), self.peer.guid);
         trace!(
-            "[{}]: wait on {c_id:?} for resend seq_num {} to {} within {:?}",
+            "[{}] wait on {c_id:?} for resend seq_num {} to {} within {:?}",
             self.role,
             seq_num,
             self.peer,

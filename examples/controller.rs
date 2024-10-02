@@ -75,6 +75,8 @@ impl FlushController {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    env_logger::init();
+
     let socket = UdpSocket::bind("127.0.0.1:0").await?;
     let local_addr = socket.local_addr()?;
     println!("[server] server listening on {local_addr} with flush controller");

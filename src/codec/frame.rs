@@ -15,7 +15,7 @@ use crate::packet::{unconnected, Packet};
 /// `Framed` is a base structure for socket communication.
 /// In this project, it wraps an asynchronous UDP socket and implements the
 /// [`Stream`](futures::stream::Stream) and [`Sink`](futures::sink::Sink) traits.
-/// This allows for reading and writing RakNet frames over the socket.
+/// This allows for reading and writing `RakNet` frames over the socket.
 /// It supports both receiving and sending unconnected and connected packets.
 pub(crate) struct Framed<T> {
     /// The underlying socket that is being wrapped.
