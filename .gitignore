@@ -2,7 +2,6 @@
 !.github
 !.gitignore
 !.cargo
-!.pre-commit-config.yaml
 !.config/
 target/
 Cargo.lock
