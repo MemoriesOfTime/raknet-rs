@@ -16,7 +16,7 @@ keywords = ["raknet", "network", "udp"]
 async-channel = "2.3.1"
 bytes = "1"
 concurrent-queue = "2.5.0"
-fastrace = "0.6"
+fastrace = "0.7.3"
 futures = { version = "0.3.5", default-features = false }
 futures-async-stream = "0.2"
 log = "0.4"
