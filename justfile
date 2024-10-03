@@ -2,7 +2,7 @@ default:
   just --list
 
 fix:
-    cargo fmt
+    cargo fmt --all
     cargo sort --workspace
     cargo machete --fix
 

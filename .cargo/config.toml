@@ -1,2 +1,6 @@
 [target.'cfg(all())']
 rustflags = ["--cfg", "tokio_unstable"]
+
+[alias]
+x = "run --package xtask --"
+xtask = "run --package xtask --"
