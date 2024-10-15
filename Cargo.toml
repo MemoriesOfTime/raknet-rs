@@ -1,6 +1,6 @@
 [package]
 name = "raknet-rs"
-version = "0.1.3"
+version = "0.1.4"
 readme = "README.md"
 resolver = "2"
 description = "Raknet protocol implementation by rust"
