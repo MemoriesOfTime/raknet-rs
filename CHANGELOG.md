@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+---
+## 0.1.4
+
 - Split `IO` into `Stream` and `Sink`
 - Fix some fragmentation bugs
 - Add `FlushStrategy`
