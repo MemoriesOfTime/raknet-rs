@@ -13,6 +13,7 @@ use crate::{codec, Message, Role};
 mod tokio;
 
 #[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Config {
     /// The send buffer of each IO polled by the incoming
     send_buf_cap: usize,

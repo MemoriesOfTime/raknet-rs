@@ -25,7 +25,7 @@ fn make_server_conf() -> server::Config {
         .send_buf_cap(1024)
         .sever_guid(1919810)
         .max_channels(64)
-        .advertisement(&b"123456"[..])
+        .advertisement("123456")
         .max_mtu(1500)
         .min_mtu(510)
         .max_pending(1024)

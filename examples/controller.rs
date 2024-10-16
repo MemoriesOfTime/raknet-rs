@@ -84,7 +84,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         server::Config::new()
             .send_buf_cap(1024)
             .sever_guid(114514)
-            .advertisement(&b"Hello, I am proxy server"[..])
+            .advertisement("Hello, I am proxy server")
             .min_mtu(500)
             .max_mtu(1400)
             .support_version(vec![9, 11, 13])

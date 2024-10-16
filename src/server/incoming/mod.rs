@@ -1,6 +1,6 @@
 use std::io;
 
-use bytes::{Buf, Bytes};
+use bytes::Bytes;
 use futures::{Sink, Stream};
 
 use super::handler::offline;
@@ -13,13 +13,14 @@ mod tokio;
 
 /// Incoming config
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Config {
     /// The send buffer of each IO polled by the incoming
     send_buf_cap: usize,
     /// The server guid, used to identify the server, initialized by random
     sever_guid: u64,
     /// The advertisement, sent to the client when the client pings the server
-    advertisement: Bytes,
+    advertisement: String,
     /// The minimum mtu, the default value is 510
     min_mtu: u16,
     /// The maximum mtu, the default value is 1500
@@ -53,7 +54,7 @@ impl Config {
         Self {
             send_buf_cap: 1024,
             sever_guid: rand::random(),
-            advertisement: Bytes::new(),
+            advertisement: String::new(),
             min_mtu: 510,
             max_mtu: 1500,
             support_version: vec![9, 11, 13],
@@ -80,8 +81,8 @@ impl Config {
 
     /// Set the advertisement
     /// The default value is empty
-    pub fn advertisement(mut self, advertisement: impl Buf) -> Self {
-        self.advertisement = Bytes::copy_from_slice(advertisement.chunk());
+    pub fn advertisement(mut self, advertisement: impl ToString) -> Self {
+        self.advertisement = advertisement.to_string();
         self
     }
 
@@ -144,7 +145,7 @@ impl Config {
     fn offline_config(&self) -> offline::Config {
         offline::Config {
             sever_guid: self.sever_guid,
-            advertisement: self.advertisement.clone(),
+            advertisement: Bytes::from_iter(self.advertisement.bytes()),
             min_mtu: self.min_mtu,
             max_mtu: self.max_mtu,
             support_version: self.support_version.clone(),
