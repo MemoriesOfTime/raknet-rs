@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Add `serde` feature to support config serializing and deserializing
+- Add `ConnectionInfo`
 
 ---
 ## 0.1.4

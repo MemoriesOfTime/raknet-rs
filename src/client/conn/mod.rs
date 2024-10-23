@@ -5,7 +5,7 @@ use bytes::Bytes;
 use futures::{Sink, Stream};
 
 use super::handler::offline;
-use crate::opts::Ping;
+use crate::opts::{ConnectionInfo, Ping};
 use crate::{codec, Message, Role};
 
 /// Connection implementation by using tokio's UDP framework
@@ -136,6 +136,6 @@ pub trait ConnectTo: Sized {
         config: Config,
     ) -> io::Result<(
         impl Stream<Item = Bytes>,
-        impl Sink<Message, Error = io::Error> + Ping,
+        impl Sink<Message, Error = io::Error> + Ping + ConnectionInfo,
     )>;
 }

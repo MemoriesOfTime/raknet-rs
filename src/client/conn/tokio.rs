@@ -14,7 +14,7 @@ use crate::codec::frame::Framed;
 use crate::codec::{Decoded, Encoded};
 use crate::guard::HandleOutgoing;
 use crate::link::{Route, TransferLink};
-use crate::opts::Ping;
+use crate::opts::{ConnectionInfo, Ping, WrapConnectionInfo};
 use crate::state::{IncomingStateManage, OutgoingStateManage};
 use crate::utils::Logged;
 use crate::Message;
@@ -26,7 +26,7 @@ impl ConnectTo for TokioUdpSocket {
         config: super::Config,
     ) -> io::Result<(
         impl Stream<Item = Bytes>,
-        impl Sink<Message, Error = io::Error> + Ping,
+        impl Sink<Message, Error = io::Error> + Ping + ConnectionInfo,
     )> {
         let socket = Arc::new(self);
         let mut lookups = addrs.to_socket_addrs()?;
@@ -55,7 +55,8 @@ impl ConnectTo for TokioUdpSocket {
         let dst = Framed::new(Arc::clone(&socket), peer.mtu as usize)
             .handle_outgoing(Arc::clone(&link), config.send_buf_cap, peer, role)
             .frame_encoded(peer.mtu, config.codec_config(), Arc::clone(&link))
-            .manage_outgoing_state(None);
+            .manage_outgoing_state(None)
+            .wrap_connection_info(peer);
 
         let (mut router, route) = Route::new(Arc::clone(&link));
 

@@ -1,18 +1,81 @@
 use std::collections::VecDeque;
 use std::future::Future;
 use std::io;
+use std::net::SocketAddr;
 use std::pin::Pin;
+use std::task::{Context, Poll};
 
 use fastrace::collector::TraceId;
 use futures::{Sink, SinkExt};
+use pin_project_lite::pin_project;
 
 use crate::link::SharedLink;
 use crate::packet::connected::{Frame, FrameBody};
 use crate::utils::timestamp;
+use crate::{Message, Peer};
 
 /// Trace info extension for server
 pub trait TraceInfo {
     fn last_trace_id(&self) -> Option<TraceId>;
+}
+
+/// Obtain the connection information
+pub trait ConnectionInfo {
+    fn mtu(&self) -> u16;
+    fn remote_addr(&self) -> SocketAddr;
+    fn guid(&self) -> u64;
+}
+
+pub(crate) trait WrapConnectionInfo: Sized {
+    fn wrap_connection_info(self, peer: Peer) -> ConnectionInfoWrapper<Self>;
+}
+
+pin_project! {
+    pub(crate) struct ConnectionInfoWrapper<I> {
+        #[pin]
+        inner: I,
+        peer: Peer,
+    }
+}
+
+impl<I> ConnectionInfo for ConnectionInfoWrapper<I> {
+    fn mtu(&self) -> u16 {
+        self.peer.mtu
+    }
+
+    fn remote_addr(&self) -> SocketAddr {
+        self.peer.addr
+    }
+
+    fn guid(&self) -> u64 {
+        self.peer.guid
+    }
+}
+
+impl<T, I: Sink<T>> Sink<T> for ConnectionInfoWrapper<I> {
+    type Error = I::Error;
+
+    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.project().inner.poll_ready(cx)
+    }
+
+    fn start_send(self: Pin<&mut Self>, item: T) -> Result<(), Self::Error> {
+        self.project().inner.start_send(item)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.project().inner.poll_flush(cx)
+    }
+
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.project().inner.poll_close(cx)
+    }
+}
+
+impl<S: Sink<Message>> WrapConnectionInfo for S {
+    fn wrap_connection_info(self, peer: Peer) -> ConnectionInfoWrapper<Self> {
+        ConnectionInfoWrapper { inner: self, peer }
+    }
 }
 
 /// Ping extension for client, experimental

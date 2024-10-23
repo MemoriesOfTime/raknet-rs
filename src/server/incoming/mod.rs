@@ -4,7 +4,7 @@ use bytes::Bytes;
 use futures::{Sink, Stream};
 
 use super::handler::offline;
-use crate::opts::TraceInfo;
+use crate::opts::{ConnectionInfo, TraceInfo};
 use crate::{codec, Message, Role};
 
 /// Incoming implementation by using tokio's UDP framework
@@ -175,7 +175,7 @@ pub trait MakeIncoming: Sized {
     ) -> impl Stream<
         Item = (
             impl Stream<Item = Bytes> + TraceInfo,
-            impl Sink<Message, Error = io::Error>,
+            impl Sink<Message, Error = io::Error> + ConnectionInfo,
         ),
     >;
 }

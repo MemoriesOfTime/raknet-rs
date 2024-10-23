@@ -19,7 +19,7 @@ use crate::codec::frame::Framed;
 use crate::codec::{Decoded, Encoded};
 use crate::guard::HandleOutgoing;
 use crate::link::{Route, TransferLink};
-use crate::opts::TraceInfo;
+use crate::opts::{ConnectionInfo, TraceInfo, WrapConnectionInfo};
 use crate::server::handler::offline::OfflineHandler;
 use crate::server::handler::online::HandleOnline;
 use crate::state::{CloseOnDrop, IncomingStateManage, OutgoingStateManage};
@@ -44,7 +44,7 @@ impl MakeIncoming for TokioUdpSocket {
     ) -> impl Stream<
         Item = (
             impl Stream<Item = Bytes> + TraceInfo,
-            impl Sink<Message, Error = io::Error>,
+            impl Sink<Message, Error = io::Error> + ConnectionInfo,
         ),
     > {
         let socket = Arc::new(self);
@@ -64,7 +64,7 @@ impl MakeIncoming for TokioUdpSocket {
 impl Stream for Incoming {
     type Item = (
         impl Stream<Item = Bytes> + TraceInfo,
-        impl Sink<Message, Error = io::Error>,
+        impl Sink<Message, Error = io::Error> + ConnectionInfo,
     );
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -102,7 +102,8 @@ impl Stream for Incoming {
                 .manage_outgoing_state(Some(CloseOnDrop::new(
                     peer.addr,
                     Arc::clone(this.close_events),
-                )));
+                )))
+                .wrap_connection_info(peer);
 
             let src = route
                 .frame_decoded(this.config.codec_config())
