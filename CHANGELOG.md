@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add `serde` feature to support config serializing and deserializing
+
 ---
 ## 0.1.4
 

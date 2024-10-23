@@ -49,7 +49,7 @@ where
 {
     fn ordered(self, max_channels: usize) -> Order<Self> {
         assert!(
-            max_channels < usize::from(u8::MAX),
+            max_channels < 256,
             "max channels should not be larger than u8::MAX"
         );
         assert!(max_channels > 0, "max_channels > 0");
