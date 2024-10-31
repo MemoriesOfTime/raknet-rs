@@ -172,7 +172,7 @@ where
             );
             if !frames.is_empty() {
                 trace!(
-                    "[{}] send frames to {}, seq_num: {}, reliable: {}, first data byte: 0x{:02x}, data size: {}B, actual size: {}B",
+                    "[{}] send frames to {}, seq_num: {}, reliable: {}, first data byte: 0x{:02x}, data size: {}, actual size: {}",
                     this.role,
                     this.peer,
                     *this.seq_num_write_index,

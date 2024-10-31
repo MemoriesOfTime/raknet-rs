@@ -9,6 +9,7 @@
 #![feature(context_ext)]
 #![feature(local_waker)]
 #![feature(option_get_or_insert_default)]
+#![feature(binary_heap_drain_sorted)]
 
 /// Protocol codec
 mod codec;

@@ -47,25 +47,6 @@ pub(crate) struct TransferLink {
     peer: Peer,
 }
 
-/// Pop priority queue while holding the lock
-struct BatchRecv<'a, T> {
-    guard: parking_lot::MutexGuard<'a, BinaryHeap<Reverse<T>>>,
-}
-
-impl<'a, T> BatchRecv<'a, T> {
-    fn new(guard: parking_lot::MutexGuard<'a, BinaryHeap<Reverse<T>>>) -> Self {
-        Self { guard }
-    }
-}
-
-impl<'a, T: Ord> Iterator for BatchRecv<'a, T> {
-    type Item = T;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.guard.pop().map(|v| v.0)
-    }
-}
-
 impl TransferLink {
     pub(crate) fn new_arc(role: Role, peer: Peer) -> SharedLink {
         // avoiding ack flood, the overwhelming ack will be dropped and new ack will be displaced
@@ -153,11 +134,28 @@ impl TransferLink {
     }
 
     pub(crate) fn process_outgoing_ack(&self, mtu: u16) -> Option<AckOrNack> {
-        AckOrNack::extend_from(BatchRecv::new(self.outgoing_ack.lock()), mtu)
+        AckOrNack::extend_from(self.outgoing_ack.lock().drain_sorted().map(|v| v.0), mtu)
     }
 
     pub(crate) fn process_outgoing_nack(&self, mtu: u16) -> Option<AckOrNack> {
-        AckOrNack::extend_from(self.outgoing_nack.lock().iter().copied(), mtu)
+        struct BatchRecv<'a> {
+            guard: parking_lot::MutexGuard<'a, BTreeSet<u24>>,
+        }
+
+        impl<'a> Iterator for BatchRecv<'a> {
+            type Item = u24;
+
+            fn next(&mut self) -> Option<Self::Item> {
+                self.guard.pop_first()
+            }
+        }
+
+        AckOrNack::extend_from(
+            BatchRecv {
+                guard: self.outgoing_nack.lock(),
+            },
+            mtu,
+        )
     }
 
     pub(crate) fn process_unconnected(&self) -> impl Iterator<Item = unconnected::Packet> + '_ {
