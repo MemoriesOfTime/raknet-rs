@@ -161,15 +161,6 @@ where
                         reliable = true;
                     }
                     remain -= frame.size();
-                    trace!(
-                        "[{}] send frame to {}, seq_num: {}, reliable: {}, first byte: 0x{:02x}, size: {}",
-                        this.role,
-                        this.peer,
-                        *this.seq_num_write_index,
-                        reliable,
-                        frame.body[0],
-                        frame.size()
-                    );
                     frames.push(this.buf.pop_back().unwrap());
                     continue;
                 }
@@ -180,6 +171,16 @@ where
                 "every frame size should not exceed MTU"
             );
             if !frames.is_empty() {
+                trace!(
+                    "[{}] send frames to {}, seq_num: {}, reliable: {}, first data byte: 0x{:02x}, data size: {}B, actual size: {}B",
+                    this.role,
+                    this.peer,
+                    *this.seq_num_write_index,
+                    reliable,
+                    frames[0].body[0],
+                    frames.iter().map(|frame| frame.body.len()).sum::<usize>(),
+                    frames.iter().map(Frame::size).sum::<usize>() + FRAME_SET_HEADER_SIZE,
+                );
                 let frame_set = FrameSet {
                     seq_num: *this.seq_num_write_index,
                     set: &frames[..],
