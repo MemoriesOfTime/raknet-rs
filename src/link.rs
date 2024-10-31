@@ -36,7 +36,7 @@ pub(crate) struct TransferLink {
     /// pending ACK packets to be sent.
     outgoing_ack: parking_lot::Mutex<BinaryHeap<Reverse<u24>>>,
     /// pending NACK packets to be sent.
-    outgoing_nack: parking_lot::Mutex<BTreeSet<Reverse<u24>>>,
+    outgoing_nack: parking_lot::Mutex<BTreeSet<u24>>,
 
     /// data related to unconnected packets awaiting processing.
     unconnected: ConcurrentQueue<unconnected::Packet>,
@@ -157,7 +157,7 @@ impl TransferLink {
     }
 
     pub(crate) fn process_outgoing_nack(&self, mtu: u16) -> Option<AckOrNack> {
-        AckOrNack::extend_from(self.outgoing_nack.lock().iter().map(|v| v.0), mtu)
+        AckOrNack::extend_from(self.outgoing_nack.lock().iter().copied(), mtu)
     }
 
     pub(crate) fn process_unconnected(&self) -> impl Iterator<Item = unconnected::Packet> + '_ {
@@ -226,12 +226,12 @@ impl Route {
                 {
                     let mut nack = self.link.outgoing_nack.lock();
                     let seq_num = frames.seq_num;
-                    nack.remove(&Reverse(seq_num));
+                    nack.remove(&seq_num);
                     let pre_read = self.seq_read;
                     if pre_read <= seq_num {
                         self.seq_read = seq_num + 1;
                         for n in pre_read.to_u32()..seq_num.to_u32() {
-                            nack.insert(Reverse(n.into()));
+                            nack.insert(n.into());
                         }
                     }
                 }
