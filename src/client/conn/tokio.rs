@@ -30,18 +30,9 @@ impl ConnectTo for TokioUdpSocket {
     )> {
         let socket = Arc::new(self);
         let mut lookups = addrs.to_socket_addrs()?;
-        let addr = loop {
-            if let Some(addr) = lookups.next() {
-                if socket.connect(addr).await.is_ok() {
-                    break addr;
-                }
-                continue;
-            }
-            return Err(io::Error::new(
-                io::ErrorKind::AddrNotAvailable,
-                "invalid address",
-            ));
-        };
+        let addr = lookups
+            .next()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::AddrNotAvailable, "invalid address"))?;
 
         let (mut incoming, peer) = OfflineHandler::new(
             Framed::new(Arc::clone(&socket), config.mtu as usize), // TODO: discover MTU
