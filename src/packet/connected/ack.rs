@@ -88,7 +88,7 @@ impl AckOrNack {
     }
 
     pub(super) fn read(buf: &mut BytesMut) -> Result<Self, CodecError> {
-        const MAX_ACKNOWLEDGEMENT_PACKETS: usize = 8192;
+        const MAX_ACKNOWLEDGEMENT_PACKETS: usize = 16384;
 
         let mut ack_cnt = 0;
         let record_cnt = buf.get_u16();
@@ -97,7 +97,7 @@ impl AckOrNack {
             let record = Record::read(buf)?;
             ack_cnt += record.ack_cnt();
             if ack_cnt > MAX_ACKNOWLEDGEMENT_PACKETS {
-                return Err(CodecError::AckCountExceed);
+                return Err(CodecError::AckCountExceed(ack_cnt));
             }
             records.push(record);
         }

@@ -16,8 +16,8 @@ pub(crate) enum CodecError {
     PartedFrame(String),
     #[error("ordered frame error, reason: {0}")]
     OrderedFrame(String),
-    #[error("maximum amount of packets in acknowledgement exceeded")]
-    AckCountExceed,
+    #[error("ack count {0} exceeded")]
+    AckCountExceed(usize),
     #[error("magic number not matched, pos {0}, byte {1}")]
     MagicNotMatched(usize, u8),
 }

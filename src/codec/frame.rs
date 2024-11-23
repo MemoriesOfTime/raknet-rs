@@ -121,7 +121,7 @@ impl<T: AsyncSocket> Stream for Framed<T> {
                     }
                     Err(err) => {
                         Event::add_to_local_parent(err.to_string(), || []);
-                        error!("failed to decode packet: {:?}", err);
+                        error!("failed to decode packet: {}", err);
 
                         pin.decode_span.take();
                         pin.rd.clear();
