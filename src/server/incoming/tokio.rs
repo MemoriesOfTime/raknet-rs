@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -24,7 +23,7 @@ use crate::server::handler::offline::OfflineHandler;
 use crate::server::handler::online::HandleOnline;
 use crate::state::{CloseOnDrop, IncomingStateManage, OutgoingStateManage};
 use crate::utils::{Logged, TraceStreamExt};
-use crate::Message;
+use crate::{HashMap, Message};
 
 pin_project! {
     struct Incoming {
@@ -55,7 +54,7 @@ impl MakeIncoming for TokioUdpSocket {
             ),
             socket,
             config,
-            router: HashMap::new(),
+            router: HashMap::default(),
             close_events: Arc::new(ConcurrentQueue::unbounded()),
         }
     }

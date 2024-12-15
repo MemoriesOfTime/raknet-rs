@@ -19,7 +19,8 @@ pub(crate) type FramesMut = Vec<Frame<BytesMut>>;
 
 pub(crate) type FrameMut = Frame<BytesMut>;
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, Clone)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub(crate) struct FrameSet<S> {
     pub(crate) seq_num: u24,
     pub(crate) set: S,
@@ -51,7 +52,8 @@ impl<'a> FrameSet<FramesRef<'a>> {
     }
 }
 
-#[derive(PartialEq, Eq, Clone)]
+#[derive(Clone)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub(crate) struct Frame<B = Bytes> {
     pub(crate) flags: Flags,
     pub(crate) reliable_frame_index: Option<u24>,
@@ -185,12 +187,13 @@ impl<B: Buf> Frame<B> {
 
 /// Top 3 bits are reliability type, fourth bit is 1 when the frame is fragmented and part of a
 /// compound.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub(crate) struct Flags {
     raw: u8,
     pub(crate) reliability: Reliability,
     pub(crate) parted: bool,
-    needs_bas: bool,
+    // needs_bas: bool,
 }
 
 impl Flags {
@@ -204,7 +207,6 @@ impl Flags {
             raw,
             reliability,
             parted,
-            needs_bas: true,
         }
     }
 
@@ -225,12 +227,12 @@ impl Flags {
             raw,
             reliability: unsafe { std::mem::transmute::<u8, Reliability>(r) },
             parted: raw & PARTED_FLAG != 0,
-            needs_bas: raw & NEEDS_B_AND_AS_FLAG != 0,
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub(crate) struct Fragment {
     pub(crate) parted_size: u32,
     pub(crate) parted_id: u16,
@@ -253,7 +255,8 @@ impl Fragment {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub(crate) struct Ordered {
     pub(crate) frame_index: u24,
     pub(crate) channel: u8,
@@ -277,6 +280,7 @@ impl Ordered {
 const MAX_SYSTEM_ADDRESSES_ENDPOINTS: usize = 20;
 
 #[derive(Clone)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub(crate) enum FrameBody {
     ConnectedPing {
         client_timestamp: i64,

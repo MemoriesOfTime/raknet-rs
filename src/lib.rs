@@ -51,6 +51,12 @@ pub mod micro_bench {
     }
 }
 
+#[cfg(feature = "rustc-hash")]
+pub type HashMap<K, V, H = rustc_hash::FxBuildHasher> = std::collections::HashMap<K, V, H>;
+
+#[cfg(not(feature = "rustc-hash"))]
+pub type HashMap<K, V, H = std::hash::RandomState> = std::collections::HashMap<K, V, H>;
+
 /// Unit tests
 #[cfg(test)]
 mod tests;

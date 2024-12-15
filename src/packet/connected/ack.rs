@@ -4,7 +4,8 @@ use crate::errors::CodecError;
 use crate::packet::read_buf;
 use crate::utils::{u24, BufExt, BufMutExt};
 
-#[derive(PartialEq, Clone)]
+#[derive(Clone)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub(crate) struct AckOrNack {
     pub(crate) records: Vec<Record>,
 }
@@ -123,7 +124,8 @@ impl AckOrNack {
 const RECORD_RANGE: u8 = 0;
 const RECORD_SINGLE: u8 = 1;
 
-#[derive(PartialEq, Clone)]
+#[derive(Clone)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub(crate) enum Record {
     Range(u24, u24),
     Single(u24),

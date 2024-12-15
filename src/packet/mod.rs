@@ -140,7 +140,8 @@ impl PackType {
 }
 
 /// Raknet packet
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, Clone)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub(crate) enum Packet<S> {
     Unconnected(unconnected::Packet),
     Connected(connected::Packet<S>),

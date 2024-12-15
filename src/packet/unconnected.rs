@@ -6,7 +6,8 @@ use crate::errors::CodecError;
 use crate::packet::{read_buf, MagicRead, MagicWrite, PackType, SocketAddrRead, SocketAddrWrite};
 
 /// Request sent before establishing a connection
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, Clone)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub(crate) enum Packet {
     UnconnectedPing {
         send_timestamp: i64,

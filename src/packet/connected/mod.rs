@@ -12,7 +12,8 @@ pub(crate) use frame_set::*;
 use super::{ACK_FLAG, CONTINUOUS_SEND_FLAG, NACK_FLAG, NEEDS_B_AND_AS_FLAG, VALID_FLAG};
 
 // Packet when RakNet has established a connection
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, Clone)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub(crate) enum Packet<S> {
     FrameSet(FrameSet<S>),
     Ack(AckOrNack),

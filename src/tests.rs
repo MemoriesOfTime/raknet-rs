@@ -1,5 +1,6 @@
 use std::future::poll_fn;
 use std::iter::repeat;
+use std::sync::{Arc, Mutex};
 use std::task::ContextBuilder;
 use std::time::Duration;
 
@@ -12,7 +13,7 @@ use crate::client::{self, ConnectTo};
 use crate::opts::FlushStrategy;
 use crate::server::{self, MakeIncoming};
 use crate::utils::tests::test_trace_log_setup;
-use crate::Message;
+use crate::{Message, Priority, Reliability};
 
 impl From<Bytes> for Message {
     fn from(data: Bytes) -> Self {
@@ -256,4 +257,76 @@ async fn test_flush_strategy_works() {
         src.next().await.unwrap(),
         Bytes::from_iter(repeat(0xfe).take(256))
     );
+}
+
+#[tokio::test(unhandled_panic = "shutdown_runtime")]
+async fn test_message_priority_works() {
+    let _guard = test_trace_log_setup();
+
+    let recv = Arc::new(Mutex::new(Vec::new()));
+    let recv_p = recv.clone();
+    let server = async move {
+        let mut incoming = UdpSocket::bind("0.0.0.0:19135")
+            .await
+            .unwrap()
+            .make_incoming(make_server_conf());
+        loop {
+            let recv_c = recv_p.clone();
+            let (reader, sender) = incoming.next().await.unwrap();
+            tokio::spawn(async move {
+                tokio::pin!(reader);
+                tokio::pin!(sender);
+                let mut ticker = tokio::time::interval(Duration::from_millis(5));
+                loop {
+                    tokio::select! {
+                        Some(data) = reader.next() => {
+                            recv_c.lock().unwrap().push(data);
+                        }
+                        _ = ticker.tick() => {
+                            sender.flush().await.unwrap();
+                        }
+                    };
+                }
+            });
+        }
+    };
+
+    tokio::spawn(server);
+
+    let client = async move {
+        let (_, dst) = UdpSocket::bind("0.0.0.0:0")
+            .await
+            .unwrap()
+            .connect_to("127.0.0.1:19135", make_client_conf())
+            .await
+            .unwrap();
+
+        tokio::pin!(dst);
+
+        dst.feed(
+            Message::new(Bytes::from_iter(repeat(0xfe).take(256)))
+                .reliability(Reliability::Reliable),
+        )
+        .await
+        .unwrap();
+        dst.feed(
+            Message::new(Bytes::from_iter(repeat(0xfe).take(512)))
+                .priority(Priority::High(0))
+                .reliability(Reliability::Reliable),
+        )
+        .await
+        .unwrap();
+
+        dst.flush().await.unwrap();
+
+        while recv.lock().unwrap().len() < 2 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        assert_eq!(recv.lock().unwrap().len(), 2);
+        assert_eq!(recv.lock().unwrap()[0].len(), 512);
+        assert_eq!(recv.lock().unwrap()[1].len(), 256);
+    };
+
+    tokio::spawn(client).await.unwrap();
 }

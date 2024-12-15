@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
@@ -14,7 +13,7 @@ use pin_project_lite::pin_project;
 
 use crate::packet::connected::{self, FramesMut};
 use crate::packet::{unconnected, Packet};
-use crate::{Peer, Role};
+use crate::{HashMap, Peer, Role};
 
 #[derive(Debug, Clone)]
 pub(crate) struct Config {
@@ -59,7 +58,7 @@ pin_project! {
         // and it will be popped out during the OpenConnectionRequest2
         // or when the connection is disconnected.
         pending: lru::LruCache<SocketAddr, u8>,
-        // A `HashMap<SocketAddr, Peer>` that caches connections
+        // A hashmap that caches connections
         // in the OpenConnectionRequest2 stage and is cleaned up on disconnection.
         // The `connected` map is used to check if a `Peer` has completed the connection
         // from the socket.
@@ -85,7 +84,7 @@ where
                 guid: config.sever_guid,
             },
             config,
-            connected: HashMap::new(),
+            connected: HashMap::default(),
             state: OfflineState::Listening,
             read_span: None,
         }

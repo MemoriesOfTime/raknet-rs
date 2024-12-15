@@ -15,6 +15,7 @@ Yet another project rewritten in Rust.
   - Support `Unreliable`, `Reliable` and `ReliableOrdered` packets.
   - Support multiple order channels.
   - Support `ACK`/`NACK` mechanism.
+- Support message priority for unordered reliability.
 - Full tracing:
   - You can track a packet's span during deduplication, fragmentation, ...
 
@@ -84,6 +85,6 @@ let config = client::Config::new()
     ...
 let (_, writer) = socket.connect_to(<addr>, config).await?;
 tokio::pin!(writer);
-writer.send(Message::new(Reliability::Reliable, 0, Bytes::from_static(b"Hello, Anyone there?")))
+writer.send(Message::new(Bytes::from_static(b"Hello, Anyone there?")))
     .await?;
 ```

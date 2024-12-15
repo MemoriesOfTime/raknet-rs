@@ -11,7 +11,7 @@ use log::{debug, warn};
 
 use crate::packet::connected::{self, AckOrNack, FrameBody, FrameSet, FramesMut};
 use crate::packet::unconnected;
-use crate::utils::{u24, ConnId, Reactor};
+use crate::utils::{combine_hashes, u24, Reactor};
 use crate::{Peer, Role};
 
 /// Shared link between stream and sink
@@ -92,15 +92,15 @@ impl TransferLink {
         }
         // wake up after receiving an ack
         if self.should_waking() {
-            let c_id = ConnId::new(self.role.guid(), self.peer.guid);
+            let key = combine_hashes(self.role.guid(), self.peer.guid);
             let mut cnt = 0;
-            for waker in Reactor::get().cancel_all_timers(c_id) {
+            for waker in Reactor::get().cancel_all_timers(key) {
                 // safe to panic
                 waker.wake();
                 cnt += 1;
             }
             debug!(
-                "[{}] wake up {cnt} wakers after receives ack on connection: {c_id:?}",
+                "[{}] wake up {cnt} wakers after receives ack on timer {key}",
                 self.role
             );
         }

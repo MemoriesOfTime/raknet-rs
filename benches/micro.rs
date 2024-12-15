@@ -20,9 +20,8 @@ pub fn codec_benchmark(c: &mut Criterion) {
         cnt: usize,
         throughput: impl Fn(&BenchOpts) -> Throughput,
     ) {
-        let datagrams = repeat(Bytes::from_static(datagram)).take(cnt);
         let opts = micro_bench::codec::BenchOpts {
-            datagrams: black_box(datagrams.collect()),
+            datagrams: repeat(Bytes::from_static(datagram)).take(cnt).collect(),
             seed: 114514,
             dup_ratio: 0.,
             shuffle_ratio: 0.,
@@ -33,7 +32,7 @@ pub fn codec_benchmark(c: &mut Criterion) {
             format!("decode_cnt-{cnt}_size-{}", datagram.len()),
             |bencher| {
                 bencher.to_async(FuturesExecutor).iter_batched(
-                    || opts.gen_inputs(),
+                    || black_box(opts.gen_inputs()),
                     micro_bench::codec::run_bench,
                     BatchSize::SmallInput,
                 );

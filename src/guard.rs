@@ -1,4 +1,4 @@
-use std::collections::{BinaryHeap, HashMap, VecDeque};
+use std::collections::{BinaryHeap, VecDeque};
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
@@ -14,15 +14,23 @@ use crate::link::SharedLink;
 use crate::opts::FlushStrategy;
 use crate::packet::connected::{self, AckOrNack, Frame, FrameSet, Frames, FramesRef, Record};
 use crate::packet::{Packet, FRAME_SET_HEADER_SIZE};
-use crate::utils::{u24, ConnId, Reactor};
-use crate::{Peer, Priority, Role};
+use crate::utils::{combine_hashes, u24, Reactor};
+use crate::{HashMap, Peer, Priority, Role};
 
 // A frame with penalty
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 struct PenaltyFrame {
     penalty: u8,
     frame: Frame,
 }
+
+impl PartialEq for PenaltyFrame {
+    fn eq(&self, other: &Self) -> bool {
+        self.penalty == other.penalty
+    }
+}
+
+impl Eq for PenaltyFrame {}
 
 impl PartialOrd for PenaltyFrame {
     fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
@@ -431,7 +439,7 @@ struct ResendMap {
 impl ResendMap {
     fn new(role: Role, peer: Peer, estimator: Box<dyn Estimator + Send + Sync + 'static>) -> Self {
         Self {
-            map: HashMap::new(),
+            map: HashMap::default(),
             role,
             peer,
             last_record_expired_at: Instant::now(),
@@ -593,15 +601,15 @@ impl ResendMap {
         } else {
             return Poll::Ready(());
         }
-        let c_id = ConnId::new(self.role.guid(), self.peer.guid);
+        let key = combine_hashes(self.role.guid(), self.peer.guid);
         trace!(
-            "[{}] wait on {c_id:?} for resend seq_num {} to {} within {:?}",
+            "[{}] wait on timer {key} for resend seq_num {} to {} within {:?}",
             self.role,
             seq_num,
             self.peer,
             expired_at - now
         );
-        Reactor::get().insert_timer(c_id, expired_at, cx.waker());
+        Reactor::get().insert_timer(key, expired_at, cx.waker());
         Poll::Pending
     }
 }

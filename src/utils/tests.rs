@@ -21,7 +21,7 @@ impl Drop for TestTraceLogGuard {
             .map(|span| (span.span_id, span.clone()))
             .collect();
         let adjacency_lists: HashMap<TraceId, HashMap<SpanId, Vec<SpanId>>> = spans.iter().fold(
-            std::collections::HashMap::new(),
+            HashMap::new(),
             |mut map,
              SpanRecord {
                  trace_id,

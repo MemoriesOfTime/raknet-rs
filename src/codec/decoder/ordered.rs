@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
@@ -10,8 +9,7 @@ use pin_project_lite::pin_project;
 use crate::errors::CodecError;
 use crate::packet::connected::{self, Frame, FrameSet};
 use crate::utils::u24;
-
-const INITIAL_ORDERING_MAP_CAP: usize = 64;
+use crate::HashMap;
 
 struct Ordering {
     map: HashMap<u24, FrameSet<Frame>>,
@@ -21,7 +19,7 @@ struct Ordering {
 impl Default for Ordering {
     fn default() -> Self {
         Self {
-            map: HashMap::with_capacity(INITIAL_ORDERING_MAP_CAP),
+            map: HashMap::default(),
             read: 0.into(),
         }
     }
