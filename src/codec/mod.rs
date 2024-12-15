@@ -23,7 +23,7 @@ use self::encoder::{BodyEncoded, Fragmented};
 use crate::errors::CodecError;
 use crate::link::SharedLink;
 use crate::packet::connected::{Frame, FrameBody, FrameSet, FramesMut};
-use crate::Message;
+use crate::{Message, Priority};
 
 /// Codec config
 #[derive(Clone, Copy, Debug)]
@@ -101,7 +101,7 @@ pub(crate) trait Encoded {
 
 impl<F> Encoded for F
 where
-    F: Sink<Frame, Error = io::Error>,
+    F: Sink<(Priority, Frame), Error = io::Error>,
 {
     fn frame_encoded(
         self,
@@ -131,7 +131,7 @@ pub mod micro_bench {
     use super::{Config, Decoded, Fragmented, FrameSet, FramesMut, Stream};
     use crate::packet::connected::Frame;
     use crate::packet::FRAME_SET_HEADER_SIZE;
-    use crate::{Message, Reliability};
+    use crate::{Message, Priority};
 
     #[derive(Debug, Clone)]
     pub struct BenchOpts {
@@ -142,15 +142,23 @@ pub mod micro_bench {
         pub mtu: usize,
     }
 
-    impl Sink<Frame> for &mut VecDeque<Frame<BytesMut>> {
+    #[derive(Debug, Default)]
+    struct SinkDst {
+        buf: VecDeque<Frame<BytesMut>>,
+    }
+
+    impl Sink<(Priority, Frame)> for &mut SinkDst {
         type Error = io::Error;
 
         fn poll_ready(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
         }
 
-        fn start_send(self: Pin<&mut Self>, frame: Frame) -> Result<(), Self::Error> {
-            self.get_mut().push_back(Frame {
+        fn start_send(
+            self: Pin<&mut Self>,
+            (_, frame): (Priority, Frame),
+        ) -> Result<(), Self::Error> {
+            self.get_mut().buf.push_back(Frame {
                 body: BytesMut::from(frame.body),
                 ..frame
             });
@@ -166,27 +174,42 @@ pub mod micro_bench {
         }
     }
 
+    #[allow(missing_debug_implementations)]
+    pub struct Inputs {
+        stream: Pin<Box<dyn Stream<Item = FrameSet<FramesMut>>>>,
+    }
+
+    /// Run/Test codec benchmarks
+    #[allow(clippy::missing_panics_doc)]
+    pub async fn run_bench(inputs: Inputs) {
+        let mut decoding = inputs.stream.frame_decoded(Config::default());
+        while let Some(r) = decoding.next().await {
+            assert!(r.is_ok());
+        }
+    }
+
     impl BenchOpts {
-        fn gen_inputs(self) -> impl Stream<Item = FrameSet<FramesMut>> {
-            let mut frames: VecDeque<Frame<BytesMut>> = VecDeque::new();
+        #[allow(clippy::missing_panics_doc)]
+        pub fn gen_inputs(&self) -> Inputs {
+            let mut frames = SinkDst::default();
             let mut rng = StdRng::seed_from_u64(self.seed);
             tokio::pin! {
                 let fragmented = (&mut frames).fragmented(self.mtu, 1);
             }
-            for datagram in self.datagrams {
+            for datagram in self.datagrams.clone() {
                 fragmented
                     .as_mut()
-                    .start_send(Message::new(Reliability::ReliableOrdered, 0, datagram)) // reliable ordered
+                    .start_send(Message::new(datagram)) // reliable ordered by default
                     .unwrap();
             }
             let mut sets = Vec::new();
             let mut remain = self.mtu - FRAME_SET_HEADER_SIZE;
             let mut set: Option<FramesMut> = None;
-            while let Some(frame) = frames.front() {
+            while let Some(frame) = frames.buf.front() {
                 if remain >= frame.size() {
                     remain -= frame.size();
                     set.get_or_insert_default()
-                        .push(frames.pop_front().unwrap());
+                        .push(frames.buf.pop_front().unwrap());
                     continue;
                 }
                 remain = self.mtu - FRAME_SET_HEADER_SIZE;
@@ -213,44 +236,18 @@ pub mod micro_bench {
             if self.shuffle_ratio > 0. {
                 sets.partial_shuffle(&mut rng, (len as f32 * self.shuffle_ratio) as usize);
             }
-
-            #[futures_async_stream::stream]
-            async move {
-                let mut sets = VecDeque::from(sets);
-                while let Some(frame_set) = sets.pop_front() {
-                    yield frame_set;
+            let stream = {
+                #[futures_async_stream::stream]
+                async move {
+                    let mut sets = VecDeque::from(sets);
+                    while let Some(frame_set) = sets.pop_front() {
+                        yield frame_set;
+                    }
                 }
-            }
-        }
-
-        /// Run/Test codec benchmarks
-        #[allow(unused_variables)] // conditional compilation
-        #[allow(unused_mut)]
-        #[allow(clippy::missing_panics_doc)]
-        pub async fn run_bench(self) {
-            let mut len = self.datagrams.len();
-            let mut datagrams = if cfg!(test) {
-                Some(VecDeque::from(self.datagrams.clone()))
-            } else {
-                None
             };
-            tokio::pin! {
-                let decoding = self.gen_inputs().frame_decoded(Config::default());
+            Inputs {
+                stream: Box::pin(stream),
             }
-            while let Some(r) = decoding.next().await {
-                assert!(r.is_ok());
-                len -= 1;
-                #[cfg(test)]
-                {
-                    let body = match r.unwrap() {
-                        crate::packet::connected::FrameBody::User(body) => body,
-                        _ => unreachable!("unexpected decoded result"),
-                    };
-                    log::debug!("decoded: {:?}", body);
-                    assert_eq!(body, datagrams.as_mut().unwrap().pop_front().unwrap());
-                }
-            }
-            assert_eq!(len, 0);
         }
 
         pub fn bytes(&self) -> u64 {
@@ -259,6 +256,24 @@ pub mod micro_bench {
 
         pub fn elements(&self) -> u64 {
             self.datagrams.len() as u64
+        }
+
+        #[cfg(test)]
+        async fn test_bench(self, inputs: Inputs) {
+            let mut len = self.datagrams.len();
+            let mut datagrams = VecDeque::from(self.datagrams);
+            let mut decoding = inputs.stream.frame_decoded(Config::default());
+            while let Some(r) = decoding.next().await {
+                assert!(r.is_ok());
+                len -= 1;
+                let body = match r.unwrap() {
+                    crate::packet::connected::FrameBody::User(body) => body,
+                    _ => unreachable!("unexpected decoded result"),
+                };
+                log::debug!("decoded: {:?}", body);
+                assert_eq!(body, datagrams.pop_front().unwrap());
+            }
+            assert_eq!(len, 0);
         }
     }
 
@@ -281,6 +296,7 @@ pub mod micro_bench {
         };
         assert_eq!(opts.bytes(), 11);
         assert_eq!(opts.elements(), 3);
-        opts.run_bench().await;
+        let inputs = opts.gen_inputs();
+        opts.test_bench(inputs).await;
     }
 }

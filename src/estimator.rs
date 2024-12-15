@@ -1,12 +1,12 @@
 use std::cmp;
 use std::time::Duration;
 
-/// The granularity of the timer
-const TIMER_GRANULARITY: Duration = Duration::from_millis(1);
-
 pub(crate) trait Estimator {
     /// The current RTO estimation.
     fn rto(&self) -> Duration;
+
+    /// The current RTT estimation.
+    fn rtt(&self) -> Duration;
 
     /// Update the RTT estimator with a new RTT sample.
     fn update(&mut self, rtt: Duration);
@@ -36,7 +36,7 @@ impl RFC6298Impl {
     }
 
     /// The current best RTT estimation.
-    fn get(&self) -> Duration {
+    fn rtt(&self) -> Duration {
         self.smoothed.unwrap_or(self.latest)
     }
 
@@ -45,9 +45,13 @@ impl RFC6298Impl {
         // TODO:
         // RFC6298 2.4 suggests a minimum of 1 second, which may be
         // a conservative choice for some applications.
+        const MIN_RTO: Duration = Duration::from_secs(1);
+        /// The granularity of the timer
+        const TIMER_GRANULARITY: Duration = Duration::from_millis(1);
+
         cmp::max(
-            self.get() + cmp::max(TIMER_GRANULARITY, 4 * self.var),
-            Duration::from_secs(1),
+            self.rtt() + cmp::max(TIMER_GRANULARITY, 4 * self.var),
+            MIN_RTO,
         )
     }
 
@@ -76,6 +80,10 @@ impl RFC6298Impl {
 impl Estimator for RFC6298Impl {
     fn rto(&self) -> Duration {
         self.rto()
+    }
+
+    fn rtt(&self) -> Duration {
+        self.rtt()
     }
 
     fn update(&mut self, rtt: Duration) {

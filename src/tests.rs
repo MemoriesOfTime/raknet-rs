@@ -12,11 +12,11 @@ use crate::client::{self, ConnectTo};
 use crate::opts::FlushStrategy;
 use crate::server::{self, MakeIncoming};
 use crate::utils::tests::test_trace_log_setup;
-use crate::{Message, Reliability};
+use crate::Message;
 
 impl From<Bytes> for Message {
     fn from(data: Bytes) -> Self {
-        Message::new(Reliability::ReliableOrdered, 0, data)
+        Message::new(data)
     }
 }
 
@@ -59,7 +59,7 @@ async fn test_tokio_udp_works() {
                 loop {
                     tokio::select! {
                         Some(data) = reader.next() => {
-                            sender.feed(Message::new(Reliability::Reliable, 0, data)).await.unwrap();
+                            sender.feed(data.into()).await.unwrap();
                         }
                         _ = ticker.tick() => {
                             sender.flush().await.unwrap();
@@ -142,7 +142,7 @@ async fn test_4way_handshake_client_close() {
                     tokio::select! {
                         res = src.next() => {
                             if let Some(res) = res {
-                                dst.feed(Message::new(Reliability::Unreliable, 0, res)).await.unwrap();
+                                dst.feed(res.into()).await.unwrap();
                             } else {
                                 break;
                             }
@@ -171,13 +171,7 @@ async fn test_4way_handshake_client_close() {
         tokio::pin!(dst);
 
         let huge_msg = Bytes::from_iter(repeat(0xfe).take(2048));
-        dst.send(Message::new(
-            Reliability::ReliableOrdered,
-            0,
-            huge_msg.clone(),
-        ))
-        .await
-        .unwrap();
+        dst.send(huge_msg.clone().into()).await.unwrap();
 
         assert_eq!(src.next().await.unwrap(), huge_msg);
 
@@ -225,10 +219,7 @@ async fn test_flush_strategy_works() {
                 tokio::pin!(reader);
                 tokio::pin!(sender);
                 let data = reader.next().await.unwrap();
-                sender
-                    .feed(Message::new(Reliability::Reliable, 0, data))
-                    .await
-                    .unwrap();
+                sender.feed(data.into()).await.unwrap();
                 let mut strategy = FlushStrategy::new(false, false, true);
                 poll_fn(|cx| {
                     let mut cx = ContextBuilder::from(cx).ext(&mut strategy).build();

@@ -7,7 +7,7 @@ use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
 use raknet_rs::client::{self, ConnectTo};
 use raknet_rs::server::{self, MakeIncoming};
-use raknet_rs::{Message, Reliability};
+use raknet_rs::Message;
 use tokio::net::UdpSocket;
 
 #[tokio::main]
@@ -45,13 +45,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             .send()
                             .await
                             .unwrap();
-                        dst.send(Message::new(
-                            Reliability::Reliable,
-                            0,
-                            res.bytes().await.unwrap(),
-                        ))
-                        .await
-                        .unwrap();
+                        dst.send(Message::new(res.bytes().await.unwrap()))
+                            .await
+                            .unwrap();
                         continue;
                     }
                     break;
@@ -80,12 +76,8 @@ async fn client(addr: SocketAddr, name: &str) -> Result<(), Box<dyn Error>> {
         .await?;
     tokio::pin!(src);
     tokio::pin!(dst);
-    dst.send(Message::new(
-        Reliability::Reliable,
-        0,
-        Bytes::from_static(b"Hello, Anyone there?"),
-    ))
-    .await?;
+    dst.send(Message::new(Bytes::from_static(b"Hello, Anyone there?")))
+        .await?;
     let res = src.next().await.unwrap();
     println!(
         "[{name}] got server response: {}",

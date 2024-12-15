@@ -10,7 +10,7 @@ use pin_project_lite::pin_project;
 use crate::packet::connected::{self, Flags, Frame, Ordered};
 use crate::packet::{FRAGMENT_PART_SIZE, FRAME_SET_HEADER_SIZE};
 use crate::utils::u24;
-use crate::{Message, Reliability};
+use crate::{Message, Priority, Reliability};
 
 pin_project! {
     // Fragment splits the message into multiple frames if the message is too large.
@@ -30,7 +30,7 @@ pub(crate) trait Fragmented: Sized {
 
 impl<F> Fragmented for F
 where
-    F: Sink<Frame, Error = io::Error>,
+    F: Sink<(Priority, Frame), Error = io::Error>,
 {
     fn fragmented(self, mtu: usize, max_channels: usize) -> Fragment<Self> {
         Fragment {
@@ -45,7 +45,7 @@ where
 
 impl<F> Sink<Message> for Fragment<F>
 where
-    F: Sink<Frame, Error = io::Error>,
+    F: Sink<(Priority, Frame), Error = io::Error>,
 {
     type Error = io::Error;
 
@@ -55,8 +55,8 @@ where
 
     fn start_send(self: Pin<&mut Self>, msg: Message) -> Result<(), Self::Error> {
         let mut this = self.project();
-        let mut reliability = msg.get_reliability();
-        let order_channel = msg.get_order_channel() as usize;
+        let mut reliability = msg.reliability;
+        let order_channel = msg.order_channel as usize;
 
         debug_assert!(
             order_channel < this.order_write_index.len(),
@@ -64,7 +64,7 @@ where
             this.order_write_index.len()
         );
 
-        let mut body = msg.into_data();
+        let mut body = msg.data;
 
         // max_len is the maximum size of the frame body (excluding the fragment part option)
         let mut max_len = *this.mtu - FRAME_SET_HEADER_SIZE - reliability.size();
@@ -112,7 +112,7 @@ where
                 fragment: None,
                 body,
             };
-            return this.frame.start_send(frame);
+            return this.frame.start_send((msg.priority, frame));
         }
 
         // subtract the fragment part option size
@@ -143,7 +143,7 @@ where
             // We rely on the underlying sink to handle backpressure
             this.frame
                 .as_mut()
-                .start_send(frame)
+                .start_send((msg.priority, frame))
                 .expect("send fragmented frame failed");
         }
 
@@ -180,7 +180,7 @@ mod test {
         buf: Frames,
     }
 
-    impl Sink<Frame> for DstSink {
+    impl Sink<(Priority, Frame)> for DstSink {
         type Error = io::Error;
 
         fn poll_ready(
@@ -190,8 +190,11 @@ mod test {
             Poll::Ready(Ok(()))
         }
 
-        fn start_send(mut self: Pin<&mut Self>, item: Frame) -> Result<(), Self::Error> {
-            self.buf.push(item);
+        fn start_send(
+            mut self: Pin<&mut Self>,
+            item: (Priority, Frame),
+        ) -> Result<(), Self::Error> {
+            self.buf.push(item.1);
             Ok(())
         }
 
@@ -216,43 +219,47 @@ mod test {
         tokio::pin!(dst);
         // 1
         dst.as_mut()
-            .start_send(Message::new(
-                Reliability::ReliableOrdered,
-                0,
-                Bytes::from_static(b"hello world"),
-            ))
+            .start_send(
+                Message::new(Bytes::from_static(b"hello world"))
+                    .reliability(Reliability::ReliableOrdered)
+                    .order_channel(0),
+            )
             .unwrap();
         // 2
         dst.as_mut()
-            .start_send(Message::new(
-                Reliability::ReliableOrdered,
-                1,
-                Bytes::from_static(b"hello world, hello world, hello world, hello world"),
-            ))
+            .start_send(
+                Message::new(Bytes::from_static(
+                    b"hello world, hello world, hello world, hello world",
+                ))
+                .reliability(Reliability::ReliableOrdered)
+                .order_channel(1),
+            )
             .unwrap();
         // 1
         dst.as_mut()
-            .start_send(Message::new(
-                Reliability::Reliable,
-                0,
-                Bytes::from_static(b"hello world"),
-            ))
+            .start_send(
+                Message::new(Bytes::from_static(b"hello world"))
+                    .reliability(Reliability::Reliable)
+                    .order_channel(0),
+            )
             .unwrap();
         // 2
         dst.as_mut()
-            .start_send(Message::new(
-                Reliability::Unreliable, // adjust to reliable
-                0,
-                Bytes::from_static(b"hello world, hello world, hello world, hello world"),
-            ))
+            .start_send(
+                Message::new(Bytes::from_static(
+                    b"hello world, hello world, hello world, hello world",
+                ))
+                .reliability(Reliability::Unreliable) // adjusted
+                .order_channel(0),
+            )
             .unwrap();
         // 1
         dst.as_mut()
-            .start_send(Message::new(
-                Reliability::Unreliable,
-                0,
-                Bytes::from_static(b"hello world"),
-            ))
+            .start_send(
+                Message::new(Bytes::from_static(b"hello world"))
+                    .reliability(Reliability::Unreliable)
+                    .order_channel(0),
+            )
             .unwrap();
 
         assert_eq!(dst.order_write_index[0].to_u32(), 1); // 1 message on channel 0 requires ordering, next ordered frame index is 1
@@ -271,11 +278,11 @@ mod test {
         let dst = DstSink::default().fragmented(50, 8);
         tokio::pin!(dst);
         dst.as_mut()
-            .start_send(Message::new(
-                Reliability::ReliableOrdered,
-                100,
-                Bytes::from_static(b"hello world"),
-            ))
+            .start_send(
+                Message::new(Bytes::from_static(b"hello world"))
+                    .reliability(Reliability::ReliableOrdered)
+                    .order_channel(100),
+            )
             .unwrap();
     }
 
@@ -284,11 +291,13 @@ mod test {
         let dst = DstSink::default().fragmented(50, 8);
         tokio::pin!(dst);
         dst.as_mut()
-            .start_send(Message::new(
-                Reliability::ReliableOrdered,
-                0,
-                Bytes::from_iter(std::iter::repeat(0xfe).take(50 - FRAME_SET_HEADER_SIZE - 10)),
-            ))
+            .start_send(
+                Message::new(Bytes::from_iter(
+                    std::iter::repeat(0xfe).take(50 - FRAME_SET_HEADER_SIZE - 10),
+                ))
+                .reliability(Reliability::ReliableOrdered)
+                .order_channel(0),
+            )
             .unwrap();
         assert_eq!(dst.frame.buf.len(), 1); // 1 frame
         assert!(dst.frame.buf[0].fragment.is_none()); // not fragmented
@@ -300,11 +309,11 @@ mod test {
         let dst = DstSink::default().fragmented(50, 8);
         tokio::pin!(dst);
         dst.as_mut()
-            .start_send(Message::new(
-                Reliability::ReliableOrdered,
-                0,
-                Bytes::from_iter(std::iter::repeat(0xfe).take(50)),
-            ))
+            .start_send(
+                Message::new(Bytes::from_iter(std::iter::repeat(0xfe).take(50)))
+                    .reliability(Reliability::ReliableOrdered)
+                    .order_channel(0),
+            )
             .unwrap();
         assert_eq!(dst.frame.buf.len(), 2);
         let mut fragment = dst.frame.buf[0].fragment.unwrap();
@@ -329,11 +338,11 @@ mod test {
         let dst = DstSink::default().fragmented(50, 8);
         tokio::pin!(dst);
         dst.as_mut()
-            .start_send(Message::new(
-                Reliability::Unreliable,
-                0,
-                Bytes::from_iter(std::iter::repeat(0xfe).take(50)),
-            ))
+            .start_send(
+                Message::new(Bytes::from_iter(std::iter::repeat(0xfe).take(50)))
+                    .reliability(Reliability::Unreliable)
+                    .order_channel(0),
+            )
             .unwrap();
         assert_eq!(dst.frame.buf.len(), 2); // 2 frames
         assert_eq!(dst.frame.buf[0].flags.reliability, Reliability::Reliable); // adjusted

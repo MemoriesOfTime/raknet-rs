@@ -13,7 +13,7 @@ use futures::{SinkExt, StreamExt};
 use raknet_rs::client::{self, ConnectTo};
 use raknet_rs::opts::TraceInfo;
 use raknet_rs::server::{self, MakeIncoming};
-use raknet_rs::{Message, Reliability};
+use raknet_rs::Message;
 use tokio::net::UdpSocket;
 
 #[tokio::main]
@@ -56,10 +56,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         // do something with data
                         tokio::time::sleep(Duration::from_millis(10)).await;
                         let _span = Span::enter_with_parent("user child span", &root_span);
-                        writer
-                            .send(Message::new(Reliability::ReliableOrdered, 0, data))
-                            .await
-                            .unwrap();
+                        writer.send(Message::new(data)).await.unwrap();
                         continue;
                     }
                     break;
@@ -89,18 +86,10 @@ async fn client(addr: SocketAddr) -> Result<(), Box<dyn Error>> {
         .await?;
     tokio::pin!(src);
     tokio::pin!(dst);
-    dst.send(Message::new(
-        Reliability::ReliableOrdered,
-        0,
-        Bytes::from_static(b"User pack1"),
-    ))
-    .await?;
-    dst.send(Message::new(
-        Reliability::ReliableOrdered,
-        0,
-        Bytes::from_static(b"User pack2"),
-    ))
-    .await?;
+    dst.send(Message::new(Bytes::from_static(b"User pack1")))
+        .await?;
+    dst.send(Message::new(Bytes::from_static(b"User pack2")))
+        .await?;
     let pack1 = src.next().await.unwrap();
     let pack2 = src.next().await.unwrap();
     assert_eq!(pack1, Bytes::from_static(b"User pack1"));

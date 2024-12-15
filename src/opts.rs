@@ -1,4 +1,3 @@
-use std::collections::VecDeque;
 use std::future::Future;
 use std::io;
 use std::net::SocketAddr;
@@ -9,8 +8,9 @@ use fastrace::collector::TraceId;
 use futures::{Sink, SinkExt};
 use pin_project_lite::pin_project;
 
+use crate::guard::SendBuffer;
 use crate::link::SharedLink;
-use crate::packet::connected::{Frame, FrameBody};
+use crate::packet::connected::FrameBody;
 use crate::utils::timestamp;
 use crate::{Message, Peer};
 
@@ -166,7 +166,7 @@ impl FlushStrategy {
         self.pack_tag as usize
     }
 
-    pub(crate) fn check_flushed(&self, link: &SharedLink, buf: &VecDeque<Frame>) -> bool {
+    pub(crate) fn check_flushed(&self, link: &SharedLink, buf: &SendBuffer) -> bool {
         let mut ret = true;
         if self.ack_tag != -1 {
             ret &= link.outgoing_ack_empty();

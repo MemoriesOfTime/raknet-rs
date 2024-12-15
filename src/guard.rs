@@ -1,9 +1,9 @@
-use std::collections::{HashMap, VecDeque};
-use std::io;
+use std::collections::{BinaryHeap, HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
-use std::time::Instant;
+use std::time::{Duration, Instant};
+use std::{cmp, io};
 
 use futures::Sink;
 use log::trace;
@@ -15,7 +15,152 @@ use crate::opts::FlushStrategy;
 use crate::packet::connected::{self, AckOrNack, Frame, FrameSet, Frames, FramesRef, Record};
 use crate::packet::{Packet, FRAME_SET_HEADER_SIZE};
 use crate::utils::{u24, ConnId, Reactor};
-use crate::{Peer, Role};
+use crate::{Peer, Priority, Role};
+
+// A frame with penalty
+#[derive(Debug, PartialEq, Eq)]
+struct PenaltyFrame {
+    penalty: u8,
+    frame: Frame,
+}
+
+impl PartialOrd for PenaltyFrame {
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for PenaltyFrame {
+    fn cmp(&self, other: &Self) -> cmp::Ordering {
+        // reverse ordering by penalty
+        other.penalty.cmp(&self.penalty)
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct SendBuffer {
+    cap: usize,
+
+    // ordered by tier
+    send_high: BinaryHeap<PenaltyFrame>,
+    send_medium: VecDeque<Frame>,
+    send_low: BinaryHeap<PenaltyFrame>,
+    resend: BinaryHeap<PenaltyFrame>,
+}
+
+impl SendBuffer {
+    fn new(cap: usize) -> Self {
+        Self {
+            cap,
+            send_high: BinaryHeap::with_capacity(cap),
+            send_medium: VecDeque::with_capacity(cap),
+            send_low: BinaryHeap::with_capacity(cap),
+            resend: BinaryHeap::with_capacity(cap),
+        }
+    }
+
+    fn send(&mut self, (priority, frame): (Priority, Frame)) {
+        match priority {
+            Priority::High(penalty) => self.send_high.push(PenaltyFrame { penalty, frame }),
+            Priority::Medium => self.send_medium.push_back(frame),
+            Priority::Low(penalty) => self.send_low.push(PenaltyFrame { penalty, frame }),
+        }
+    }
+
+    fn resend(&mut self, frames: impl IntoIterator<Item = PenaltyFrame>) {
+        self.resend.extend(frames.into_iter().map(|mut frame| {
+            // add penalty while resending
+            frame.penalty = frame.penalty.saturating_add(1);
+            frame
+        }));
+    }
+
+    fn pop(&mut self, mtu: usize, reliable: &mut bool, frames: &mut Frames) -> u8 {
+        let mut remain = mtu - FRAME_SET_HEADER_SIZE;
+        let mut penalty_sum: usize = 0;
+
+        // pop resend first
+        while let Some(item) = self.resend.peek() {
+            if remain >= item.frame.size() {
+                if item.frame.flags.reliability.is_reliable() {
+                    *reliable = true;
+                }
+                remain -= item.frame.size();
+                let frame = self.resend.pop().unwrap();
+                frames.push(frame.frame);
+                // inherit the resend penalty
+                penalty_sum += frame.penalty as usize;
+                continue;
+            }
+            break;
+        }
+
+        // pop send in order
+
+        while let Some(item) = self.send_high.peek() {
+            if remain >= item.frame.size() {
+                if item.frame.flags.reliability.is_reliable() {
+                    *reliable = true;
+                }
+                remain -= item.frame.size();
+                frames.push(self.send_high.pop().unwrap().frame);
+                // reset penalty
+                penalty_sum = 0;
+                continue;
+            }
+            break;
+        }
+
+        while let Some(frame) = self.send_medium.front() {
+            if remain >= frame.size() {
+                if frame.flags.reliability.is_reliable() {
+                    *reliable = true;
+                }
+                remain -= frame.size();
+                frames.push(self.send_medium.pop_front().unwrap());
+                // reset penalty
+                penalty_sum = 0;
+                continue;
+            }
+            break;
+        }
+
+        while let Some(item) = self.send_low.peek() {
+            if remain >= item.frame.size() {
+                if item.frame.flags.reliability.is_reliable() {
+                    *reliable = true;
+                }
+                remain -= item.frame.size();
+                frames.push(self.send_low.pop().unwrap().frame);
+                // reset penalty
+                penalty_sum = 0;
+                continue;
+            }
+            break;
+        }
+
+        debug_assert!(
+            self.is_empty() || !frames.is_empty(),
+            "every frame size should not exceed MTU"
+        );
+
+        if frames.is_empty() {
+            return 0;
+        }
+
+        // calculate the mean of penalty in these frames
+        // if there is some frame sending firstly, the penalty is 0
+        (penalty_sum / frames.len()) as u8
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.send_high.len() + self.send_medium.len() + self.send_low.len() + self.resend.len()
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
 
 pin_project! {
     // OutgoingGuard equips with ACK/NACK flusher and packets buffer and provides
@@ -25,10 +170,9 @@ pin_project! {
         frame: F,
         link: SharedLink,
         seq_num_write_index: u24,
-        buf: VecDeque<Frame>,
         peer: Peer,
         role: Role,
-        cap: usize,
+        buf: SendBuffer,
         resend: ResendMap,
     }
 }
@@ -59,10 +203,9 @@ where
             frame: self,
             link,
             seq_num_write_index: 0.into(),
-            buf: VecDeque::with_capacity(cap),
             peer,
             role,
-            cap,
+            buf: SendBuffer::new(cap),
             resend: ResendMap::new(role, peer, Box::new(RFC6298Impl::new())),
         }
     }
@@ -93,25 +236,7 @@ where
         let mut pack_cnt = 0;
 
         while !strategy.check_flushed(this.link, this.buf) {
-            // 1st. empty the nack
-            ready!(this.frame.as_mut().poll_ready(cx))?;
-            if strategy.flush_nack()
-                && let Some(nack) = this.link.process_outgoing_nack(this.peer.mtu)
-            {
-                trace!(
-                    "[{}] send nack {nack:?} to {}, total count: {}",
-                    this.role,
-                    this.peer,
-                    nack.total_cnt()
-                );
-                nack_cnt += nack.total_cnt();
-                this.frame.as_mut().start_send((
-                    Packet::Connected(connected::Packet::Nack(nack)),
-                    this.peer.addr,
-                ))?;
-            }
-
-            // 2nd. empty the ack
+            // 1. empty the ack
             ready!(this.frame.as_mut().poll_ready(cx))?;
             if strategy.flush_ack()
                 && let Some(ack) = this.link.process_outgoing_ack(this.peer.mtu)
@@ -129,12 +254,30 @@ where
                 ))?;
             }
 
+            // 2. empty the nack
+            ready!(this.frame.as_mut().poll_ready(cx))?;
+            if strategy.flush_nack()
+                && let Some(nack) = this.link.process_outgoing_nack(this.peer.mtu)
+            {
+                trace!(
+                    "[{}] send nack {nack:?} to {}, total count: {}",
+                    this.role,
+                    this.peer,
+                    nack.total_cnt()
+                );
+                nack_cnt += nack.total_cnt();
+                this.frame.as_mut().start_send((
+                    Packet::Connected(connected::Packet::Nack(nack)),
+                    this.peer.addr,
+                ))?;
+            }
+
             if !strategy.flush_pack() {
                 // skip flushing packets
                 continue;
             }
 
-            // 3rd. empty the unconnected packets
+            // 3. empty the unconnected packets
             ready!(this.frame.as_mut().poll_ready(cx))?;
             // only poll one packet each time
             if let Some(packet) = this.link.process_unconnected().next() {
@@ -152,34 +295,30 @@ where
 
             // 4th. empty the frame set
             ready!(this.frame.as_mut().poll_ready(cx))?;
-            let mut frames = Vec::with_capacity(this.buf.len());
+            let mut frames = Vec::new();
             let mut reliable = false;
-            let mut remain = this.peer.mtu as usize - FRAME_SET_HEADER_SIZE;
-            while let Some(frame) = this.buf.back() {
-                if remain >= frame.size() {
-                    if frame.flags.reliability.is_reliable() {
-                        reliable = true;
-                    }
-                    remain -= frame.size();
-                    frames.push(this.buf.pop_back().unwrap());
-                    continue;
-                }
-                break;
-            }
-            debug_assert!(
-                this.buf.is_empty() || !frames.is_empty(),
-                "every frame size should not exceed MTU"
-            );
+            let penalty = this
+                .buf
+                .pop(this.peer.mtu as usize, &mut reliable, &mut frames);
             if !frames.is_empty() {
                 trace!(
-                    "[{}] send frames to {}, seq_num: {}, reliable: {}, first data byte: 0x{:02x}, data size: {}, actual size: {}",
+                    "[{}] send {} frames to {}, seq_num: {}, reliable: {}, parted: {}, size: {}/{}",
                     this.role,
+                    frames.len(),
                     this.peer,
                     *this.seq_num_write_index,
                     reliable,
-                    frames[0].body[0],
+                    frames[0]
+                        .fragment
+                        .map(|fragment| format!(
+                            "{}[{}/{}]",
+                            fragment.parted_id,
+                            fragment.parted_index + 1,
+                            fragment.parted_size
+                        ))
+                        .unwrap_or(String::from("false")),
                     frames.iter().map(|frame| frame.body.len()).sum::<usize>(),
-                    frames.iter().map(Frame::size).sum::<usize>() + FRAME_SET_HEADER_SIZE,
+                    frames.iter().map(|frame| frame.size()).sum::<usize>() + FRAME_SET_HEADER_SIZE,
                 );
                 let frame_set = FrameSet {
                     seq_num: *this.seq_num_write_index,
@@ -191,7 +330,8 @@ where
                 ))?;
                 if reliable {
                     // keep for resending
-                    this.resend.record(*this.seq_num_write_index, frames);
+                    this.resend
+                        .record(*this.seq_num_write_index, penalty, frames);
                 }
                 *this.seq_num_write_index += 1;
                 pack_cnt += 1;
@@ -209,7 +349,7 @@ where
     }
 }
 
-impl<F> Sink<Frame> for OutgoingGuard<F>
+impl<F> Sink<(Priority, Frame)> for OutgoingGuard<F>
 where
     F: for<'a> Sink<(Packet<FramesRef<'a>>, SocketAddr), Error = io::Error>,
 {
@@ -218,7 +358,9 @@ where
     fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         let upstream = self.as_mut().try_empty(cx)?;
 
-        if self.buf.len() >= self.cap {
+        // TODO: wait for resend map not growing so huge
+
+        if self.buf.len() >= self.buf.cap {
             debug_assert!(
                 upstream == Poll::Pending,
                 "OutgoingGuard::try_empty returns Ready but buffer still remains!"
@@ -229,9 +371,9 @@ where
         }
     }
 
-    fn start_send(self: Pin<&mut Self>, frame: Frame) -> Result<(), Self::Error> {
+    fn start_send(self: Pin<&mut Self>, item: (Priority, Frame)) -> Result<(), Self::Error> {
         let this = self.project();
-        this.buf.push_front(frame);
+        this.buf.send(item);
         // Always success
         Ok(())
     }
@@ -272,6 +414,7 @@ where
 }
 
 struct ResendEntry {
+    penalty: u8,
     frames: Option<Frames>,
     send_at: Instant,
     expired_at: Instant,
@@ -296,14 +439,17 @@ impl ResendMap {
         }
     }
 
-    fn record(&mut self, seq_num: u24, frames: Frames) {
+    fn record(&mut self, seq_num: u24, penalty: u8, frames: Frames) {
         let now = Instant::now();
+        let rto = self.estimator.rto();
+        let penalty_dur = rto * penalty as u32;
         self.map.insert(
             seq_num,
             ResendEntry {
+                penalty,
                 frames: Some(frames),
                 send_at: now,
-                expired_at: now + self.estimator.rto(),
+                expired_at: now + rto + penalty_dur,
             },
         );
     }
@@ -316,23 +462,27 @@ impl ResendMap {
                         if let Some(ResendEntry { send_at, .. }) = self.map.remove(&i.into()) {
                             let rtt = received_at.saturating_duration_since(send_at);
                             self.estimator.update(rtt);
-                            trace!(
-                                "[{}] seq_num {i} is ACKed by {}, RTT: {rtt:?}, estimated RTO: {:?}",
-                                self.role,
-                                self.peer,
-                                self.estimator.rto()
-                            );
                         }
                     }
+                    trace!(
+                        "[{}] seq_num {}-{} are ACKed by {}, estimated RTT: {:?}, estimated RTO: {:?}",
+                        self.role,
+                        start,
+                        end,
+                        self.peer,
+                        self.estimator.rtt(),
+                        self.estimator.rto()
+                    );
                 }
                 Record::Single(seq_num) => {
                     if let Some(ResendEntry { send_at, .. }) = self.map.remove(&seq_num) {
                         let rtt = received_at.saturating_duration_since(send_at);
                         self.estimator.update(rtt);
                         trace!(
-                            "[{}] seq_num {seq_num} is ACKed by {}, RTT: {rtt:?}, estimated RTO: {:?}",
+                            "[{}] seq_num {seq_num} is ACKed by {}, RTT: {rtt:?}, estimated RTT: {:?}, estimated RTO: {:?}",
                             self.role,
                             self.peer,
+                            self.estimator.rtt(),
                             self.estimator.rto()
                         );
                     }
@@ -341,20 +491,28 @@ impl ResendMap {
         }
     }
 
-    fn on_nack_into(&mut self, nack: AckOrNack, buffer: &mut VecDeque<Frame>) {
+    fn on_nack_into(&mut self, nack: AckOrNack, buf: &mut SendBuffer) {
         trace!("[{}] receive NACKs {nack:?} from {}", self.role, self.peer);
         for record in nack.records {
             match record {
                 Record::Range(start, end) => {
                     for i in start.to_u32()..=end.to_u32() {
                         if let Some(entry) = self.map.remove(&i.into()) {
-                            buffer.extend(entry.frames.unwrap());
+                            buf.resend(entry.frames.unwrap().into_iter().map(|frame| {
+                                PenaltyFrame {
+                                    penalty: entry.penalty,
+                                    frame,
+                                }
+                            }));
                         }
                     }
                 }
                 Record::Single(seq_num) => {
                     if let Some(entry) = self.map.remove(&seq_num) {
-                        buffer.extend(entry.frames.unwrap());
+                        buf.resend(entry.frames.unwrap().into_iter().map(|frame| PenaltyFrame {
+                            penalty: entry.penalty,
+                            frame,
+                        }));
                     }
                 }
             }
@@ -362,7 +520,10 @@ impl ResendMap {
     }
 
     /// `process_stales` collect all stale frames into buffer and remove the expired entries
-    fn process_stales(&mut self, buffer: &mut VecDeque<Frame>) {
+    fn process_stales(&mut self, buf: &mut SendBuffer) {
+        // maximum skip scan RTO, used to avoid network enduring a high RTO and suddenly recovered
+        const MAX_SKIP_SCAN_RTO: Duration = Duration::from_secs(3);
+
         if self.map.is_empty() {
             return;
         }
@@ -377,11 +538,21 @@ impl ResendMap {
             return;
         }
         // find the first expired_at larger than now
-        let mut min_expired_at = now + self.estimator.rto();
+        let mut min_expired_at = now + cmp::min(self.estimator.rto(), MAX_SKIP_SCAN_RTO);
         let len_before = self.map.len();
         self.map.retain(|_, entry| {
             if entry.expired_at <= now {
-                buffer.extend(entry.frames.take().unwrap());
+                buf.resend(
+                    entry
+                        .frames
+                        .take()
+                        .unwrap()
+                        .into_iter()
+                        .map(|frame| PenaltyFrame {
+                            penalty: entry.penalty,
+                            frame,
+                        }),
+                );
                 false
             } else {
                 min_expired_at = min_expired_at.min(entry.expired_at);
@@ -437,7 +608,6 @@ impl ResendMap {
 
 #[cfg(test)]
 mod test {
-    use std::collections::VecDeque;
     use std::task::{Context, Poll};
     use std::time::{Duration, Instant};
 
@@ -445,6 +615,7 @@ mod test {
 
     use super::ResendMap;
     use crate::estimator::RFC6298Impl;
+    use crate::guard::SendBuffer;
     use crate::packet::connected::{AckOrNack, Flags, Frame};
     use crate::utils::tests::{test_trace_log_setup, TestWaker};
     use crate::{Peer, Reliability, Role};
@@ -458,10 +629,10 @@ mod test {
             Peer::test(),
             Box::new(RFC6298Impl::new()),
         );
-        map.record(0.into(), vec![]);
-        map.record(1.into(), vec![]);
-        map.record(2.into(), vec![]);
-        map.record(3.into(), vec![]);
+        map.record(0.into(), 0, vec![]);
+        map.record(1.into(), 0, vec![]);
+        map.record(2.into(), 0, vec![]);
+        map.record(3.into(), 0, vec![]);
         assert!(!map.is_empty());
         map.on_ack(
             AckOrNack::extend_from([0, 1, 2, 3].into_iter().map(Into::into), 100).unwrap(),
@@ -471,6 +642,7 @@ mod test {
 
         map.record(
             4.into(),
+            0,
             vec![Frame {
                 flags: Flags::new(Reliability::Unreliable, false),
                 reliable_frame_index: None,
@@ -482,6 +654,7 @@ mod test {
         );
         map.record(
             5.into(),
+            0,
             vec![
                 Frame {
                     flags: Flags::new(Reliability::Unreliable, false),
@@ -501,16 +674,25 @@ mod test {
                 },
             ],
         );
-        let mut buffer = VecDeque::default();
+        let mut buffer = SendBuffer::new(0);
         map.on_nack_into(
             AckOrNack::extend_from([4, 5].into_iter().map(Into::into), 100).unwrap(),
             &mut buffer,
         );
         assert!(map.is_empty());
         assert_eq!(buffer.len(), 3);
-        assert_eq!(buffer.pop_front().unwrap().body, Bytes::from_static(b"1"));
-        assert_eq!(buffer.pop_front().unwrap().body, Bytes::from_static(b"2"));
-        assert_eq!(buffer.pop_front().unwrap().body, Bytes::from_static(b"3"));
+        assert_eq!(
+            buffer.resend.pop().unwrap().frame.body,
+            Bytes::from_static(b"1")
+        );
+        assert_eq!(
+            buffer.resend.pop().unwrap().frame.body,
+            Bytes::from_static(b"2")
+        );
+        assert_eq!(
+            buffer.resend.pop().unwrap().frame.body,
+            Bytes::from_static(b"3")
+        );
     }
 
     #[test]
@@ -520,12 +702,12 @@ mod test {
             Peer::test(),
             Box::new(RFC6298Impl::new()),
         );
-        map.record(0.into(), vec![]);
-        map.record(1.into(), vec![]);
-        map.record(2.into(), vec![]);
+        map.record(0.into(), 0, vec![]);
+        map.record(1.into(), 0, vec![]);
+        map.record(2.into(), 0, vec![]);
         std::thread::sleep(TEST_RTO);
-        map.record(3.into(), vec![]);
-        let mut buffer = VecDeque::default();
+        map.record(3.into(), 0, vec![]);
+        let mut buffer = SendBuffer::new(0);
         map.process_stales(&mut buffer);
         assert_eq!(map.map.len(), 1);
     }
@@ -539,13 +721,13 @@ mod test {
             Peer::test(),
             Box::new(RFC6298Impl::new()),
         );
-        map.record(0.into(), vec![]);
+        map.record(0.into(), 0, vec![]);
         std::thread::sleep(TEST_RTO);
-        map.record(1.into(), vec![]);
-        map.record(2.into(), vec![]);
-        map.record(3.into(), vec![]);
+        map.record(1.into(), 0, vec![]);
+        map.record(2.into(), 0, vec![]);
+        map.record(3.into(), 0, vec![]);
 
-        let mut buffer = VecDeque::default();
+        let mut buffer = SendBuffer::new(0);
 
         let res = map.poll_wait(&mut Context::from_waker(&TestWaker::create()));
         assert!(matches!(res, Poll::Ready(_)));

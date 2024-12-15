@@ -45,16 +45,14 @@ impl<F: Stream> Stream for PendingTracer<F> {
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.project();
+        this.span
+            .get_or_insert_with(|| Span::enter_with_local_parent("codec.pending"));
         match this.frame.poll_next(cx) {
             r @ Poll::Ready(_) => {
                 this.span.take();
                 r
             }
-            p @ Poll::Pending => {
-                this.span
-                    .get_or_insert_with(|| Span::enter_with_local_parent("codec.pending"));
-                p
-            }
+            p @ Poll::Pending => p,
         }
     }
 }

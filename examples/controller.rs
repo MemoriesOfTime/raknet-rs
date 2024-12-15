@@ -16,7 +16,7 @@ use futures::{Sink, SinkExt, StreamExt};
 use raknet_rs::client::{self, ConnectTo};
 use raknet_rs::opts::FlushStrategy;
 use raknet_rs::server::MakeIncoming;
-use raknet_rs::{server, Message, Reliability};
+use raknet_rs::{server, Message};
 use tokio::net::UdpSocket;
 
 /// Self-balancing flush controller
@@ -100,11 +100,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 {
                     let sender1 = controller.shared_sender();
                     sender1
-                        .push(Message::new(
-                            Reliability::Reliable,
-                            0,
-                            Bytes::from_static(b"Welcome to the server"),
-                        ))
+                        .push(Message::new(Bytes::from_static(b"Welcome to the server")))
                         .unwrap();
                 }
                 let sender2 = controller.shared_sender();
@@ -113,8 +109,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         Some(data) = src.next() => {
                             // echo back
                             sender2.push(Message::new(
-                                Reliability::Reliable,
-                                0,
                                 data,
                             )).unwrap();
                         }
@@ -144,18 +138,10 @@ async fn client(addr: SocketAddr) -> Result<(), Box<dyn Error>> {
         .await?;
     tokio::pin!(src);
     tokio::pin!(dst);
-    dst.send(Message::new(
-        Reliability::ReliableOrdered,
-        0,
-        Bytes::from_static(b"User pack1"),
-    ))
-    .await?;
-    dst.send(Message::new(
-        Reliability::ReliableOrdered,
-        0,
-        Bytes::from_static(b"User pack2"),
-    ))
-    .await?;
+    dst.send(Message::new(Bytes::from_static(b"User pack1")))
+        .await?;
+    dst.send(Message::new(Bytes::from_static(b"User pack2")))
+        .await?;
     let pack1 = src.next().await.unwrap();
     let pack2 = src.next().await.unwrap();
     let pack3 = src.next().await.unwrap();

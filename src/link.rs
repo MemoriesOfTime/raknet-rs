@@ -50,7 +50,7 @@ pub(crate) struct TransferLink {
 impl TransferLink {
     pub(crate) fn new_arc(role: Role, peer: Peer) -> SharedLink {
         // avoiding ack flood, the overwhelming ack will be dropped and new ack will be displaced
-        const MAX_ACK_BUFFER: usize = 1024;
+        const MAX_ACK_BUFFER: usize = 4096;
 
         Arc::new(Self {
             incoming_ack: ConcurrentQueue::bounded(MAX_ACK_BUFFER),

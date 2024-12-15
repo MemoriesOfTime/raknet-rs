@@ -49,6 +49,7 @@ required-features = ["micro-bench"]
 [profile.bench]
 opt-level = 3
 lto = true
+debug = true
 
 [lints]
 workspace = true

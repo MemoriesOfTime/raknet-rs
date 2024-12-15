@@ -8,7 +8,7 @@ use pin_project_lite::pin_project;
 
 use crate::link::SharedLink;
 use crate::packet::connected::FrameBody;
-use crate::{Message, Reliability};
+use crate::{Message, Priority, Reliability};
 
 pin_project! {
     // BodyEncoder encodes internal frame body into Message
@@ -35,6 +35,7 @@ where
 #[inline(always)]
 fn encode(body: FrameBody) -> Message {
     const DEFAULT_FRAME_BODY_ORDERED_CHANNEL: u8 = 0;
+    const DEFAULT_FRAME_BODY_PRIORITY: Priority = Priority::Medium;
 
     let reliability = match body {
         FrameBody::ConnectedPing { .. } => Reliability::Unreliable,
@@ -50,11 +51,10 @@ fn encode(body: FrameBody) -> Message {
     };
     let mut data = BytesMut::new();
     body.write(&mut data);
-    Message::new(
-        reliability,
-        DEFAULT_FRAME_BODY_ORDERED_CHANNEL,
-        data.freeze(),
-    )
+    Message::new(data.freeze())
+        .reliability(reliability)
+        .order_channel(DEFAULT_FRAME_BODY_ORDERED_CHANNEL)
+        .priority(DEFAULT_FRAME_BODY_PRIORITY)
 }
 
 impl<F> BodyEncoder<F>

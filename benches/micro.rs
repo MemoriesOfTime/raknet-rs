@@ -33,8 +33,8 @@ pub fn codec_benchmark(c: &mut Criterion) {
             format!("decode_cnt-{cnt}_size-{}", datagram.len()),
             |bencher| {
                 bencher.to_async(FuturesExecutor).iter_batched(
-                    || opts.clone(),
-                    |o| o.run_bench(),
+                    || opts.gen_inputs(),
+                    micro_bench::codec::run_bench,
                     BatchSize::SmallInput,
                 );
             },

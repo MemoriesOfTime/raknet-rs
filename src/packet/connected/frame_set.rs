@@ -19,7 +19,7 @@ pub(crate) type FramesMut = Vec<Frame<BytesMut>>;
 
 pub(crate) type FrameMut = Frame<BytesMut>;
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct FrameSet<S> {
     pub(crate) seq_num: u24,
     pub(crate) set: S,
@@ -51,7 +51,7 @@ impl<'a> FrameSet<FramesRef<'a>> {
     }
 }
 
-#[derive(PartialEq, Clone)]
+#[derive(PartialEq, Eq, Clone)]
 pub(crate) struct Frame<B = Bytes> {
     pub(crate) flags: Flags,
     pub(crate) reliable_frame_index: Option<u24>,
@@ -185,7 +185,7 @@ impl<B: Buf> Frame<B> {
 
 /// Top 3 bits are reliability type, fourth bit is 1 when the frame is fragmented and part of a
 /// compound.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Flags {
     raw: u8,
     pub(crate) reliability: Reliability,
@@ -230,7 +230,7 @@ impl Flags {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Fragment {
     pub(crate) parted_size: u32,
     pub(crate) parted_id: u16,
@@ -253,7 +253,7 @@ impl Fragment {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Ordered {
     pub(crate) frame_index: u24,
     pub(crate) channel: u8,

@@ -204,44 +204,60 @@ impl Reliability {
     }
 }
 
+// Message priority, messages with higher priority will be transmitted first.
+//
+// There are three tiers: High, Medium, Low
+// The High and Low tiers come with a numeric penalty.
+// The lowest priority one is Low(255), and the highest priority one is High(0).
+//
+// Low(255) ~ Low(0) | Medium | High(255) ~ High(0)
+// >>>-------- priority from low to high ------->>>
+//
+// The message will be sent at a Medium tier by default.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum Priority {
+    High(u8),
+    Medium,
+    Low(u8),
+}
+
+impl Default for Priority {
+    fn default() -> Self {
+        Self::Medium
+    }
+}
+
 /// Raknet message
 #[derive(Debug, Clone)]
 pub struct Message {
-    reliability: Reliability,
-    order_channel: u8,
-    data: Bytes,
+    pub reliability: Reliability,
+    pub order_channel: u8,
+    pub priority: Priority,
+    pub data: Bytes,
 }
 
 impl Message {
-    pub fn new(reliability: Reliability, order_channel: u8, data: Bytes) -> Self {
+    pub fn new(data: Bytes) -> Self {
         Self {
-            reliability,
-            order_channel,
+            reliability: Reliability::ReliableOrdered,
+            order_channel: 0,
+            priority: Priority::default(),
             data,
         }
     }
 
-    pub fn set_reliability(&mut self, reliability: Reliability) {
+    pub fn reliability(mut self, reliability: Reliability) -> Self {
         self.reliability = reliability;
+        self
     }
 
-    pub fn set_order_channel(&mut self, channel: u8) {
+    pub fn order_channel(mut self, channel: u8) -> Self {
         self.order_channel = channel;
+        self
     }
 
-    pub fn get_reliability(&self) -> Reliability {
-        self.reliability
-    }
-
-    pub fn get_order_channel(&self) -> u8 {
-        self.order_channel
-    }
-
-    pub fn get_data(&self) -> &Bytes {
-        &self.data
-    }
-
-    pub fn into_data(self) -> Bytes {
-        self.data
+    pub fn priority(mut self, priority: Priority) -> Self {
+        self.priority = priority;
+        self
     }
 }
