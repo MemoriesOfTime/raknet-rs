@@ -1,6 +1,7 @@
 use std::io;
 use std::mem::MaybeUninit;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 
 use bytes::{BufMut, BytesMut};
@@ -8,7 +9,7 @@ use tokio::net::UdpSocket as TokioUdpSocket;
 
 use super::AsyncSocket;
 
-impl<S: AsRef<TokioUdpSocket> + Unpin> AsyncSocket for S {
+impl AsyncSocket for Arc<TokioUdpSocket> {
     fn poll_recv_from(
         &self,
         cx: &mut Context<'_>,

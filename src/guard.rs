@@ -538,11 +538,6 @@ impl ResendMap {
 
         let now = Instant::now();
         if now < self.last_record_expired_at {
-            trace!(
-                "[{}] skip scanning the resend map, last record expired within {:?}",
-                self.role,
-                self.last_record_expired_at - now
-            );
             return;
         }
         // find the first expired_at larger than now

@@ -1,5 +1,6 @@
 use std::future::poll_fn;
 use std::iter::repeat;
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::{Arc, Mutex};
 use std::task::ContextBuilder;
 use std::time::Duration;
@@ -12,7 +13,9 @@ use tokio::net::UdpSocket;
 use crate::client::{self, ConnectTo};
 use crate::opts::FlushStrategy;
 use crate::server::{self, MakeIncoming};
-use crate::utils::tests::test_trace_log_setup;
+use crate::utils::tests::{
+    test_trace_log_setup, RandomDataDisorder, RandomDataLoss, RandomNetDelay, SimNet,
+};
 use crate::{Message, Priority, Reliability};
 
 impl From<Bytes> for Message {
@@ -80,6 +83,110 @@ async fn test_tokio_udp_works() {
             .connect_to("127.0.0.1:19132", make_client_conf())
             .await
             .unwrap();
+
+        tokio::pin!(src);
+        tokio::pin!(dst);
+
+        dst.send(Bytes::from_iter(repeat(0xfe).take(256)).into())
+            .await
+            .unwrap();
+        assert_eq!(
+            src.next().await.unwrap(),
+            Bytes::from_iter(repeat(0xfe).take(256))
+        );
+        dst.send(Bytes::from_iter(repeat(0xfe).take(512)).into())
+            .await
+            .unwrap();
+        assert_eq!(
+            src.next().await.unwrap(),
+            Bytes::from_iter(repeat(0xfe).take(512))
+        );
+        dst.send(Bytes::from_iter(repeat(0xfe).take(1024)).into())
+            .await
+            .unwrap();
+        assert_eq!(
+            src.next().await.unwrap(),
+            Bytes::from_iter(repeat(0xfe).take(1024))
+        );
+        dst.send(Bytes::from_iter(repeat(0xfe).take(2048)).into())
+            .await
+            .unwrap();
+        assert_eq!(
+            src.next().await.unwrap(),
+            Bytes::from_iter(repeat(0xfe).take(2048))
+        );
+        dst.send(Bytes::from_iter(repeat(0xfe).take(4096)).into())
+            .await
+            .unwrap();
+        assert_eq!(
+            src.next().await.unwrap(),
+            Bytes::from_iter(repeat(0xfe).take(4096))
+        );
+    };
+
+    tokio::spawn(client).await.unwrap();
+}
+
+#[tokio::test(unhandled_panic = "shutdown_runtime")]
+async fn test_socket_works() {
+    let _guard = test_trace_log_setup();
+    let mut net = SimNet::bind(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
+    let mut e1 = net.add_endpoint();
+    let mut e2 = net.add_endpoint();
+    net.connect(&mut e1, &mut e2);
+    net.add_nemesis(
+        &mut e1,
+        &e2,
+        RandomDataLoss {
+            odd: 0.1,
+            rate: 0.3,
+        },
+    );
+    net.add_nemesis(
+        &mut e1,
+        &e2,
+        RandomDataDisorder {
+            odd: 0.1,
+            rate: 0.3,
+        },
+    );
+    net.add_nemesis(
+        &mut e1,
+        &e2,
+        RandomNetDelay {
+            odd: 0.1,
+            delay: Duration::from_secs(1),
+        },
+    );
+
+    let addr = e1.addr();
+
+    let echo_server = async move {
+        let mut incoming = e1.make_incoming(make_server_conf());
+        loop {
+            let (reader, sender) = incoming.next().await.unwrap();
+            tokio::spawn(async move {
+                tokio::pin!(reader);
+                tokio::pin!(sender);
+                let mut ticker = tokio::time::interval(Duration::from_millis(5));
+                loop {
+                    tokio::select! {
+                        Some(data) = reader.next() => {
+                            sender.feed(data.into()).await.unwrap();
+                        }
+                        _ = ticker.tick() => {
+                            sender.flush().await.unwrap();
+                        }
+                    };
+                }
+            });
+        }
+    };
+
+    tokio::spawn(echo_server);
+
+    let client = async move {
+        let (src, dst) = e2.connect_to(addr, make_client_conf()).await.unwrap();
 
         tokio::pin!(src);
         tokio::pin!(dst);

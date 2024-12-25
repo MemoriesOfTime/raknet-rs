@@ -1,11 +1,21 @@
 use std::io;
 use std::net::ToSocketAddrs;
+use std::sync::Arc;
 
 use bytes::Bytes;
-use futures::{Sink, Stream};
+use futures::future::BoxFuture;
+use futures::{Sink, Stream, StreamExt};
+use log::{error, trace};
 
 use super::handler::offline;
-use crate::opts::{ConnectionInfo, Ping};
+use super::handler::online::HandleOnline;
+use crate::codec::frame::Framed;
+use crate::codec::{AsyncSocket, Decoded, Encoded};
+use crate::guard::HandleOutgoing;
+use crate::link::{Route, TransferLink};
+use crate::opts::{ConnectionInfo, Ping, WrapConnectionInfo};
+use crate::state::{IncomingStateManage, OutgoingStateManage};
+use crate::utils::Logged;
 use crate::{codec, Message, Role};
 
 /// Connection implementation by using tokio's UDP framework
@@ -132,10 +142,61 @@ pub trait ConnectTo: Sized {
     #[allow(async_fn_in_trait)] // No need to consider the auto trait for now.
     async fn connect_to(
         self,
-        addr: impl ToSocketAddrs,
+        addrs: impl ToSocketAddrs,
         config: Config,
     ) -> io::Result<(
         impl Stream<Item = Bytes>,
         impl Sink<Message, Error = io::Error> + Ping + ConnectionInfo,
     )>;
+}
+
+pub(crate) async fn connect_to<H>(
+    socket: impl AsyncSocket,
+    addrs: impl ToSocketAddrs,
+    config: super::Config,
+    runtime: impl Fn(BoxFuture<'static, ()>) -> H,
+) -> io::Result<(
+    impl Stream<Item = Bytes>,
+    impl Sink<Message, Error = io::Error> + Ping + ConnectionInfo,
+)> {
+    let mut lookups = addrs.to_socket_addrs()?;
+    let addr = lookups
+        .next()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::AddrNotAvailable, "invalid address"))?;
+
+    let (mut incoming, peer) = offline::OfflineHandler::new(
+        Framed::new(socket.clone(), config.mtu as usize), // TODO: discover MTU
+        addr,
+        config.offline_config(),
+    )
+    .await?;
+    let role = config.client_role();
+
+    let link = TransferLink::new_arc(role, peer);
+    let dst = Framed::new(socket.clone(), peer.mtu as usize)
+        .handle_outgoing(Arc::clone(&link), config.send_buf_cap, peer, role)
+        .frame_encoded(peer.mtu, config.codec_config(), Arc::clone(&link))
+        .manage_outgoing_state(None)
+        .wrap_connection_info(peer);
+
+    let (mut router, route) = Route::new(Arc::clone(&link));
+
+    runtime(Box::pin(async move {
+        while let Some(pack) = incoming.next().await {
+            // deliver the packet actively so that we do not miss ACK/NACK packets to advance
+            // the outgoing state
+            router.deliver(pack);
+        }
+    }));
+
+    let src = route
+        .frame_decoded(config.codec_config())
+        .logged(
+            move |frame| trace!("[{role}] received {frame:?} from {peer}"),
+            move |err| error!("[{role}] decode error: {err} from {peer}"),
+        )
+        .manage_incoming_state()
+        .handle_online(addr, config.client_guid, Arc::clone(&link));
+
+    Ok((src, dst))
 }

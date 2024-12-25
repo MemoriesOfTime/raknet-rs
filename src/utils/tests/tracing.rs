@@ -1,7 +1,5 @@
 use std::collections::HashMap;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use std::task::Waker;
 
 use fastrace::collector::{SpanId, SpanRecord, TraceId};
 use parking_lot::Mutex;
@@ -104,34 +102,4 @@ pub(crate) fn test_trace_log_setup() -> TestTraceLogGuard {
     );
     let _ignore = env_logger::try_init();
     TestTraceLogGuard { spans }
-}
-
-pub(crate) struct TestWaker {
-    pub(crate) woken: AtomicBool,
-}
-
-impl std::task::Wake for TestWaker {
-    fn wake_by_ref(self: &Arc<Self>) {
-        self.woken.store(true, std::sync::atomic::Ordering::Relaxed);
-    }
-
-    fn wake(self: Arc<Self>) {
-        self.wake_by_ref();
-    }
-}
-
-impl TestWaker {
-    pub(crate) fn create() -> Waker {
-        Arc::new(TestWaker {
-            woken: AtomicBool::new(false),
-        })
-        .into()
-    }
-
-    pub(crate) fn pair() -> (Waker, Arc<Self>) {
-        let arc = Arc::new(TestWaker {
-            woken: AtomicBool::new(false),
-        });
-        (Waker::from(Arc::clone(&arc)), arc)
-    }
 }

@@ -53,7 +53,7 @@ impl Default for Config {
 
 /// Abstract async socket
 /// It's used to decode/encode raw frames from/to the socket.
-pub(crate) trait AsyncSocket: Unpin {
+pub(crate) trait AsyncSocket: Send + Sync + Unpin + Clone + 'static {
     fn poll_recv_from(
         &self,
         cx: &mut Context<'_>,
