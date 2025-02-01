@@ -102,12 +102,12 @@ where
 /// Customizing your own strategy can achieve many features:
 ///
 /// 1. [**Delayed ack**](https://en.wikipedia.org/wiki/TCP_delayed_acknowledgment) based on timing,
-/// thereby reducing the number of ack packets and improving bandwidth utilization. At the same
-/// time, sending based on timing can avoid deadlocks or regressions caused by delaying based on the
-/// number of packets.
+///    thereby reducing the number of ack packets and improving bandwidth utilization. At the same
+///    time, sending based on timing can avoid deadlocks or regressions caused by delaying based on
+///    the number of packets.
 ///
 /// 2. More aggressive nack/pack flush strategy which would be more beneficial for retransmitting
-/// packets.
+///    packets.
 ///
 /// After the flush is completed, the strategy will store the number of frames that have been
 /// flushed. You can use this number to determine when to take the next flush.

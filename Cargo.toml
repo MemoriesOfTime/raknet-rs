@@ -16,11 +16,11 @@ keywords = { workspace = true }
 async-channel = "2.3.1"
 bytes = "1"
 concurrent-queue = "2.5.0"
-fastrace = "0.7.3"
+fastrace = "0.7"
 futures = { version = "0.3.5", default-features = false }
 futures-async-stream = "0.2"
 log = "0.4"
-lru = "0.12"
+lru = "0.13"
 parking_lot = "0.12"
 pin-project-lite = "0.2"
 rand = "0.8"

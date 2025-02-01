@@ -572,9 +572,10 @@ impl ResendMap {
             self.estimator.clear();
         }
         trace!(
-            "[{}] resend {} stales, {} entries remains",
+            "[{}] collected {} stale packets to {}, {} entries remains",
             self.role,
             len_before - len,
+            self.peer,
             len,
         );
     }

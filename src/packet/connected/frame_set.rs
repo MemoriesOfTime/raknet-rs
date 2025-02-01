@@ -43,7 +43,7 @@ impl FrameSet<FramesMut> {
     }
 }
 
-impl<'a> FrameSet<FramesRef<'a>> {
+impl FrameSet<FramesRef<'_>> {
     pub(super) fn write(self, buf: &mut BytesMut) {
         buf.put_u24_le(self.seq_num);
         for frame in self.set {

@@ -1,9 +1,10 @@
+use std::future::Future;
 use std::io;
 use std::net::ToSocketAddrs;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use futures::future::BoxFuture;
 use futures::{Sink, Stream, StreamExt};
 use log::{error, trace};
 
@@ -154,7 +155,7 @@ pub(crate) async fn connect_to<H>(
     socket: impl AsyncSocket,
     addrs: impl ToSocketAddrs,
     config: super::Config,
-    runtime: impl Fn(BoxFuture<'static, ()>) -> H,
+    runtime: impl Fn(Pin<Box<dyn Future<Output = ()> + Send + Sync + 'static>>) -> H,
 ) -> io::Result<(
     impl Stream<Item = Bytes>,
     impl Sink<Message, Error = io::Error> + Ping + ConnectionInfo,

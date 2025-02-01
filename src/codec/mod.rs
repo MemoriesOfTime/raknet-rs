@@ -214,6 +214,7 @@ pub mod micro_bench {
                 }
                 remain = self.mtu - FRAME_SET_HEADER_SIZE;
 
+                #[allow(clippy::needless_option_take)]
                 if self.dup_ratio > 0. && rng.gen_ratio((self.dup_ratio * 100.0) as u32, 100) {
                     sets.push(FrameSet {
                         seq_num: sets.len().into(),

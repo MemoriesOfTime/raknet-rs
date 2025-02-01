@@ -142,7 +142,7 @@ impl TransferLink {
             guard: parking_lot::MutexGuard<'a, BTreeSet<u24>>,
         }
 
-        impl<'a> Iterator for BatchRecv<'a> {
+        impl Iterator for BatchRecv<'_> {
             type Item = u24;
 
             fn next(&mut self) -> Option<Self::Item> {

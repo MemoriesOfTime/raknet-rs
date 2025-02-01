@@ -39,7 +39,7 @@ impl<S> Packet<S> {
 }
 
 /// For cheap buffers cloning (i.e. `bytes::Bytes`)
-impl<'a> Packet<FramesRef<'a>> {
+impl Packet<FramesRef<'_>> {
     pub(crate) fn write(self, buf: &mut BytesMut) {
         match self {
             Packet::FrameSet(frame) => {
