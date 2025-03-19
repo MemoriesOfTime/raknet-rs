@@ -562,7 +562,7 @@ impl ResendMap {
                 true
             }
         });
-        debug_assert!(min_expired_at > now);
+        debug_assert!(min_expired_at >= now);
         // update the last record expired at
         self.last_record_expired_at = min_expired_at;
 
@@ -624,15 +624,17 @@ mod test {
     use crate::utils::tests::{test_trace_log_setup, TestWaker};
     use crate::{Peer, Reliability, Role};
 
-    const TEST_RTO: Duration = Duration::from_millis(1200);
+    const TEST_RTO: Duration = Duration::from_millis(520);
 
     #[test]
     fn test_resend_map_works() {
-        let mut map = ResendMap::new(
-            Role::test_server(),
-            Peer::test(),
-            Box::new(RFC6298Impl::new()),
-        );
+        let _guard = test_trace_log_setup();
+        let mut estimator = Box::new(RFC6298Impl::new());
+        for _ in 0..1000 {
+            estimator.update(TEST_RTO);
+        }
+        log::info!("estimator rto: {:?}", estimator.rto());
+        let mut map = ResendMap::new(Role::test_server(), Peer::test(), estimator);
         map.record(0.into(), 0, vec![]);
         map.record(1.into(), 0, vec![]);
         map.record(2.into(), 0, vec![]);
@@ -701,11 +703,13 @@ mod test {
 
     #[test]
     fn test_resend_map_stales() {
-        let mut map = ResendMap::new(
-            Role::test_server(),
-            Peer::test(),
-            Box::new(RFC6298Impl::new()),
-        );
+        let _guard = test_trace_log_setup();
+        let mut estimator = Box::new(RFC6298Impl::new());
+        for _ in 0..1000 {
+            estimator.update(TEST_RTO);
+        }
+        log::info!("estimator rto: {:?}", estimator.rto());
+        let mut map = ResendMap::new(Role::test_server(), Peer::test(), estimator);
         map.record(0.into(), 0, vec![]);
         map.record(1.into(), 0, vec![]);
         map.record(2.into(), 0, vec![]);
@@ -719,12 +723,12 @@ mod test {
     #[tokio::test]
     async fn test_resend_map_poll_wait() {
         let _guard = test_trace_log_setup();
-
-        let mut map = ResendMap::new(
-            Role::test_server(),
-            Peer::test(),
-            Box::new(RFC6298Impl::new()),
-        );
+        let mut estimator = Box::new(RFC6298Impl::new());
+        for _ in 0..1000 {
+            estimator.update(TEST_RTO);
+        }
+        log::info!("estimator rto: {:?}", estimator.rto());
+        let mut map = ResendMap::new(Role::test_server(), Peer::test(), estimator);
         map.record(0.into(), 0, vec![]);
         std::thread::sleep(TEST_RTO);
         map.record(1.into(), 0, vec![]);

@@ -4,6 +4,7 @@ use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
 use bytes::BytesMut;
+use fastrace::local::LocalSpan;
 use fastrace::{Event, Span};
 use futures::{Sink, Stream};
 use log::error;
@@ -109,20 +110,18 @@ impl<T: AsyncSocket> Stream for Framed<T> {
                         let current_addr = pin
                             .current_addr
                             .expect("will always be set before this line is called");
-                        Event::add_to_local_parent(
-                            format!("{:?} decoded", frame.pack_type()),
-                            || [],
-                        );
-
+                        LocalSpan::add_event(Event::new(format!(
+                            "{:?} decoded",
+                            frame.pack_type()
+                        )));
                         pin.decode_span.take();
                         pin.rd.clear();
 
                         return Poll::Ready(Some((frame, current_addr)));
                     }
                     Err(err) => {
-                        Event::add_to_local_parent(err.to_string(), || []);
                         error!("failed to decode packet: {}", err);
-
+                        LocalSpan::add_event(Event::new(err.to_string()));
                         pin.decode_span.take();
                         pin.rd.clear();
                     }
@@ -136,7 +135,7 @@ impl<T: AsyncSocket> Stream for Framed<T> {
                 Ok(addr) => addr,
                 Err(err) => {
                     error!("failed to receive data: {:?}", err);
-                    Event::add_to_local_parent(err.to_string(), || []);
+                    LocalSpan::add_event(Event::new(err.to_string()));
                     pin.rd.clear();
                     continue;
                 }

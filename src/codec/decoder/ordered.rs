@@ -1,6 +1,7 @@
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
+use fastrace::local::LocalSpan;
 use fastrace::{Event, Span};
 use futures::Stream;
 use log::warn;
@@ -108,7 +109,7 @@ where
                 let channel = usize::from(channel);
                 if channel >= *this.max_channels {
                     let err = format!("channel {} >= max_channels {}", channel, *this.max_channels);
-                    Event::add_to_local_parent(err.clone(), || []);
+                    LocalSpan::add_event(Event::new(err.clone()));
                     return Poll::Ready(Some(Err(CodecError::OrderedFrame(err))));
                 }
                 let ordering = this

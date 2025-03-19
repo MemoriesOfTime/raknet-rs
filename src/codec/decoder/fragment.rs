@@ -5,6 +5,7 @@ use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
 use bytes::BufMut;
+use fastrace::local::LocalSpan;
 use fastrace::{Event, Span};
 use futures::Stream;
 use lru::LruCache;
@@ -115,7 +116,7 @@ where
                             "parted_index {} >= parted_size {}",
                             parted_index, parted_size
                         );
-                        Event::add_to_local_parent(err.clone(), || []);
+                        LocalSpan::add_event(Event::new(err.clone()));
                         return Poll::Ready(Some(Err(CodecError::PartedFrame(err))));
                     }
                     if *this.limit_size != 0 && parted_size > *this.limit_size {
@@ -123,7 +124,7 @@ where
                             "parted_size {} exceed limit_size {}",
                             parted_size, *this.limit_size
                         );
-                        Event::add_to_local_parent(err.clone(), || []);
+                        LocalSpan::add_event(Event::new(err.clone()));
                         return Poll::Ready(Some(Err(CodecError::PartedFrame(err))));
                     }
                     let frames_queue = this.parts.get_or_insert_mut(parted_id, || {

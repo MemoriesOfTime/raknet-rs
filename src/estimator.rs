@@ -41,7 +41,13 @@ impl RFC6298Impl {
 
     /// The current RTO estimation.
     pub(crate) fn rto(&self) -> Duration {
-        self.rtt() + 4 * self.var
+        // TODO:
+        // RFC6298 2.4 suggests a minimum of 1 second, which may be
+        // a conservative choice for some applications.
+        // So we choose 500ms as the minimum RTO.
+        const MIN_RTO: Duration = Duration::from_millis(500);
+
+        std::cmp::max(MIN_RTO, self.rtt() + 4 * self.var)
     }
 
     /// Once smoothed and var are cleared, they should be initialized with the next RTT sample

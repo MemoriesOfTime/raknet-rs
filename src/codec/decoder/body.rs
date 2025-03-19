@@ -51,7 +51,7 @@ where
                 Poll::Ready(Some(Ok(body)))
             }
             Err(err) => {
-                Event::add_to_local_parent(err.to_string(), || []);
+                LocalSpan::add_event(Event::new(err.to_string()));
                 Poll::Ready(Some(Err(err)))
             }
         }
