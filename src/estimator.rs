@@ -1,4 +1,3 @@
-use std::cmp;
 use std::time::Duration;
 
 pub(crate) trait Estimator {
@@ -42,17 +41,7 @@ impl RFC6298Impl {
 
     /// The current RTO estimation.
     pub(crate) fn rto(&self) -> Duration {
-        // TODO:
-        // RFC6298 2.4 suggests a minimum of 1 second, which may be
-        // a conservative choice for some applications.
-        const MIN_RTO: Duration = Duration::from_secs(1);
-        /// The granularity of the timer
-        const TIMER_GRANULARITY: Duration = Duration::from_millis(1);
-
-        cmp::max(
-            self.rtt() + cmp::max(TIMER_GRANULARITY, 4 * self.var),
-            MIN_RTO,
-        )
+        self.rtt() + 4 * self.var
     }
 
     /// Once smoothed and var are cleared, they should be initialized with the next RTT sample
