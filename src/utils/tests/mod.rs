@@ -1,12 +1,20 @@
+use std::io;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::task::Waker;
 
+use bytes::Bytes;
+use futures::{Sink, Stream, StreamExt};
+
+mod flusher;
 mod sim_net;
 mod tracing;
 
+pub(crate) use flusher::*;
 pub(crate) use sim_net::*;
 pub(crate) use tracing::*;
+
+use crate::Message;
 
 pub(crate) struct TestWaker {
     pub(crate) woken: AtomicBool,
@@ -36,4 +44,32 @@ impl TestWaker {
         });
         (Waker::from(Arc::clone(&arc)), arc)
     }
+}
+
+pub(crate) fn spawn_echo_server(
+    incoming: impl Stream<
+            Item = (
+                impl Stream<Item = Bytes> + Send + Sync + 'static,
+                impl Sink<Message, Error = io::Error> + Send + Sync + 'static,
+            ),
+        > + Send
+        + Sync
+        + 'static,
+) {
+    tokio::spawn(async move {
+        tokio::pin!(incoming);
+        loop {
+            let (reader, sender) = incoming.next().await.unwrap();
+            tokio::spawn(async move {
+                tokio::pin!(reader);
+                let (mut flusher, _notify, tx) = Flusher::new(Box::pin(sender));
+                tokio::spawn(async move {
+                    flusher.run().await.unwrap();
+                });
+                while let Some(data) = reader.next().await {
+                    tx.send(Message::new(data)).await.unwrap();
+                }
+            });
+        }
+    });
 }

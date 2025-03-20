@@ -8,6 +8,7 @@
 #![feature(context_ext)]
 #![feature(local_waker)]
 #![feature(binary_heap_drain_sorted)]
+#![feature(trait_alias)]
 
 /// Protocol codec
 mod codec;

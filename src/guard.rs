@@ -189,7 +189,6 @@ pin_project! {
         role: Role,
         buf: SendBuffer,
         resend: ResendMap,
-        congester: Box<dyn CongestionController>,
     }
 }
 
@@ -222,8 +221,12 @@ where
             peer,
             role,
             buf: SendBuffer::new(cap),
-            resend: ResendMap::new(role, peer, Box::new(RFC6298Impl::new())),
-            congester: Box::new(LegacyCongester::new()),
+            resend: ResendMap::new(
+                role,
+                peer,
+                Box::new(RFC6298Impl::new()),
+                Box::new(LegacyCongester::new()),
+            ),
         }
     }
 }
@@ -385,7 +388,7 @@ where
         let upstream = self.as_mut().try_empty(cx)?;
 
         let send_window = self.resend.inflight + self.buf.len();
-        let cap = cmp::min(self.buf.cap, self.congester.congestion_window());
+        let cap = cmp::min(self.buf.cap, self.resend.congester.congestion_window());
         if send_window >= cap {
             debug_assert!(
                 upstream == Poll::Pending,
@@ -455,10 +458,16 @@ struct ResendMap {
     peer: Peer,
     last_record_expired_at: Instant,
     estimator: Box<dyn Estimator>,
+    congester: Box<dyn CongestionController>,
 }
 
 impl ResendMap {
-    fn new(role: Role, peer: Peer, estimator: Box<dyn Estimator>) -> Self {
+    fn new(
+        role: Role,
+        peer: Peer,
+        estimator: Box<dyn Estimator>,
+        congester: Box<dyn CongestionController>,
+    ) -> Self {
         Self {
             reliable: HashMap::default(),
             inflight: 0,
@@ -466,6 +475,7 @@ impl ResendMap {
             peer,
             last_record_expired_at: Instant::now(),
             estimator,
+            congester,
         }
     }
 
@@ -488,6 +498,7 @@ impl ResendMap {
     }
 
     fn on_ack(&mut self, ack: AckOrNack, received_at: Instant) {
+        let mut ack_frames = 0;
         for record in ack.records {
             match record {
                 Record::Range(start, end) => {
@@ -500,18 +511,20 @@ impl ResendMap {
                         {
                             let rtt = received_at.saturating_duration_since(send_at);
                             self.estimator.update(rtt);
+                            ack_frames += frames.len();
                             self.inflight -= frames.len();
                         }
                     }
                     trace!(
-                        "[{}] seq_num {}-{} are ACKed by {}, estimated RTT: {:?}, estimated RTO: {:?}, inflight frames: {}",
+                        "[{}] seq_num {}-{} are ACKed by {}, estimated RTT: {:?}, estimated RTO: {:?}, inflight frames: {}, congestion window before: {}",
                         self.role,
                         start,
                         end,
                         self.peer,
                         self.estimator.rtt(),
                         self.estimator.rto(),
-                        self.inflight
+                        self.inflight,
+                        self.congester.congestion_window()
                     );
                 }
                 Record::Single(seq_num) => {
@@ -523,37 +536,37 @@ impl ResendMap {
                     {
                         let rtt = received_at.saturating_duration_since(send_at);
                         self.estimator.update(rtt);
+                        ack_frames += frames.len();
                         self.inflight -= frames.len();
                         trace!(
-                            "[{}] seq_num {seq_num} is ACKed by {}, RTT: {rtt:?}, estimated RTT: {:?}, estimated RTO: {:?}, inflight frames: {}",
+                            "[{}] seq_num {seq_num} is ACKed by {}, RTT: {rtt:?}, estimated RTT: {:?}, estimated RTO: {:?}, inflight frames: {}, congestion window before: {}",
                             self.role,
                             self.peer,
                             self.estimator.rtt(),
                             self.estimator.rto(),
-                            self.inflight
+                            self.inflight,
+                            self.congester.congestion_window()
                         );
                     }
                 }
             }
         }
+        self.congester.on_ack(ack_frames);
+
         #[cfg(debug_assertions)]
         self.debug_assert_inflight();
     }
 
     fn on_nack_into(&mut self, nack: AckOrNack, buf: &mut SendBuffer) {
-        trace!(
-            "[{}] receive NACKs {nack:?} from {}, inflight frames: {}",
-            self.role,
-            self.peer,
-            self.inflight
-        );
-        for record in nack.records {
+        let mut nack_frames = 0;
+        for record in &nack.records {
             match record {
                 Record::Range(start, end) => {
                     for i in start.to_u32()..=end.to_u32() {
                         if let Some(entry) = self.reliable.remove(&i.into()) {
                             let frames = entry.frames.unwrap();
                             self.inflight -= frames.len();
+                            nack_frames += frames.len();
                             buf.resend(frames.into_iter().map(|frame| PenaltyFrame {
                                 penalty: entry.penalty,
                                 frame,
@@ -562,9 +575,10 @@ impl ResendMap {
                     }
                 }
                 Record::Single(seq_num) => {
-                    if let Some(entry) = self.reliable.remove(&seq_num) {
+                    if let Some(entry) = self.reliable.remove(seq_num) {
                         let frames = entry.frames.unwrap();
                         self.inflight -= frames.len();
+                        nack_frames += frames.len();
                         buf.resend(frames.into_iter().map(|frame| PenaltyFrame {
                             penalty: entry.penalty,
                             frame,
@@ -573,6 +587,16 @@ impl ResendMap {
                 }
             }
         }
+        self.congester.on_nack(nack_frames);
+        trace!(
+            "[{}] receive NACKs {nack:?} from {}, nack frames count: {}, inflight frames: {}, congestion window: {}",
+            self.role,
+            self.peer,
+            nack_frames,
+            self.inflight,
+            self.congester.congestion_window()
+        );
+
         #[cfg(debug_assertions)]
         self.debug_assert_inflight();
     }
@@ -613,17 +637,17 @@ impl ResendMap {
 
         let len = self.reliable.len();
         if len_before > len {
-            // clear the estimator if detected packet loss
             self.estimator.clear();
+            self.congester.on_timeout();
+            trace!(
+                "[{}] collected {} timeout packets to {}, inflight frames: {}, congestion window: {}",
+                self.role,
+                len_before - len,
+                self.peer,
+                self.inflight,
+                self.congester.congestion_window()
+            );
         }
-        trace!(
-            "[{}] collected {} stale packets to {}, inflight frames: {}, next expired within: {:?}",
-            self.role,
-            len_before - len,
-            self.peer,
-            self.inflight,
-            min_expired_at.saturating_duration_since(Instant::now())
-        );
 
         #[cfg(debug_assertions)]
         self.debug_assert_inflight();
@@ -680,6 +704,7 @@ mod test {
     use bytes::Bytes;
 
     use super::ResendMap;
+    use crate::congestion::legacy::LegacyCongester;
     use crate::estimator::RFC6298Impl;
     use crate::guard::SendBuffer;
     use crate::packet::connected::{AckOrNack, Flags, Frame};
@@ -696,7 +721,12 @@ mod test {
             estimator.update(TEST_RTO);
         }
         log::info!("estimator rto: {:?}", estimator.rto());
-        let mut map = ResendMap::new(Role::test_server(), Peer::test(), estimator);
+        let mut map = ResendMap::new(
+            Role::test_server(),
+            Peer::test(),
+            estimator,
+            Box::new(LegacyCongester::new()),
+        );
         map.record(0.into(), 0, vec![]);
         map.record(1.into(), 0, vec![]);
         map.record(2.into(), 0, vec![]);
@@ -772,7 +802,12 @@ mod test {
             estimator.update(TEST_RTO);
         }
         log::info!("estimator rto: {:?}", estimator.rto());
-        let mut map = ResendMap::new(Role::test_server(), Peer::test(), estimator);
+        let mut map = ResendMap::new(
+            Role::test_server(),
+            Peer::test(),
+            estimator,
+            Box::new(LegacyCongester::new()),
+        );
         map.record(0.into(), 0, vec![]);
         map.record(1.into(), 0, vec![]);
         map.record(2.into(), 0, vec![]);
@@ -791,7 +826,12 @@ mod test {
             estimator.update(TEST_RTO);
         }
         log::info!("estimator rto: {:?}", estimator.rto());
-        let mut map = ResendMap::new(Role::test_server(), Peer::test(), estimator);
+        let mut map = ResendMap::new(
+            Role::test_server(),
+            Peer::test(),
+            estimator,
+            Box::new(LegacyCongester::new()),
+        );
         map.record(0.into(), 0, vec![]);
         std::thread::sleep(TEST_RTO + Duration::from_millis(5));
         map.record(1.into(), 0, vec![]);

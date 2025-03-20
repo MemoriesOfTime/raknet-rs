@@ -14,7 +14,8 @@ use crate::client::{self, ConnectTo};
 use crate::opts::FlushStrategy;
 use crate::server::{self, MakeIncoming};
 use crate::utils::tests::{
-    test_trace_log_setup, RandomDataDisorder, RandomDataLost, RandomNetDelay, SimNet,
+    spawn_echo_server, test_trace_log_setup, RandomDataDisorder, RandomDataLost, RandomNetDelay,
+    SimNet,
 };
 use crate::{Message, Priority, Reliability};
 
@@ -49,32 +50,12 @@ fn make_client_conf() -> client::Config {
 async fn test_tokio_udp_works() {
     let _guard = test_trace_log_setup();
 
-    let echo_server = async {
-        let mut incoming = UdpSocket::bind("0.0.0.0:19132")
+    spawn_echo_server(
+        UdpSocket::bind("0.0.0.0:19132")
             .await
             .unwrap()
-            .make_incoming(make_server_conf());
-        loop {
-            let (reader, sender) = incoming.next().await.unwrap();
-            tokio::spawn(async move {
-                tokio::pin!(reader);
-                tokio::pin!(sender);
-                let mut ticker = tokio::time::interval(Duration::from_millis(5));
-                loop {
-                    tokio::select! {
-                        Some(data) = reader.next() => {
-                            sender.feed(data.into()).await.unwrap();
-                        }
-                        _ = ticker.tick() => {
-                            sender.flush().await.unwrap();
-                        }
-                    };
-                }
-            });
-        }
-    };
-
-    tokio::spawn(echo_server);
+            .make_incoming(make_server_conf()),
+    );
 
     let client = async {
         let (src, dst) = UdpSocket::bind("0.0.0.0:0")
@@ -151,32 +132,9 @@ async fn test_socket_works() {
             delay: Duration::from_secs(1),
         },
     );
-
     let addr = e1.addr();
 
-    let echo_server = async move {
-        let mut incoming = e1.make_incoming(make_server_conf());
-        loop {
-            let (reader, sender) = incoming.next().await.unwrap();
-            tokio::spawn(async move {
-                tokio::pin!(reader);
-                tokio::pin!(sender);
-                let mut ticker = tokio::time::interval(Duration::from_millis(5));
-                loop {
-                    tokio::select! {
-                        Some(data) = reader.next() => {
-                            sender.feed(data.into()).await.unwrap();
-                        }
-                        _ = ticker.tick() => {
-                            sender.flush().await.unwrap();
-                        }
-                    };
-                }
-            });
-        }
-    };
-
-    tokio::spawn(echo_server);
+    spawn_echo_server(e1.make_incoming(make_server_conf()));
 
     let client = async move {
         let (src, dst) = e2.connect_to(addr, make_client_conf()).await.unwrap();
