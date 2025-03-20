@@ -216,9 +216,6 @@ impl Route {
         }
         match pack {
             connected::Packet::FrameSet(frames) => {
-                // TODO: use lock free concurrent queue to buffer the outgoing ack/nack to avoid
-                // locking the mutex
-
                 self.link.outgoing_ack.lock().push(Reverse(frames.seq_num));
 
                 {

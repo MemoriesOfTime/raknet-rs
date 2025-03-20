@@ -42,6 +42,9 @@ jobs:
 
       - name: Sccache clear
         run: sccache --zero-stats > /dev/null
+      
+      - name: Build in release mode
+        run: cargo build --release --all-features --features fastrace/enable
 
       - name: Test with codecov
         run: cargo llvm-cov --no-report nextest --all-features --features fastrace/enable

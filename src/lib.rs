@@ -33,6 +33,9 @@ mod link;
 /// Estimators
 mod estimator;
 
+/// Congestion control
+mod congestion;
+
 /// Raknet server
 pub mod server;
 
