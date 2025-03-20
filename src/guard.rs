@@ -78,9 +78,13 @@ impl SendBuffer {
     }
 
     fn resend(&mut self, frames: impl IntoIterator<Item = PenaltyFrame>) {
+        // the maximum penalty for resending frames
+        // the default maximum penalty 255 (limited by u8) is used for priority frames
+        const MAX_RESEND_PENALTY: u8 = 30;
+
         self.resend.extend(frames.into_iter().map(|mut frame| {
             // add penalty while resending
-            frame.penalty = frame.penalty.saturating_add(1);
+            frame.penalty = cmp::min(frame.penalty.saturating_add(1), MAX_RESEND_PENALTY);
             frame
         }));
     }
@@ -232,13 +236,6 @@ where
     fn try_empty(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
         let mut this = self.project();
 
-        this.link.process_ack().for_each(|(ack, received_at)| {
-            this.resend.on_ack(ack, received_at);
-        });
-        this.link
-            .process_nack()
-            .for_each(|nack| this.resend.on_nack_into(nack, this.buf));
-        this.resend.process_stales(this.buf);
         let strategy = cx
             .ext()
             .downcast_ref::<FlushStrategy>()
@@ -247,6 +244,14 @@ where
         let mut ack_cnt = 0;
         let mut nack_cnt = 0;
         let mut pack_cnt = 0;
+
+        this.link.process_ack().for_each(|(ack, received_at)| {
+            this.resend.on_ack(ack, received_at);
+        });
+        this.link
+            .process_nack()
+            .for_each(|nack| this.resend.on_nack_into(nack, this.buf));
+        this.resend.process_stales(this.buf);
 
         while !strategy.check_flushed(this.link, this.buf) {
             // 1. empty the ack
@@ -306,7 +311,7 @@ where
                 pack_cnt += 1;
             }
 
-            // 4th. empty the frame set
+            // 4. empty the frame set
             ready!(this.frame.as_mut().poll_ready(cx))?;
             let mut frames = Vec::new();
             let mut reliable = false;
@@ -612,13 +617,14 @@ impl ResendMap {
             self.estimator.clear();
         }
         trace!(
-            "[{}] collected {} stale packets to {}, {} entries remains, inflight frames: {}",
+            "[{}] collected {} stale packets to {}, inflight frames: {}, next expired within: {:?}",
             self.role,
             len_before - len,
             self.peer,
-            len,
-            self.inflight
+            self.inflight,
+            min_expired_at.saturating_duration_since(Instant::now())
         );
+
         #[cfg(debug_assertions)]
         self.debug_assert_inflight();
     }

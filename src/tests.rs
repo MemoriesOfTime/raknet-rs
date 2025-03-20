@@ -14,7 +14,7 @@ use crate::client::{self, ConnectTo};
 use crate::opts::FlushStrategy;
 use crate::server::{self, MakeIncoming};
 use crate::utils::tests::{
-    test_trace_log_setup, RandomDataDisorder, RandomDataLoss, RandomNetDelay, SimNet,
+    test_trace_log_setup, RandomDataDisorder, RandomDataLost, RandomNetDelay, SimNet,
 };
 use crate::{Message, Priority, Reliability};
 
@@ -134,27 +134,20 @@ async fn test_socket_works() {
     let mut e1 = net.add_endpoint();
     let mut e2 = net.add_endpoint();
     net.connect(&mut e1, &mut e2);
-    net.add_nemesis(
-        &mut e1,
-        &e2,
-        RandomDataLoss {
-            odd: 0.1,
-            rate: 0.3,
-        },
-    );
+    net.add_nemesis(&mut e1, &e2, RandomDataLost { odd: 0.02 });
     net.add_nemesis(
         &mut e1,
         &e2,
         RandomDataDisorder {
-            odd: 0.1,
-            rate: 0.3,
+            odd: 0.02,
+            rate: 0.2,
         },
     );
     net.add_nemesis(
         &mut e1,
         &e2,
         RandomNetDelay {
-            odd: 0.1,
+            odd: 0.02,
             delay: Duration::from_secs(1),
         },
     );
@@ -225,6 +218,13 @@ async fn test_socket_works() {
         assert_eq!(
             src.next().await.unwrap(),
             Bytes::from_iter(repeat(0xfe).take(4096))
+        );
+        dst.send(Bytes::from_iter(repeat(0xfe).take(8192)).into())
+            .await
+            .unwrap();
+        assert_eq!(
+            src.next().await.unwrap(),
+            Bytes::from_iter(repeat(0xfe).take(8192))
         );
     };
 

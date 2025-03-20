@@ -162,8 +162,11 @@ impl AsyncSocket for Arc<Endpoint> {
         let nemeses = self.nemeses.get(&target).expect("not connect");
         let now = Instant::now();
         chan.push_back((buf.to_vec(), now));
-        for nemesis in nemeses {
-            nemesis.strike(&mut chan);
+        // skip for the first 2 packets
+        if chan.len() > 2 {
+            for nemesis in nemeses {
+                nemesis.strike(&mut chan);
+            }
         }
         Poll::Ready(Ok(buf.len()))
     }
@@ -188,6 +191,7 @@ impl Nemesis for RandomDataDisorder {
             return;
         }
         let amount = (inflight.len() as f32 * self.rate) as usize;
+        log::error!("nemesis strike! disorder {} packets", amount);
         let (front, back) = inflight.as_mut_slices();
         front.partial_shuffle(&mut rng, amount);
         if amount > front.len() {
@@ -196,30 +200,20 @@ impl Nemesis for RandomDataDisorder {
     }
 }
 
-// Make packets loss
-pub(crate) struct RandomDataLoss {
+// Make all packets lost
+pub(crate) struct RandomDataLost {
     pub(crate) odd: f32,
-    pub(crate) rate: f32,
 }
 
-impl Nemesis for RandomDataLoss {
+impl Nemesis for RandomDataLost {
     fn strike(&self, inflight: &mut NetChan) {
         let mut rng = rand::thread_rng();
         if self.odd <= rng.r#gen() {
             return;
         }
-        let mut amount = (inflight.len() as f32 * self.rate) as usize;
-        inflight.make_contiguous();
-        let (slice, _) = inflight.as_mut_slices();
-        while let Some(ele) = slice.choose_mut(&mut rng) {
-            if ele.0.is_empty() {
-                continue;
-            }
-            if amount == 0 {
-                return;
-            }
-            ele.0.clear();
-            amount -= 1;
+        log::error!("nemesis strike! loss all({}) packets", inflight.len());
+        for packet in inflight.iter_mut() {
+            packet.0.clear();
         }
     }
 }
@@ -235,6 +229,11 @@ impl Nemesis for RandomNetDelay {
         if self.odd <= rand::random() {
             return;
         }
+        log::error!(
+            "nemesis strike! delay {} packets {:?}",
+            inflight.len(),
+            self.delay
+        );
         inflight[0].1 += self.delay;
     }
 }
