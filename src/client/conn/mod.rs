@@ -26,8 +26,6 @@ mod tokio;
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Config {
-    /// The send buffer of each IO polled by the incoming
-    send_buf_cap: usize,
     /// The given mtu, the default value is 1400
     mtu: u16,
     /// The client guid, used to identify the client, initialized by random
@@ -55,7 +53,6 @@ impl Default for Config {
 impl Config {
     pub fn new() -> Self {
         Self {
-            send_buf_cap: 1024,
             mtu: 1400,
             client_guid: rand::random(),
             protocol_version: 9,
@@ -63,12 +60,6 @@ impl Config {
             max_parted_count: 256,
             max_channels: 1,
         }
-    }
-
-    /// Set the send buffer capacity of each IO polled by the incoming
-    pub fn send_buf_cap(mut self, send_buf_cap: usize) -> Self {
-        self.send_buf_cap = send_buf_cap;
-        self
     }
 
     /// Give the mtu of the connection

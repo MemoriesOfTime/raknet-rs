@@ -31,8 +31,6 @@ mod tokio;
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Config {
-    /// The send buffer of each IO polled by the incoming
-    send_buf_cap: usize,
     /// The server guid, used to identify the server, initialized by random
     sever_guid: u64,
     /// The advertisement, sent to the client when the client pings the server
@@ -68,7 +66,6 @@ impl Default for Config {
 impl Config {
     pub fn new() -> Self {
         Self {
-            send_buf_cap: 1024,
             sever_guid: rand::random(),
             advertisement: String::new(),
             min_mtu: 510,
@@ -79,13 +76,6 @@ impl Config {
             max_parted_count: 256,
             max_channels: 1,
         }
-    }
-
-    /// Set the send buffer of each IO polled by the incoming
-    /// The default value is 1024
-    pub fn send_buf_cap(mut self, cap: usize) -> Self {
-        self.send_buf_cap = cap;
-        self
     }
 
     /// Set the server guid
