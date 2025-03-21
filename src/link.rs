@@ -134,7 +134,24 @@ impl TransferLink {
     }
 
     pub(crate) fn process_outgoing_ack(&self, mtu: u16) -> Option<AckOrNack> {
-        AckOrNack::extend_from(self.outgoing_ack.lock().drain_sorted().map(|v| v.0), mtu)
+        struct BatchRecv<'a> {
+            guard: parking_lot::MutexGuard<'a, BinaryHeap<Reverse<u24>>>,
+        }
+
+        impl Iterator for BatchRecv<'_> {
+            type Item = u24;
+
+            fn next(&mut self) -> Option<Self::Item> {
+                self.guard.pop().map(|v| v.0)
+            }
+        }
+
+        AckOrNack::extend_from(
+            BatchRecv {
+                guard: self.outgoing_ack.lock(),
+            },
+            mtu,
+        )
     }
 
     pub(crate) fn process_outgoing_nack(&self, mtu: u16) -> Option<AckOrNack> {

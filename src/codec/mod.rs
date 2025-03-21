@@ -160,7 +160,11 @@ pub mod micro_bench {
         ) -> Result<(), Self::Error> {
             self.get_mut().buf.push_back(Frame {
                 body: BytesMut::from(frame.body),
-                ..frame
+                flags: frame.flags,
+                reliable_frame_index: frame.reliable_frame_index,
+                seq_frame_index: frame.seq_frame_index,
+                ordered: frame.ordered,
+                fragment: frame.fragment,
             });
             Ok(())
         }

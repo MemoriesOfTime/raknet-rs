@@ -90,7 +90,11 @@ impl FrameMut {
     pub(crate) fn freeze(self) -> Frame {
         Frame {
             body: self.body.freeze(),
-            ..self
+            flags: self.flags,
+            reliable_frame_index: self.reliable_frame_index,
+            seq_frame_index: self.seq_frame_index,
+            ordered: self.ordered,
+            fragment: self.fragment,
         }
     }
 

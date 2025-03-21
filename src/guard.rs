@@ -257,7 +257,7 @@ where
         this.resend.process_stales(this.buf);
 
         while !strategy.check_flushed(this.link, this.buf) {
-            // 1. empty the ack
+            // 1. empty the outgoing ack
             ready!(this.frame.as_mut().poll_ready(cx))?;
             if strategy.flush_ack()
                 && let Some(ack) = this.link.process_outgoing_ack(this.peer.mtu)
@@ -275,7 +275,7 @@ where
                 ))?;
             }
 
-            // 2. empty the nack
+            // 2. empty the outgoing nack
             ready!(this.frame.as_mut().poll_ready(cx))?;
             if strategy.flush_nack()
                 && let Some(nack) = this.link.process_outgoing_nack(this.peer.mtu)

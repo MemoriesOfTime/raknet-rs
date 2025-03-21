@@ -9,16 +9,14 @@ use tokio::time;
 
 use crate::Message;
 
-pub(crate) trait PinWriter = Sink<Message, Error = io::Error> + Unpin + Send + Sync + 'static;
-
-pub(crate) struct Flusher<W: PinWriter> {
+pub(crate) struct Flusher<W> {
     writer: W,
     ticker: time::Interval,
     notifier: Arc<Notify>,
     rx: Receiver<Message>,
 }
 
-impl<W: PinWriter> Flusher<W> {
+impl<W: Sink<Message, Error = io::Error> + Unpin + Send + Sync + 'static> Flusher<W> {
     const DEFAULT_FLUSH_DELAY: Duration = Duration::from_millis(1);
 
     pub(crate) fn new(writer: W) -> (Self, Arc<Notify>, Sender<Message>) {

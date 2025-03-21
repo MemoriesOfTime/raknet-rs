@@ -395,3 +395,43 @@ async fn test_message_priority_works() {
 
     tokio::spawn(client).await.unwrap();
 }
+
+#[tokio::test(unhandled_panic = "shutdown_runtime")]
+async fn test_tokio_udp_large_bytes() {
+    let _guard = test_trace_log_setup();
+
+    spawn_echo_server(
+        UdpSocket::bind("0.0.0.0:19136")
+            .await
+            .unwrap()
+            .make_incoming(make_server_conf().max_parted_size(u32::MAX)),
+    );
+
+    let client = async {
+        let (src, dst) = UdpSocket::bind("0.0.0.0:0")
+            .await
+            .unwrap()
+            .connect_to(
+                "127.0.0.1:19136",
+                make_client_conf().max_parted_size(u32::MAX),
+            )
+            .await
+            .unwrap();
+
+        tokio::pin!(src);
+        tokio::pin!(dst);
+
+        // 64mb
+        for _ in 0..1 << 6 {
+            dst.send(Bytes::from_iter(repeat(0xfe).take(1 << 20)).into())
+                .await
+                .unwrap();
+            assert_eq!(
+                src.next().await.unwrap(),
+                Bytes::from_iter(repeat(0xfe).take(1 << 20))
+            );
+        }
+    };
+
+    tokio::spawn(client).await.unwrap();
+}

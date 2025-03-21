@@ -1,14 +1,11 @@
 //! Raknet implementation by rust
 
 #![feature(impl_trait_in_assoc_type)]
-#![feature(type_changing_struct_update)]
 #![feature(coroutines, proc_macro_hygiene, stmt_expr_attributes)]
 #![feature(binary_heap_into_iter_sorted)]
 #![feature(let_chains)]
 #![feature(context_ext)]
 #![feature(local_waker)]
-#![feature(binary_heap_drain_sorted)]
-#![feature(trait_alias)]
 
 /// Protocol codec
 mod codec;
