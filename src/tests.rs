@@ -356,42 +356,35 @@ async fn test_message_priority_works() {
 
     tokio::spawn(server);
 
-    let client = async move {
-        let (_src, dst) = UdpSocket::bind("0.0.0.0:0")
-            .await
-            .unwrap()
-            .connect_to("127.0.0.1:19135", make_client_conf())
-            .await
-            .unwrap();
-
-        tokio::pin!(dst);
-
-        dst.feed(
-            Message::new(Bytes::from_iter(repeat(0xfe).take(256)))
-                .reliability(Reliability::Reliable),
-        )
+    let (_, dst) = UdpSocket::bind("0.0.0.0:0")
+        .await
+        .unwrap()
+        .connect_to("127.0.0.1:19135", make_client_conf())
         .await
         .unwrap();
-        dst.feed(
-            Message::new(Bytes::from_iter(repeat(0xfe).take(512)))
-                .priority(Priority::High(0))
-                .reliability(Reliability::Reliable),
-        )
-        .await
-        .unwrap();
+    tokio::pin!(dst);
+    dst.feed(
+        Message::new(Bytes::from_iter(repeat(0xfe).take(256))).reliability(Reliability::Reliable),
+    )
+    .await
+    .unwrap();
+    dst.feed(
+        Message::new(Bytes::from_iter(repeat(0xfe).take(512)))
+            .priority(Priority::High(0))
+            .reliability(Reliability::Reliable),
+    )
+    .await
+    .unwrap();
 
-        dst.flush().await.unwrap();
+    dst.flush().await.unwrap();
 
-        while recv.lock().unwrap().len() < 2 {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
+    while recv.lock().unwrap().len() < 2 {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 
-        assert_eq!(recv.lock().unwrap().len(), 2);
-        assert_eq!(recv.lock().unwrap()[0].len(), 512);
-        assert_eq!(recv.lock().unwrap()[1].len(), 256);
-    };
-
-    tokio::spawn(client).await.unwrap();
+    assert_eq!(recv.lock().unwrap().len(), 2);
+    assert_eq!(recv.lock().unwrap()[0].len(), 512);
+    assert_eq!(recv.lock().unwrap()[1].len(), 256);
 }
 
 #[tokio::test(unhandled_panic = "shutdown_runtime")]
@@ -419,22 +412,19 @@ async fn test_tokio_udp_large_bytes() {
         tokio::pin!(src);
         tokio::pin!(dst);
 
-        // 64mb
-        for _ in 0..1 << 10 {
-            dst.send(Bytes::from_iter(repeat(0xfe).take(1 << 16)).into())
-                .await
-                .unwrap();
-            let mut ticker = tokio::time::interval(Duration::from_millis(5));
-            loop {
-                tokio::select! {
-                    Some(data) = src.next() => {
-                        assert_eq!(data.len(), 1 << 16);
-                        break;
-                    }
-                    _ = ticker.tick() => {
-                        // flush ack
-                        dst.flush().await.unwrap();
-                    }
+        dst.send(Bytes::from_iter(repeat(0xfe).take(1 << 25)).into())
+            .await
+            .unwrap();
+        let mut ticker = tokio::time::interval(Duration::from_millis(5));
+        loop {
+            tokio::select! {
+                Some(data) = src.next() => {
+                    assert_eq!(data.len(), 1 << 25);
+                    break;
+                }
+                _ = ticker.tick() => {
+                    // flush ack
+                    dst.flush().await.unwrap();
                 }
             }
         }

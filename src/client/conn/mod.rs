@@ -5,7 +5,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use futures::{Sink, Stream, StreamExt};
+use futures::{Sink, SinkExt, Stream, StreamExt};
 use log::{error, trace};
 
 use super::handler::offline;
@@ -174,7 +174,7 @@ pub(crate) async fn connect_to<H>(
     let role = config.client_role();
 
     let link = TransferLink::new_arc(role, peer);
-    let dst = Framed::new(socket.clone(), peer.mtu as usize)
+    let mut dst = Framed::new(socket.clone(), peer.mtu as usize)
         .handle_outgoing(Arc::clone(&link), peer, role)
         .frame_encoded(peer.mtu, config.codec_config(), Arc::clone(&link))
         .manage_outgoing_state(None)
@@ -199,5 +199,7 @@ pub(crate) async fn connect_to<H>(
         .manage_incoming_state()
         .handle_online(addr, config.client_guid, Arc::clone(&link));
 
+    // make all internal packets flushed
+    SinkExt::<Message>::flush(&mut dst).await?;
     Ok((src, dst))
 }

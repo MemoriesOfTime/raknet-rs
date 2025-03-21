@@ -83,6 +83,13 @@ impl Drop for TestTraceLogGuard {
                 continue;
             }
             eprintln!("[trace_id] {}", trace_id.0);
+            if !list.contains_key(&SpanId::default()) {
+                log::error!(
+                    "root span not found, trace may lost record, list: {:?}",
+                    list
+                );
+                continue;
+            }
             let l = &list[&SpanId::default()];
             for (i, root) in l.iter().enumerate() {
                 dfs(&list, &spans_map, *root, 0, i == l.len() - 1);

@@ -368,20 +368,9 @@ where
 {
     type Error = io::Error;
 
-    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        let upstream = self.as_mut().try_empty(cx)?;
-
-        let send_window = self.resend.inflight + self.buf.len();
-        let cnwd = self.resend.congester.congestion_window();
-        if send_window >= cnwd {
-            debug_assert!(
-                upstream == Poll::Pending,
-                "OutgoingGuard::try_empty returns Ready but buffer still remains!"
-            );
-            Poll::Pending
-        } else {
-            Poll::Ready(Ok(()))
-        }
+    fn poll_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        // TODO: support congestion control
+        Poll::Ready(Ok(()))
     }
 
     fn start_send(self: Pin<&mut Self>, item: (Priority, Frame)) -> Result<(), Self::Error> {
