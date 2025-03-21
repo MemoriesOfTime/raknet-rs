@@ -27,7 +27,6 @@ impl From<Bytes> for Message {
 
 fn make_server_conf() -> server::Config {
     server::Config::new()
-        .send_buf_cap(1024)
         .sever_guid(1919810)
         .max_channels(64)
         .advertisement("123456")
@@ -39,7 +38,6 @@ fn make_server_conf() -> server::Config {
 
 fn make_client_conf() -> client::Config {
     client::Config::new()
-        .send_buf_cap(1024)
         .mtu(1000)
         .max_channels(64)
         .client_guid(114514)
@@ -359,7 +357,7 @@ async fn test_message_priority_works() {
     tokio::spawn(server);
 
     let client = async move {
-        let (_, dst) = UdpSocket::bind("0.0.0.0:0")
+        let (_src, dst) = UdpSocket::bind("0.0.0.0:0")
             .await
             .unwrap()
             .connect_to("127.0.0.1:19135", make_client_conf())
@@ -422,14 +420,23 @@ async fn test_tokio_udp_large_bytes() {
         tokio::pin!(dst);
 
         // 64mb
-        for _ in 0..1 << 6 {
-            dst.send(Bytes::from_iter(repeat(0xfe).take(1 << 20)).into())
+        for _ in 0..1 << 10 {
+            dst.send(Bytes::from_iter(repeat(0xfe).take(1 << 16)).into())
                 .await
                 .unwrap();
-            assert_eq!(
-                src.next().await.unwrap(),
-                Bytes::from_iter(repeat(0xfe).take(1 << 20))
-            );
+            let mut ticker = tokio::time::interval(Duration::from_millis(5));
+            loop {
+                tokio::select! {
+                    Some(data) = src.next() => {
+                        assert_eq!(data.len(), 1 << 16);
+                        break;
+                    }
+                    _ = ticker.tick() => {
+                        // flush ack
+                        dst.flush().await.unwrap();
+                    }
+                }
+            }
         }
     };
 

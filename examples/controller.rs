@@ -82,7 +82,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("[server] server listening on {local_addr} with flush controller");
     let mut incoming = socket.make_incoming(
         server::Config::new()
-            .send_buf_cap(1024)
             .sever_guid(114514)
             .advertisement("Hello, I am proxy server")
             .min_mtu(500)
@@ -130,7 +129,6 @@ async fn client(addr: SocketAddr) -> Result<(), Box<dyn Error>> {
         .connect_to(
             addr,
             client::Config::new()
-                .send_buf_cap(1024)
                 .mtu(1000)
                 .client_guid(1919810)
                 .protocol_version(11),

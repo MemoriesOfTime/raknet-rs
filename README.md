@@ -57,7 +57,6 @@ use raknet_rs::server::{self, MakeIncoming};
 
 let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await?;
 let config = server::Config::new()
-    .send_buf_cap(1024)
     .sever_guid(114514)
     .advertisement(&b"Hello, I am server"[..])
     ...
@@ -80,7 +79,6 @@ use raknet_rs::Reliability;
 
 let socket = tokio::net::UdpSocket::bind("0.0.0.0:0").await?;
 let config = client::Config::new()
-    .send_buf_cap(1024)
     .client_guid(1919810)
     ...
 let (_, writer) = socket.connect_to(<addr>, config).await?;

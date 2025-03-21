@@ -28,7 +28,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let local_addr = socket.local_addr()?;
     let mut incoming = socket.make_incoming(
         server::Config::new()
-            .send_buf_cap(1024)
             .sever_guid(114514)
             .advertisement("Hello, I am proxy server")
             .min_mtu(500)
@@ -78,7 +77,6 @@ async fn client(addr: SocketAddr) -> Result<(), Box<dyn Error>> {
         .connect_to(
             addr,
             client::Config::new()
-                .send_buf_cap(1024)
                 .mtu(1000)
                 .client_guid(1919810)
                 .protocol_version(11),

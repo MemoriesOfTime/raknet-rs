@@ -175,7 +175,7 @@ pub(crate) async fn connect_to<H>(
 
     let link = TransferLink::new_arc(role, peer);
     let dst = Framed::new(socket.clone(), peer.mtu as usize)
-        .handle_outgoing(Arc::clone(&link), config.send_buf_cap, peer, role)
+        .handle_outgoing(Arc::clone(&link), peer, role)
         .frame_encoded(peer.mtu, config.codec_config(), Arc::clone(&link))
         .manage_outgoing_state(None)
         .wrap_connection_info(peer);

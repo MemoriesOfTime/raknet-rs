@@ -49,8 +49,6 @@ impl Ord for PenaltyFrame {
 
 #[derive(Debug)]
 pub(crate) struct SendBuffer {
-    cap: usize,
-
     // ordered by tier
     send_high: BinaryHeap<PenaltyFrame>,
     send_medium: VecDeque<Frame>,
@@ -59,13 +57,12 @@ pub(crate) struct SendBuffer {
 }
 
 impl SendBuffer {
-    fn new(cap: usize) -> Self {
+    fn new() -> Self {
         Self {
-            cap,
-            send_high: BinaryHeap::with_capacity(cap),
-            send_medium: VecDeque::with_capacity(cap),
-            send_low: BinaryHeap::with_capacity(cap),
-            resend: BinaryHeap::with_capacity(cap),
+            send_high: BinaryHeap::new(),
+            send_medium: VecDeque::new(),
+            send_low: BinaryHeap::new(),
+            resend: BinaryHeap::new(),
         }
     }
 
@@ -193,34 +190,21 @@ pin_project! {
 }
 
 pub(crate) trait HandleOutgoing: Sized {
-    fn handle_outgoing(
-        self,
-        link: SharedLink,
-        cap: usize,
-        peer: Peer,
-        role: Role,
-    ) -> OutgoingGuard<Self>;
+    fn handle_outgoing(self, link: SharedLink, peer: Peer, role: Role) -> OutgoingGuard<Self>;
 }
 
 impl<F> HandleOutgoing for F
 where
     F: for<'a> Sink<(Packet<FramesRef<'a>>, SocketAddr), Error = io::Error>,
 {
-    fn handle_outgoing(
-        self,
-        link: SharedLink,
-        cap: usize,
-        peer: Peer,
-        role: Role,
-    ) -> OutgoingGuard<Self> {
-        assert!(cap > 0, "cap must larger than 0");
+    fn handle_outgoing(self, link: SharedLink, peer: Peer, role: Role) -> OutgoingGuard<Self> {
         OutgoingGuard {
             frame: self,
             link,
             seq_num_write_index: 0.into(),
             peer,
             role,
-            buf: SendBuffer::new(cap),
+            buf: SendBuffer::new(),
             resend: ResendMap::new(
                 role,
                 peer,
@@ -388,8 +372,8 @@ where
         let upstream = self.as_mut().try_empty(cx)?;
 
         let send_window = self.resend.inflight + self.buf.len();
-        let cap = cmp::min(self.buf.cap, self.resend.congester.congestion_window());
-        if send_window >= cap {
+        let cnwd = self.resend.congester.congestion_window();
+        if send_window >= cnwd {
             debug_assert!(
                 upstream == Poll::Pending,
                 "OutgoingGuard::try_empty returns Ready but buffer still remains!"
@@ -773,7 +757,7 @@ mod test {
                 },
             ],
         );
-        let mut buffer = SendBuffer::new(0);
+        let mut buffer = SendBuffer::new();
         map.on_nack_into(
             AckOrNack::extend_from([4, 5].into_iter().map(Into::into), 100).unwrap(),
             &mut buffer,
@@ -813,7 +797,7 @@ mod test {
         map.record(2.into(), 0, vec![]);
         std::thread::sleep(TEST_RTO + Duration::from_millis(5));
         map.record(3.into(), 0, vec![]);
-        let mut buffer = SendBuffer::new(0);
+        let mut buffer = SendBuffer::new();
         map.process_stales(&mut buffer);
         assert_eq!(map.reliable.len(), 1);
     }
@@ -838,8 +822,7 @@ mod test {
         map.record(2.into(), 0, vec![]);
         map.record(3.into(), 0, vec![]);
 
-        let mut buffer = SendBuffer::new(0);
-
+        let mut buffer = SendBuffer::new();
         let res = map.poll_wait(&mut Context::from_waker(&TestWaker::create()));
         assert!(matches!(res, Poll::Ready(_)));
 

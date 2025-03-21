@@ -258,7 +258,7 @@ impl<T: AsyncSocket> Stream for Incoming<T> {
             this.router.insert(peer.addr, entry);
 
             let dst = Framed::new(this.socket.clone(), this.config.max_mtu as usize)
-                .handle_outgoing(Arc::clone(&link), this.config.send_buf_cap, peer, role)
+                .handle_outgoing(Arc::clone(&link), peer, role)
                 .frame_encoded(peer.mtu, this.config.codec_config(), Arc::clone(&link))
                 .manage_outgoing_state(Some(CloseOnDrop::new(
                     peer.addr,
