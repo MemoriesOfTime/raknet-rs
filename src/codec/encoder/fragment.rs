@@ -1,10 +1,11 @@
 use std::cmp::min;
+use std::collections::VecDeque;
 use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use bytes::Buf;
-use futures::Sink;
+use futures::{ready, Sink};
 use pin_project_lite::pin_project;
 
 use crate::packet::connected::{self, Flags, Frame, Ordered};
@@ -21,6 +22,7 @@ pin_project! {
         reliable_write_index: u24,
         order_write_index: Vec<u24>,
         parted_id_write: u16,
+        buf: VecDeque<(Priority, Frame)>, // buffer used to handle backpressure
     }
 }
 
@@ -39,7 +41,25 @@ where
             reliable_write_index: 0.into(),
             order_write_index: std::iter::repeat(0.into()).take(max_channels).collect(),
             parted_id_write: 0,
+            buf: VecDeque::new(),
         }
+    }
+}
+
+impl<F> Fragment<F>
+where
+    F: Sink<(Priority, Frame), Error = io::Error>,
+{
+    fn poll_empty(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
+        if self.buf.is_empty() {
+            return Poll::Ready(Ok(()));
+        }
+        let mut this = self.project();
+        while let Some(frame) = this.buf.pop_front() {
+            ready!(this.frame.as_mut().poll_ready(cx))?;
+            this.frame.as_mut().start_send(frame)?;
+        }
+        Poll::Ready(Ok(()))
     }
 }
 
@@ -49,12 +69,13 @@ where
 {
     type Error = io::Error;
 
-    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        ready!(self.as_mut().poll_empty(cx))?;
         self.project().frame.poll_ready(cx)
     }
 
     fn start_send(self: Pin<&mut Self>, msg: Message) -> Result<(), Self::Error> {
-        let mut this = self.project();
+        let this = self.project();
         let mut reliability = msg.reliability;
         let order_channel = msg.order_channel as usize;
 
@@ -112,7 +133,8 @@ where
                 fragment: None,
                 body,
             };
-            return this.frame.start_send((msg.priority, frame));
+            this.buf.push_back((msg.priority, frame));
+            return Ok(());
         }
 
         // subtract the fragment part option size
@@ -140,11 +162,7 @@ where
                 frame.body.len() <= max_len,
                 "split failed, the frame body is too large"
             );
-            // We rely on the underlying sink to handle backpressure
-            this.frame
-                .as_mut()
-                .start_send((msg.priority, frame))
-                .expect("send fragmented frame failed");
+            this.buf.push_back((msg.priority, frame));
         }
 
         if reliability.is_sequenced_or_ordered() {
@@ -159,11 +177,13 @@ where
         Ok(())
     }
 
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        ready!(self.as_mut().poll_empty(cx))?;
         self.project().frame.poll_flush(cx)
     }
 
-    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        ready!(self.as_mut().poll_empty(cx))?;
         self.project().frame.poll_close(cx)
     }
 }
@@ -172,6 +192,7 @@ where
 mod test {
     use bytes::Bytes;
     use connected::Frames;
+    use futures::SinkExt;
 
     use super::*;
 
@@ -213,54 +234,54 @@ mod test {
         }
     }
 
-    #[test]
-    fn test_fragmented_works() {
+    #[tokio::test]
+    async fn test_fragmented_works() {
         let dst = DstSink::default().fragmented(50, 8);
         tokio::pin!(dst);
         // 1
-        dst.as_mut()
-            .start_send(
-                Message::new(Bytes::from_static(b"hello world"))
-                    .reliability(Reliability::ReliableOrdered)
-                    .order_channel(0),
-            )
-            .unwrap();
-        // 2
-        dst.as_mut()
-            .start_send(
-                Message::new(Bytes::from_static(
-                    b"hello world, hello world, hello world, hello world",
-                ))
+        dst.send(
+            Message::new(Bytes::from_static(b"hello world"))
                 .reliability(Reliability::ReliableOrdered)
-                .order_channel(1),
-            )
-            .unwrap();
-        // 1
-        dst.as_mut()
-            .start_send(
-                Message::new(Bytes::from_static(b"hello world"))
-                    .reliability(Reliability::Reliable)
-                    .order_channel(0),
-            )
-            .unwrap();
-        // 2
-        dst.as_mut()
-            .start_send(
-                Message::new(Bytes::from_static(
-                    b"hello world, hello world, hello world, hello world",
-                ))
-                .reliability(Reliability::Unreliable) // adjusted
                 .order_channel(0),
-            )
-            .unwrap();
+        )
+        .await
+        .unwrap();
+        // 2
+        dst.send(
+            Message::new(Bytes::from_static(
+                b"hello world, hello world, hello world, hello world",
+            ))
+            .reliability(Reliability::ReliableOrdered)
+            .order_channel(1),
+        )
+        .await
+        .unwrap();
         // 1
-        dst.as_mut()
-            .start_send(
-                Message::new(Bytes::from_static(b"hello world"))
-                    .reliability(Reliability::Unreliable)
-                    .order_channel(0),
-            )
-            .unwrap();
+        dst.send(
+            Message::new(Bytes::from_static(b"hello world"))
+                .reliability(Reliability::Reliable)
+                .order_channel(0),
+        )
+        .await
+        .unwrap();
+        // 2
+        dst.send(
+            Message::new(Bytes::from_static(
+                b"hello world, hello world, hello world, hello world",
+            ))
+            .reliability(Reliability::Unreliable) // adjusted
+            .order_channel(0),
+        )
+        .await
+        .unwrap();
+        // 1
+        dst.send(
+            Message::new(Bytes::from_static(b"hello world"))
+                .reliability(Reliability::Unreliable)
+                .order_channel(0),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(dst.order_write_index[0].to_u32(), 1); // 1 message on channel 0 requires ordering, next ordered frame index is 1
         assert_eq!(dst.order_write_index[1].to_u32(), 1); // 1 message on channel 1 requires ordering, next ordered frame index is 1
@@ -272,49 +293,49 @@ mod test {
         assert_eq!(dst.frame.buf[5].flags.reliability, Reliability::Reliable);
     }
 
-    #[test]
+    #[tokio::test]
     #[should_panic]
-    fn test_fragmented_panic() {
+    async fn test_fragmented_panic() {
         let dst = DstSink::default().fragmented(50, 8);
         tokio::pin!(dst);
-        dst.as_mut()
-            .start_send(
-                Message::new(Bytes::from_static(b"hello world"))
-                    .reliability(Reliability::ReliableOrdered)
-                    .order_channel(100),
-            )
-            .unwrap();
+        dst.send(
+            Message::new(Bytes::from_static(b"hello world"))
+                .reliability(Reliability::ReliableOrdered)
+                .order_channel(100),
+        )
+        .await
+        .unwrap();
     }
 
-    #[test]
-    fn test_fragmented_fulfill_one_packet() {
+    #[tokio::test]
+    async fn test_fragmented_fulfill_one_packet() {
         let dst = DstSink::default().fragmented(50, 8);
         tokio::pin!(dst);
-        dst.as_mut()
-            .start_send(
-                Message::new(Bytes::from_iter(
-                    std::iter::repeat(0xfe).take(50 - FRAME_SET_HEADER_SIZE - 10),
-                ))
-                .reliability(Reliability::ReliableOrdered)
-                .order_channel(0),
-            )
-            .unwrap();
+        dst.send(
+            Message::new(Bytes::from_iter(
+                std::iter::repeat(0xfe).take(50 - FRAME_SET_HEADER_SIZE - 10),
+            ))
+            .reliability(Reliability::ReliableOrdered)
+            .order_channel(0),
+        )
+        .await
+        .unwrap();
         assert_eq!(dst.frame.buf.len(), 1); // 1 frame
         assert!(dst.frame.buf[0].fragment.is_none()); // not fragmented
         assert_eq!(dst.frame.buf[0].size(), 50 - FRAME_SET_HEADER_SIZE); // full size
     }
 
-    #[test]
-    fn test_fragmented_split_packet() {
+    #[tokio::test]
+    async fn test_fragmented_split_packet() {
         let dst = DstSink::default().fragmented(50, 8);
         tokio::pin!(dst);
-        dst.as_mut()
-            .start_send(
-                Message::new(Bytes::from_iter(std::iter::repeat(0xfe).take(50)))
-                    .reliability(Reliability::ReliableOrdered)
-                    .order_channel(0),
-            )
-            .unwrap();
+        dst.send(
+            Message::new(Bytes::from_iter(std::iter::repeat(0xfe).take(50)))
+                .reliability(Reliability::ReliableOrdered)
+                .order_channel(0),
+        )
+        .await
+        .unwrap();
         assert_eq!(dst.frame.buf.len(), 2);
         let mut fragment = dst.frame.buf[0].fragment.unwrap();
         let r = dst.frame.buf[0].flags.reliability.size();
@@ -333,17 +354,17 @@ mod test {
         assert_eq!(fragment.parted_index, 1);
     }
 
-    #[test]
-    fn test_fragmented_adjust_not_exceed() {
+    #[tokio::test]
+    async fn test_fragmented_adjust_not_exceed() {
         let dst = DstSink::default().fragmented(50, 8);
         tokio::pin!(dst);
-        dst.as_mut()
-            .start_send(
-                Message::new(Bytes::from_iter(std::iter::repeat(0xfe).take(50)))
-                    .reliability(Reliability::Unreliable)
-                    .order_channel(0),
-            )
-            .unwrap();
+        dst.send(
+            Message::new(Bytes::from_iter(std::iter::repeat(0xfe).take(50)))
+                .reliability(Reliability::Unreliable)
+                .order_channel(0),
+        )
+        .await
+        .unwrap();
         assert_eq!(dst.frame.buf.len(), 2); // 2 frames
         assert_eq!(dst.frame.buf[0].flags.reliability, Reliability::Reliable); // adjusted
         assert_eq!(dst.frame.buf[1].flags.reliability, Reliability::Reliable); // adjusted

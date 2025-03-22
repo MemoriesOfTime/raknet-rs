@@ -388,7 +388,7 @@ async fn test_message_priority_works() {
 }
 
 #[tokio::test(unhandled_panic = "shutdown_runtime")]
-async fn test_tokio_udp_large_bytes() {
+async fn test_tokio_udp_large_frame() {
     let _guard = test_trace_log_setup();
 
     spawn_echo_server(
@@ -412,7 +412,7 @@ async fn test_tokio_udp_large_bytes() {
         tokio::pin!(src);
         tokio::pin!(dst);
 
-        dst.send(Bytes::from_iter(repeat(0xfe).take(1 << 25)).into())
+        dst.feed(Bytes::from_iter(repeat(0xfe).take(1 << 25)).into())
             .await
             .unwrap();
         let mut ticker = tokio::time::interval(Duration::from_millis(5));

@@ -66,18 +66,13 @@ where
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Result<(), io::Error>> {
-        let mut this = self.project();
-        if this.link.frame_body_empty() {
+        if self.link.frame_body_empty() {
             return Poll::Ready(Ok(()));
         }
-
-        ready!(this.frame.as_mut().poll_ready(cx))?;
-
-        // frame is now ready to send
+        let mut this = self.project();
         for body in this.link.process_frame_body() {
-            this.frame.as_mut().start_send(encode(body))?;
-            // ready for next frame
             ready!(this.frame.as_mut().poll_ready(cx))?;
+            this.frame.as_mut().start_send(encode(body))?;
         }
         Poll::Ready(Ok(()))
     }
@@ -113,10 +108,8 @@ where
 {
     type Error = io::Error;
 
-    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        ready!(self.as_mut().poll_empty(cx))?;
-        // there is literally no buffer
-        debug_assert!(self.link.frame_body_empty());
+    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        ready!(self.project().frame.poll_ready(cx))?;
         Poll::Ready(Ok(()))
     }
 
@@ -126,13 +119,11 @@ where
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         ready!(self.as_mut().poll_empty(cx))?;
-        debug_assert!(self.link.frame_body_empty());
         self.project().frame.poll_flush(cx)
     }
 
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         ready!(self.as_mut().poll_empty(cx))?;
-        debug_assert!(self.link.frame_body_empty());
         self.project().frame.poll_close(cx)
     }
 }

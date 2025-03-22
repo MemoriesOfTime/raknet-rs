@@ -206,6 +206,10 @@ pub mod micro_bench {
                     .start_send(Message::new(datagram)) // reliable ordered by default
                     .unwrap();
             }
+            let res = fragmented
+                .as_mut()
+                .poll_flush(&mut Context::from_waker(std::task::Waker::noop()));
+            assert!(res.is_ready()); // poll_ready always ready
             let mut sets = Vec::new();
             let mut remain = self.mtu - FRAME_SET_HEADER_SIZE;
             let mut set: Option<FramesMut> = None;

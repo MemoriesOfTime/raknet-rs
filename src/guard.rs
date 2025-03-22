@@ -219,10 +219,22 @@ impl<F> OutgoingGuard<F>
 where
     F: for<'a> Sink<(Packet<FramesRef<'a>>, SocketAddr), Error = io::Error>,
 {
-    /// Try to empty the outgoing buffer
-    fn try_empty(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
-        let mut this = self.project();
+    fn process_inflight(self: Pin<&mut Self>) {
+        let this = self.project();
+        this.link.process_ack().for_each(|(ack, received_at)| {
+            this.resend.on_ack(ack, received_at);
+        });
+        this.link.process_nack().for_each(|nack| {
+            this.resend.on_nack_into(nack, this.buf);
+        });
+        this.resend.process_stales(this.buf);
+    }
 
+    /// Try to empty the outgoing buffer
+    fn try_empty(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
+        self.as_mut().process_inflight();
+
+        let mut this = self.project();
         let strategy = cx
             .ext()
             .downcast_ref::<FlushStrategy>()
@@ -231,14 +243,6 @@ where
         let mut ack_cnt = 0;
         let mut nack_cnt = 0;
         let mut pack_cnt = 0;
-
-        this.link.process_ack().for_each(|(ack, received_at)| {
-            this.resend.on_ack(ack, received_at);
-        });
-        this.link
-            .process_nack()
-            .for_each(|nack| this.resend.on_nack_into(nack, this.buf));
-        this.resend.process_stales(this.buf);
 
         while !strategy.check_flushed(this.link, this.buf) {
             // 1. empty the outgoing ack
@@ -368,8 +372,22 @@ where
 {
     type Error = io::Error;
 
-    fn poll_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        // TODO: support congestion control
+    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.as_mut().process_inflight();
+        let inflight = self.resend.inflight;
+        let cnwd = self.resend.congester.congestion_window();
+        if inflight >= cnwd {
+            let wait = self.resend.estimator.rto() / 4;
+            trace!(
+                "[{}] inflight frames: {}, congestion window: {}, wait {:?} for congestion control",
+                self.role,
+                inflight,
+                cnwd,
+                wait
+            );
+            Reactor::get().insert_timer(rand::random(), Instant::now() + wait, cx.waker());
+            return Poll::Pending;
+        }
         Poll::Ready(Ok(()))
     }
 
