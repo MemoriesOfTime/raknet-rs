@@ -372,22 +372,12 @@ where
 {
     type Error = io::Error;
 
-    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+    ) -> Poll<Result<(), Self::Error>> {
         self.as_mut().process_inflight();
-        let inflight = self.resend.inflight;
-        let cnwd = self.resend.congester.congestion_window();
-        if inflight >= cnwd {
-            let wait = self.resend.estimator.rto() / 4;
-            trace!(
-                "[{}] inflight frames: {}, congestion window: {}, wait {:?} for congestion control",
-                self.role,
-                inflight,
-                cnwd,
-                wait
-            );
-            Reactor::get().insert_timer(rand::random(), Instant::now() + wait, cx.waker());
-            return Poll::Pending;
-        }
+        // TODO: congestion control
         Poll::Ready(Ok(()))
     }
 
