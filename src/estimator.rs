@@ -29,11 +29,10 @@ pub struct RFC6298Impl {
 impl RFC6298Impl {
     pub(crate) fn new() -> Self {
         // Initial RTO value as suggested in RFC6298 2.1 will be 1s.
-        // We will use 999ms as the initial value for the latest RTT as well.
-        // (plus 1ms for the timer granularity equal to 1s)
+        // We will use 50ms as the initial value for the latest RTT as well.
         // https://www.rfc-editor.org/rfc/rfc6298.html
 
-        const INITIAL_RTT: Duration = Duration::from_millis(999);
+        const INITIAL_RTT: Duration = Duration::from_millis(500);
         Self {
             latest: INITIAL_RTT,
             smoothed: None,

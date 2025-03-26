@@ -14,6 +14,7 @@ keywords = { workspace = true }
 # These crates are not published so use a git dependency for now. See https://github.com/aya-rs/aya/issues/464
 aya-bpf = { git = "https://github.com/aya-rs/aya", tag = "aya-v0.12.0" }
 aya-log-ebpf = { git = "https://github.com/aya-rs/aya", tag = "aya-v0.12.0" }
+zerocopy = { version = "0.7", features = ["derive"] }
 
 [features]
 default = []

@@ -12,9 +12,9 @@ use super::handler::offline;
 use super::handler::online::HandleOnline;
 use crate::codec::frame::Framed;
 use crate::codec::{AsyncSocket, Decoded, Encoded};
-use crate::guard::HandleOutgoing;
 use crate::link::{Route, TransferLink};
 use crate::opts::{ConnectionInfo, Ping, WrapConnectionInfo};
+use crate::reliable::WrapReliable;
 use crate::state::{IncomingStateManage, OutgoingStateManage};
 use crate::utils::Logged;
 use crate::{codec, Message, Role};
@@ -166,7 +166,7 @@ pub(crate) async fn connect_to<H>(
 
     let link = TransferLink::new_arc(role, peer);
     let mut dst = Framed::new(socket.clone(), peer.mtu as usize)
-        .handle_outgoing(Arc::clone(&link), peer, role)
+        .wrap_reliable(Arc::clone(&link), peer, role)
         .frame_encoded(peer.mtu, config.codec_config(), Arc::clone(&link))
         .manage_outgoing_state(None)
         .wrap_connection_info(peer);

@@ -15,9 +15,9 @@ use pin_project_lite::pin_project;
 use super::handler::offline;
 use crate::codec::frame::Framed;
 use crate::codec::{AsyncSocket, Decoded, Encoded};
-use crate::guard::HandleOutgoing;
 use crate::link::{Route, TransferLink};
 use crate::opts::{ConnectionInfo, TraceInfo, WrapConnectionInfo};
+use crate::reliable::WrapReliable;
 use crate::server::handler::offline::OfflineHandler;
 use crate::server::handler::online::HandleOnline;
 use crate::state::{CloseOnDrop, IncomingStateManage, OutgoingStateManage};
@@ -248,7 +248,7 @@ impl<T: AsyncSocket> Stream for Incoming<T> {
             this.router.insert(peer.addr, entry);
 
             let dst = Framed::new(this.socket.clone(), this.config.max_mtu as usize)
-                .handle_outgoing(Arc::clone(&link), peer, role)
+                .wrap_reliable(Arc::clone(&link), peer, role)
                 .frame_encoded(peer.mtu, this.config.codec_config(), Arc::clone(&link))
                 .manage_outgoing_state(Some(CloseOnDrop::new(
                     peer.addr,

@@ -19,8 +19,8 @@ mod packet;
 /// Utils
 mod utils;
 
-/// Outgoing guard
-mod guard;
+/// Reliable layer
+mod reliable;
 
 /// Sink & Stream state
 mod state;

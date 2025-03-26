@@ -8,9 +8,9 @@ use fastrace::collector::TraceId;
 use futures::{Sink, SinkExt};
 use pin_project_lite::pin_project;
 
-use crate::guard::SendBuffer;
 use crate::link::SharedLink;
 use crate::packet::connected::FrameBody;
+use crate::reliable::SendBuffer;
 use crate::utils::timestamp;
 use crate::{Message, Peer};
 

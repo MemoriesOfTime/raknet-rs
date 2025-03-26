@@ -9,8 +9,6 @@ use futures::Sink;
 use log::trace;
 use pin_project_lite::pin_project;
 
-use crate::congestion::legacy::LegacyCongester;
-use crate::congestion::CongestionController;
 use crate::estimator::{Estimator, RFC6298Impl};
 use crate::link::SharedLink;
 use crate::opts::FlushStrategy;
@@ -75,13 +73,9 @@ impl SendBuffer {
     }
 
     fn resend(&mut self, frames: impl IntoIterator<Item = PenaltyFrame>) {
-        // the maximum penalty for resending frames
-        // the default maximum penalty 255 (limited by u8) is used for priority frames
-        const MAX_RESEND_PENALTY: u8 = 30;
-
         self.resend.extend(frames.into_iter().map(|mut frame| {
-            // add penalty while resending
-            frame.penalty = cmp::min(frame.penalty.saturating_add(1), MAX_RESEND_PENALTY);
+            // exponential backoff while resending
+            frame.penalty = cmp::max(frame.penalty, 1).saturating_mul(2);
             frame
         }));
     }
@@ -175,9 +169,9 @@ impl SendBuffer {
 }
 
 pin_project! {
-    // OutgoingGuard equips with ACK/NACK flusher and packets buffer and provides
+    // ReliableLayer equips with ACK/NACK flusher and packets buffer and provides
     // resending policies and flush strategies.
-    pub(crate) struct OutgoingGuard<F> {
+    pub(crate) struct ReliableLayer<F> {
         #[pin]
         frame: F,
         link: SharedLink,
@@ -189,33 +183,28 @@ pin_project! {
     }
 }
 
-pub(crate) trait HandleOutgoing: Sized {
-    fn handle_outgoing(self, link: SharedLink, peer: Peer, role: Role) -> OutgoingGuard<Self>;
+pub(crate) trait WrapReliable: Sized {
+    fn wrap_reliable(self, link: SharedLink, peer: Peer, role: Role) -> ReliableLayer<Self>;
 }
 
-impl<F> HandleOutgoing for F
+impl<F> WrapReliable for F
 where
     F: for<'a> Sink<(Packet<FramesRef<'a>>, SocketAddr), Error = io::Error>,
 {
-    fn handle_outgoing(self, link: SharedLink, peer: Peer, role: Role) -> OutgoingGuard<Self> {
-        OutgoingGuard {
+    fn wrap_reliable(self, link: SharedLink, peer: Peer, role: Role) -> ReliableLayer<Self> {
+        ReliableLayer {
             frame: self,
             link,
             seq_num_write_index: 0.into(),
             peer,
             role,
             buf: SendBuffer::new(),
-            resend: ResendMap::new(
-                role,
-                peer,
-                Box::new(RFC6298Impl::new()),
-                Box::new(LegacyCongester::new()),
-            ),
+            resend: ResendMap::new(role, peer, Box::new(RFC6298Impl::new())),
         }
     }
 }
 
-impl<F> OutgoingGuard<F>
+impl<F> ReliableLayer<F>
 where
     F: for<'a> Sink<(Packet<FramesRef<'a>>, SocketAddr), Error = io::Error>,
 {
@@ -366,7 +355,7 @@ where
     }
 }
 
-impl<F> Sink<(Priority, Frame)> for OutgoingGuard<F>
+impl<F> Sink<(Priority, Frame)> for ReliableLayer<F>
 where
     F: for<'a> Sink<(Packet<FramesRef<'a>>, SocketAddr), Error = io::Error>,
 {
@@ -376,8 +365,9 @@ where
         mut self: Pin<&mut Self>,
         _cx: &mut Context<'_>,
     ) -> Poll<Result<(), Self::Error>> {
+        // To prevent ack buffer overflow, process_inflight is also
+        // required each time a frame is added.
         self.as_mut().process_inflight();
-        // TODO: congestion control
         Poll::Ready(Ok(()))
     }
 
@@ -393,7 +383,7 @@ where
         self.project().frame.poll_flush(cx)
     }
 
-    /// Close the outgoing guard, notice that it may resend infinitely if you do not cancel it.
+    /// Close the connection, notice that it may resend infinitely if you do not cancel it.
     /// Insure all frames are received by the peer at the point of closing
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         // maybe go to sleep, turn on the waking
@@ -409,7 +399,7 @@ where
             ready!(self.as_mut().project().frame.poll_flush(cx))?;
             if self.resend.is_empty() {
                 trace!(
-                    "[{}] all frames are received by {}, close the outgoing guard",
+                    "[{}] all frames are received by {}, close the connection",
                     self.role,
                     self.peer,
                 );
@@ -439,16 +429,10 @@ struct ResendMap {
     peer: Peer,
     last_record_expired_at: Instant,
     estimator: Box<dyn Estimator>,
-    congester: Box<dyn CongestionController>,
 }
 
 impl ResendMap {
-    fn new(
-        role: Role,
-        peer: Peer,
-        estimator: Box<dyn Estimator>,
-        congester: Box<dyn CongestionController>,
-    ) -> Self {
+    fn new(role: Role, peer: Peer, estimator: Box<dyn Estimator>) -> Self {
         Self {
             reliable: HashMap::default(),
             inflight: 0,
@@ -456,14 +440,15 @@ impl ResendMap {
             peer,
             last_record_expired_at: Instant::now(),
             estimator,
-            congester,
         }
     }
 
     fn record(&mut self, seq_num: u24, penalty: u8, frames: Frames) {
+        const MAX_PENALTY_DUR: Duration = Duration::from_secs(30);
+
         let now = Instant::now();
         let rto = self.estimator.rto();
-        let penalty_dur = rto * penalty as u32;
+        let penalty_dur = cmp::min(rto * penalty as u32, MAX_PENALTY_DUR);
         self.inflight += frames.len();
         self.reliable.insert(
             seq_num,
@@ -479,7 +464,6 @@ impl ResendMap {
     }
 
     fn on_ack(&mut self, ack: AckOrNack, received_at: Instant) {
-        let mut ack_frames = 0;
         for record in ack.records {
             match record {
                 Record::Range(start, end) => {
@@ -492,12 +476,11 @@ impl ResendMap {
                         {
                             let rtt = received_at.saturating_duration_since(send_at);
                             self.estimator.update(rtt);
-                            ack_frames += frames.len();
                             self.inflight -= frames.len();
                         }
                     }
                     trace!(
-                        "[{}] seq_num {}-{} are ACKed by {}, estimated RTT: {:?}, estimated RTO: {:?}, inflight frames: {}, congestion window before: {}",
+                        "[{}] seq_num {}-{} are ACKed by {}, estimated RTT: {:?}, estimated RTO: {:?}, inflight frames: {}",
                         self.role,
                         start,
                         end,
@@ -505,7 +488,6 @@ impl ResendMap {
                         self.estimator.rtt(),
                         self.estimator.rto(),
                         self.inflight,
-                        self.congester.congestion_window()
                     );
                 }
                 Record::Single(seq_num) => {
@@ -517,22 +499,19 @@ impl ResendMap {
                     {
                         let rtt = received_at.saturating_duration_since(send_at);
                         self.estimator.update(rtt);
-                        ack_frames += frames.len();
                         self.inflight -= frames.len();
                         trace!(
-                            "[{}] seq_num {seq_num} is ACKed by {}, RTT: {rtt:?}, estimated RTT: {:?}, estimated RTO: {:?}, inflight frames: {}, congestion window before: {}",
+                            "[{}] seq_num {seq_num} is ACKed by {}, RTT: {rtt:?}, estimated RTT: {:?}, estimated RTO: {:?}, inflight frames: {}",
                             self.role,
                             self.peer,
                             self.estimator.rtt(),
                             self.estimator.rto(),
                             self.inflight,
-                            self.congester.congestion_window()
                         );
                     }
                 }
             }
         }
-        self.congester.on_ack(ack_frames);
 
         #[cfg(debug_assertions)]
         self.debug_assert_inflight();
@@ -568,14 +547,12 @@ impl ResendMap {
                 }
             }
         }
-        self.congester.on_nack(nack_frames);
         trace!(
-            "[{}] receive NACKs {nack:?} from {}, nack frames count: {}, inflight frames: {}, congestion window: {}",
+            "[{}] receive NACKs {nack:?} from {}, nack frames count: {}, inflight frames: {}",
             self.role,
             self.peer,
             nack_frames,
             self.inflight,
-            self.congester.congestion_window()
         );
 
         #[cfg(debug_assertions)]
@@ -619,14 +596,12 @@ impl ResendMap {
         let len = self.reliable.len();
         if len_before > len {
             self.estimator.clear();
-            self.congester.on_timeout();
             trace!(
-                "[{}] collected {} timeout packets to {}, inflight frames: {}, congestion window: {}",
+                "[{}] collected {} timeout packets to {}, inflight frames: {}",
                 self.role,
                 len_before - len,
                 self.peer,
                 self.inflight,
-                self.congester.congestion_window()
             );
         }
 
@@ -685,10 +660,9 @@ mod test {
     use bytes::Bytes;
 
     use super::ResendMap;
-    use crate::congestion::legacy::LegacyCongester;
     use crate::estimator::RFC6298Impl;
-    use crate::guard::SendBuffer;
     use crate::packet::connected::{AckOrNack, Flags, Frame};
+    use crate::reliable::SendBuffer;
     use crate::utils::tests::{test_trace_log_setup, TestWaker};
     use crate::{Peer, Reliability, Role};
 
@@ -702,12 +676,7 @@ mod test {
             estimator.update(TEST_RTO);
         }
         log::info!("estimator rto: {:?}", estimator.rto());
-        let mut map = ResendMap::new(
-            Role::test_server(),
-            Peer::test(),
-            estimator,
-            Box::new(LegacyCongester::new()),
-        );
+        let mut map = ResendMap::new(Role::test_server(), Peer::test(), estimator);
         map.record(0.into(), 0, vec![]);
         map.record(1.into(), 0, vec![]);
         map.record(2.into(), 0, vec![]);
@@ -783,12 +752,7 @@ mod test {
             estimator.update(TEST_RTO);
         }
         log::info!("estimator rto: {:?}", estimator.rto());
-        let mut map = ResendMap::new(
-            Role::test_server(),
-            Peer::test(),
-            estimator,
-            Box::new(LegacyCongester::new()),
-        );
+        let mut map = ResendMap::new(Role::test_server(), Peer::test(), estimator);
         map.record(0.into(), 0, vec![]);
         map.record(1.into(), 0, vec![]);
         map.record(2.into(), 0, vec![]);
@@ -807,12 +771,7 @@ mod test {
             estimator.update(TEST_RTO);
         }
         log::info!("estimator rto: {:?}", estimator.rto());
-        let mut map = ResendMap::new(
-            Role::test_server(),
-            Peer::test(),
-            estimator,
-            Box::new(LegacyCongester::new()),
-        );
+        let mut map = ResendMap::new(Role::test_server(), Peer::test(), estimator);
         map.record(0.into(), 0, vec![]);
         std::thread::sleep(TEST_RTO + Duration::from_millis(5));
         map.record(1.into(), 0, vec![]);

@@ -23,7 +23,7 @@ pub(crate) struct Framed<T> {
     socket: T,
     /// [maximum transmission unit](https://en.wikipedia.org/wiki/Maximum_transmission_unit),
     /// used to pre-allocate the capacity for both the `rd` and `wr` byte buffers
-    max_mtu: usize,
+    mtu: usize,
     /// a buffer for storing incoming data read from the socket.
     rd: BytesMut,
     /// a buffer for writing bytes
@@ -44,12 +44,12 @@ pub(crate) struct Framed<T> {
 }
 
 impl<T: AsyncSocket> Framed<T> {
-    pub(crate) fn new(socket: T, max_mtu: usize) -> Self {
+    pub(crate) fn new(socket: T, mtu: usize) -> Self {
         Self {
             socket,
-            max_mtu,
+            mtu,
             rd: BytesMut::new(), // we may never use rd at all
-            wr: BytesMut::with_capacity(max_mtu),
+            wr: BytesMut::with_capacity(mtu),
             out_addr: SocketAddr::from(([0, 0, 0, 0], 0)),
             flushed: true,
             is_readable: false,
@@ -97,7 +97,7 @@ impl<T: AsyncSocket> Stream for Framed<T> {
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let pin = self.get_mut();
 
-        pin.rd.reserve(pin.max_mtu);
+        pin.rd.reserve(pin.mtu);
 
         loop {
             // Are there still bytes left in the read buffer to decode?
