@@ -41,7 +41,7 @@ pub fn open() -> io::Result<RawFd> {
 pub fn offsets<Fd: AsRawFd>(fd: &Fd) -> Result<MmapOffsets> {
     let mut offsets = MmapOffsets::default();
 
-    let optlen = xdp_option(fd, SocketOptions::MmapOffsets, &mut offsets)?;
+    let optlen = get_xdp_option(fd, SocketOptions::MmapOffsets, &mut offsets)?;
 
     // if the written size matched the V2 size, then return
     if optlen == size_of::<MmapOffsets>() {
@@ -64,7 +64,7 @@ pub fn offsets<Fd: AsRawFd>(fd: &Fd) -> Result<MmapOffsets> {
 #[inline]
 pub fn statistics<Fd: AsRawFd>(fd: &Fd) -> Result<Statistics> {
     let mut stats = Statistics::default();
-    xdp_option(fd, SocketOptions::Statistics, &mut stats)?;
+    get_xdp_option(fd, SocketOptions::Statistics, &mut stats)?;
     Ok(stats)
 }
 
@@ -161,7 +161,7 @@ pub fn bind<Fd: AsRawFd>(fd: &Fd, addr: &mut Address) -> Result<()> {
 #[inline]
 pub fn wake_tx<Fd: AsRawFd>(fd: &Fd) -> Result<()> {
     unsafe {
-        // after some testing, `sendto` is better than `sengmsg` here since it doesn't have to copy
+        // after some testing, `sendto` is better than `sendmsg` here since it doesn't have to copy
         // the msghdr from userspace, which would be zeroed and meaningless
         libc!(sendto(
             fd.as_raw_fd(),
@@ -186,7 +186,7 @@ pub fn busy_poll<Fd: AsRawFd>(fd: &Fd) -> Result<u32> {
         // Safety: msghdr is zeroable
         core::mem::zeroed()
     };
-    let count = unsafe { libc!(recvmsg(fd.as_raw_fd(), &mut msg, libc::MSG_DONTWAIT,))? };
+    let count = unsafe { libc!(recvmsg(fd.as_raw_fd(), &mut msg, libc::MSG_DONTWAIT))? };
     Ok(count as u32)
 }
 
@@ -342,7 +342,11 @@ fn sysfs_queues(ifname: &str) -> Option<u32> {
 }
 
 #[inline]
-fn xdp_option<Fd: AsRawFd, T: Sized>(fd: &Fd, opt: SocketOptions, value: &mut T) -> Result<usize> {
+fn get_xdp_option<Fd: AsRawFd, T: Sized>(
+    fd: &Fd,
+    opt: SocketOptions,
+    value: &mut T,
+) -> Result<usize> {
     let mut optlen = size_of::<T>() as libc::socklen_t;
 
     unsafe {

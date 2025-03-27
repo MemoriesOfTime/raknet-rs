@@ -1,5 +1,5 @@
 use std::io::{BufRead, BufReader};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::{env, fs};
 
@@ -107,4 +107,30 @@ fn main() {
         let _: u64 = fs::copy(&binary, &dst)
             .unwrap_or_else(|err| panic!("failed to copy {binary:?} to {dst:?}: {err}"));
     }
+
+    make_binding();
+}
+
+fn make_binding() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    let bindings = bindgen::Builder::default()
+        .header(root.join("bindings/input.h").display().to_string())
+        .allowlist_var("ETHTOOL_GCHANNELS")
+        .allowlist_type("ethtool_channels")
+        .rust_target(bindgen::RustTarget::Stable_1_47)
+        .layout_tests(false)
+        .raw_line(
+            r#"
+#![allow(non_camel_case_types)]
+            "#
+            .trim(),
+        )
+        .generate()
+        .expect("gen binding failed");
+
+    let out = root.join("src/bindings.rs");
+    bindings
+        .write_to_file(out)
+        .expect("write binding.rs failed");
 }
